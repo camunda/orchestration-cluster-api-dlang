@@ -1,0 +1,42 @@
+{
+  "name": "camunda-orchestration-sdk",
+  "description": "Camunda 8 Orchestration Cluster REST API SDK for D",
+  "license": "Apache-2.0",
+  "targetType": "library",
+  "targetName": "camunda-orchestration-sdk",
+  "libs": [
+    "curl"
+  ],
+  "libs-linux": [
+    "z"
+  ],
+  "toolchainRequirements": {
+    "dmd": "no",
+    "gdc": "no",
+    "ldc": ">=1.43.0"
+  },
+  "dflags": [
+    "-allinst",
+    "-preview=dip1000",
+    "-preview=nosharedaccess"
+  ],
+  "dflags-ldc": [
+    "-fno-delete-null-pointer-checks"
+  ],
+  "buildTypes": {
+    "release": {
+      "buildOptions": [
+        "releaseMode",
+        "optimize",
+        "inline"
+      ],
+      "dflags-ldc": [
+        "-boundscheck=on",
+        "-link-defaultlib-shared=false"
+      ]
+    }
+  },
+  "preBuildCommands": [
+    "$PACKAGE_DIR/scripts/check-safe.sh"
+  ]
+}

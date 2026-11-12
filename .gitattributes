@@ -1,0 +1,7 @@
+# Generated — never hand-edit.
+source/camunda/generated/** linguist-generated=true
+docs/*.md linguist-generated=true
+examples/*.d linguist-generated=true
+examples/operation-map.json linguist-generated=true
+examples/readme.d linguist-generated=false
+examples/topology.d linguist-generated=false

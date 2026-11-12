@@ -1,0 +1,232 @@
+# Camunda Orchestration Cluster API — D SDK (Technical Preview)
+
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+Ergonomic D SDK for the [Camunda 8 Orchestration Cluster REST API](https://docs.camunda.io/docs/apis-tools/orchestration-cluster-api-rest/orchestration-cluster-api-rest-overview/).
+
+This SDK follows the same architecture as the official
+[JavaScript](https://github.com/camunda/orchestration-cluster-api-js),
+[Python](https://github.com/camunda/orchestration-cluster-api-python),
+[C#](https://github.com/camunda/orchestration-cluster-api-csharp),
+[Rust](https://github.com/camunda/orchestration-cluster-api-rust),
+[Go](https://github.com/camunda/orchestration-cluster-api-go), and
+[PHP](https://github.com/camunda/orchestration-cluster-api-php) SDKs:
+
+- A **generated client** produced from the upstream OpenAPI spec.
+- A **hand-written runtime** on top: environment-driven configuration,
+  authentication, typed errors, retry, backpressure, and **job workers**.
+- The **Camunda Domain Type System**: semantic keys such as `JobKey` and
+  `ProcessInstanceKey` are distinct types with validation, not bare strings.
+
+The public API is **synchronous** (libcurl), like the PHP SDK.
+
+Target API version: **8.11**.
+
+## Support status
+
+This is a **Technical Preview** of the D client for the Camunda 8 Orchestration Cluster
+API, provided for evaluation and feedback. It gives you a stable foundation to build on
+now, with a clear path to full support: we do not intend to make breaking changes to the
+application integration surface, but we do not guarantee that we will not. The SDK will
+become fully supported with an SLA in a future release.
+
+We don't anticipate major changes — and
+[your feedback](https://github.com/camunda/orchestration-cluster-api-dlang/issues) is what
+helps close that gap.
+
+> As a Technical Preview, the API surface may still evolve before it is declared fully
+> supported. Pin a specific version if you need stability.
+
+## Requirements
+
+- [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
+- libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
+
+DMD and GDC are rejected: the build requires LDC's DIP1000 / nosharedaccess
+support.
+
+## Install
+
+Add the package as a dub dependency once it is published, or vendor this repo:
+
+```json
+{
+  "dependencies": {
+    "camunda-orchestration-sdk": { "path": "../orchestration-cluster-api-dlang" }
+  }
+}
+```
+
+## Quick start
+
+<!-- snippet-source: examples/readme.d | regions: QuickStart -->
+
+```d
+import camunda;
+
+// Reads CAMUNDA_REST_ADDRESS, CAMUNDA_AUTH_STRATEGY, CAMUNDA_CLIENT_ID, ... from the env.
+auto client = CamundaClient.fromEnv();
+
+auto topology = client.topology();
+import std.stdio : writeln;
+writeln("Gateway version: ", topology.gatewayVersion);
+```
+
+Programmatic configuration overrides take precedence over the environment:
+
+<!-- snippet-source: examples/readme.d | regions: Overrides -->
+
+```d
+import camunda;
+
+auto client = CamundaClient.create(
+    CamundaOptions.create
+        .withKey("CAMUNDA_REST_ADDRESS", "https://my-cluster.camunda.io")
+        .withKey("CAMUNDA_AUTH_STRATEGY", "OAUTH")
+        .withKey("CAMUNDA_CLIENT_ID", "my-client-id")
+        .withKey("CAMUNDA_CLIENT_SECRET", "my-secret")
+        .withKey("CAMUNDA_OAUTH_URL", "https://login.cloud.camunda.io/oauth/token")
+        .withKey("CAMUNDA_TOKEN_AUDIENCE", "zeebe.camunda.io"),
+);
+```
+
+## Authentication
+
+The strategy is chosen by `CAMUNDA_AUTH_STRATEGY` (or inferred from the
+credentials that are present):
+
+| Strategy | Required configuration |
+| --- | --- |
+| `OAUTH` | `CAMUNDA_CLIENT_ID`, `CAMUNDA_CLIENT_SECRET`, `CAMUNDA_OAUTH_URL`, optional `CAMUNDA_TOKEN_AUDIENCE`, `CAMUNDA_OAUTH_SCOPE` |
+| `BASIC` | `CAMUNDA_BASIC_AUTH_USERNAME`, `CAMUNDA_BASIC_AUTH_PASSWORD` |
+| `NONE`  | — (local development) |
+
+OAuth uses the client-credentials grant. Tokens are cached in memory and
+refreshed 30 seconds before expiry. Set `CAMUNDA_OAUTH_CACHE_DIR` to persist
+them across process restarts.
+
+## Semantic keys
+
+Identifiers are distinct types. `tryNew` validates the spec constraints;
+`assumeExists` side-loads a value received out of band.
+
+<!-- snippet-source: examples/readme.d | regions: SemanticKeys -->
+
+```d
+import camunda;
+
+auto key = JobKey.tryNew("2251799813653498"); // validates pattern & length
+assert(key.value == "2251799813653498");
+// Side-load without validation:
+auto loose = JobKey.assumeExists("123");
+```
+
+## Job workers
+
+<!-- snippet-source: examples/readme.d | regions: JobWorker -->
+
+```d
+import camunda;
+
+auto worker = client.createJobWorker(
+    JobWorkerConfig.create("payment-service")
+        .maxJobs(20)
+        .name("payment-worker"),
+);
+
+worker.run((Job job) {
+    import std.stdio : writeln;
+    writeln("handling job ", job.key);
+    return JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
+});
+```
+
+## Eventual consistency
+
+Reads against secondary storage may lag a write. `eventual` polls until the
+read succeeds (retrying 404s) or the timeout elapses.
+
+<!-- snippet-source: examples/readme.d | regions: EventualConsistency -->
+
+```d
+import camunda;
+
+auto key = ProcessInstanceKey.assumeExists("2251799813685249");
+auto instance = client.eventual(ConsistencyOptions.init, {
+    return client.getProcessInstance(key);
+});
+```
+
+## Configuration reference
+
+<!-- BEGIN_CONFIG_REFERENCE -->
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CAMUNDA_REST_ADDRESS` | `http://localhost:8080` | Cluster REST endpoint. `/v2` is appended automatically when absent. |
+| `ZEEBE_REST_ADDRESS` | — | Legacy alias for `CAMUNDA_REST_ADDRESS` (used only when the latter is unset). |
+| `CAMUNDA_REST_ADDRESS_EXACT` | `false` | Disable the automatic `/v2` suffix so `CAMUNDA_REST_ADDRESS` is used as the base path. |
+| `CAMUNDA_AUTH_STRATEGY` | — | `NONE`, `BASIC`, or `OAUTH`. Auto-detected from the supplied credentials when unset. |
+| `CAMUNDA_CLIENT_ID` | — | OAuth client id. |
+| `CAMUNDA_CLIENT_SECRET` | — | OAuth client secret. |
+| `CAMUNDA_CLIENT_AUTH_CLIENTID` | — | Legacy alias for `CAMUNDA_CLIENT_ID`. |
+| `CAMUNDA_CLIENT_AUTH_CLIENTSECRET` | — | Legacy alias for `CAMUNDA_CLIENT_SECRET`. |
+| `CAMUNDA_OAUTH_URL` | `https://login.cloud.camunda.io/oauth/token` | OAuth token endpoint. |
+| `CAMUNDA_TOKEN_AUDIENCE` | `zeebe.camunda.io` | OAuth token audience. |
+| `CAMUNDA_OAUTH_SCOPE` | — | Optional OAuth scope. |
+| `CAMUNDA_OAUTH_CACHE_DIR` | — | Directory for the on-disk OAuth token cache. Unset disables disk caching. |
+| `CAMUNDA_BASIC_AUTH_USERNAME` | — | Basic-auth username. |
+| `CAMUNDA_BASIC_AUTH_PASSWORD` | — | Basic-auth password. |
+| `CAMUNDA_DEFAULT_TENANT_ID` | — | Default tenant id applied to tenant-aware operations (alias `CAMUNDA_TENANT_ID`). |
+| `CAMUNDA_TENANT_ID` | — | Alias for `CAMUNDA_DEFAULT_TENANT_ID`. |
+| `CAMUNDA_TENANT_IDS` | — | Comma-separated default tenant ids (e.g. for job activation). |
+| `CAMUNDA_SDK_BACKPRESSURE_PROFILE` | `BALANCED` | `BALANCED`, `CONSERVATIVE`, `AGGRESSIVE`, or `LEGACY` (observe-only). |
+| `CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS` | `3` | Total HTTP attempts for transient failures (429, 502, 503, 504, network). |
+| `CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS` | `100` | Base backoff delay, in milliseconds. |
+| `CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS` | `2000` | Backoff cap, in milliseconds. |
+| `CAMUNDA_SDK_EVENTUAL_POLL_DEFAULT_MS` | `10000` | Default overall timeout for `eventual` polling, in milliseconds. |
+| `CAMUNDA_SDK_LOG_LEVEL` | `info` | `off`, `error`, `warn`, `info`, `debug`, or `trace`. |
+| `CAMUNDA_WORKER_TIMEOUT` | `60000` | Default job activation timeout, in milliseconds. |
+| `CAMUNDA_WORKER_MAX_CONCURRENT_JOBS` | `32` | Default maximum number of jobs a worker activates at once. |
+| `CAMUNDA_WORKER_REQUEST_TIMEOUT` | `10000` | Default long-poll request timeout, in milliseconds. |
+| `CAMUNDA_WORKER_NAME` | `d-sdk-worker` | Default worker name reported when activating jobs. |
+| `CAMUNDA_WORKER_STARTUP_JITTER_MAX_SECONDS` | `0` | Maximum random startup delay before the first poll, in seconds. |
+| `CAMUNDA_MTLS_CERT` | — | Inline PEM client certificate. |
+| `CAMUNDA_MTLS_KEY` | — | Inline PEM client private key. |
+| `CAMUNDA_MTLS_CA` | — | Inline PEM CA bundle. |
+| `CAMUNDA_MTLS_CERT_PATH` | — | Path to the client certificate for mutual TLS. |
+| `CAMUNDA_MTLS_KEY_PATH` | — | Path to the client private key for mutual TLS. |
+| `CAMUNDA_MTLS_CA_PATH` | — | Path to the CA bundle used to verify the server certificate. |
+| `CAMUNDA_MTLS_KEY_PASSPHRASE` | — | Passphrase protecting the mTLS client key, if any. |
+
+<!-- END_CONFIG_REFERENCE -->
+
+## Safety
+
+Every module is `@safe`. Escapes live in `source/camunda/safeio.d` (and three
+libcurl / JSON / Base64 wrappers) and are budgeted by `scripts/check-safe.sh`.
+The build uses `-preview=dip1000` and `-preview=nosharedaccess` and keeps
+bounds checks on in release.
+
+See `AGENTS.md` for the contributor contract.
+
+## API reference
+
+Generated from the bundled spec (do not edit by hand):
+
+- [API reference](docs/api-reference.md) — every REST operation on `CamundaClient`
+- [Semantic types](docs/semantic-types.md) — every domain key and its constraints
+
+## Regenerating the client
+
+```sh
+# After copying a newer bundled spec into external-spec/bundled/:
+make generate
+make test
+```
+
+`source/camunda/generated/` is never hand-edited.
+
+## License
+
+Apache-2.0.

@@ -1,0 +1,9 @@
+# Changes to the D SDK's unchecked code need the owner's review: safeio.d
+# holds almost every `@trusted` escape (the D equivalent of `unsafe`), and the
+# budgets and check script decide how many escapes are allowed.
+/source/camunda/safeio.d @jwulf
+/source/camunda/http.d @jwulf
+/scripts/check-safe.sh @jwulf
+/scripts/trusted-budget @jwulf
+/scripts/trusted-budget-safeio @jwulf
+/dub.json @jwulf

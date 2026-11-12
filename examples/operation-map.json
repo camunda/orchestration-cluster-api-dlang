@@ -1,0 +1,1710 @@
+{
+  "activateAdHocSubProcessActivities": [
+    {
+      "file": "ad_hoc_sub_process.d",
+      "label": "Activate activities within an ad-hoc sub-process",
+      "region": "ActivateAdHocSubProcessActivities"
+    }
+  ],
+  "activateJobs": [
+    {
+      "file": "job.d",
+      "label": "Activate jobs",
+      "region": "ActivateJobs"
+    }
+  ],
+  "assignClientToGroup": [
+    {
+      "file": "group.d",
+      "label": "Assign a client to a group",
+      "region": "AssignClientToGroup"
+    }
+  ],
+  "assignClientToTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Assign a client to a tenant",
+      "region": "AssignClientToTenant"
+    }
+  ],
+  "assignGroupToTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Assign a group to a tenant",
+      "region": "AssignGroupToTenant"
+    }
+  ],
+  "assignMappingRuleToGroup": [
+    {
+      "file": "group.d",
+      "label": "Assign a mapping rule to a group",
+      "region": "AssignMappingRuleToGroup"
+    }
+  ],
+  "assignMappingRuleToTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Assign a mapping rule to a tenant",
+      "region": "AssignMappingRuleToTenant"
+    }
+  ],
+  "assignProcessInstanceBusinessId": [
+    {
+      "file": "process_instance.d",
+      "label": "Assign business id to process instance",
+      "region": "AssignProcessInstanceBusinessId"
+    }
+  ],
+  "assignRoleToClient": [
+    {
+      "file": "role.d",
+      "label": "Assign a role to a client",
+      "region": "AssignRoleToClient"
+    }
+  ],
+  "assignRoleToGroup": [
+    {
+      "file": "role.d",
+      "label": "Assign a role to a group",
+      "region": "AssignRoleToGroup"
+    }
+  ],
+  "assignRoleToMappingRule": [
+    {
+      "file": "role.d",
+      "label": "Assign a role to a mapping rule",
+      "region": "AssignRoleToMappingRule"
+    }
+  ],
+  "assignRoleToTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Assign a role to a tenant",
+      "region": "AssignRoleToTenant"
+    }
+  ],
+  "assignRoleToUser": [
+    {
+      "file": "role.d",
+      "label": "Assign a role to a user",
+      "region": "AssignRoleToUser"
+    }
+  ],
+  "assignUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Assign user task",
+      "region": "AssignUserTask"
+    }
+  ],
+  "assignUserToGroup": [
+    {
+      "file": "group.d",
+      "label": "Assign a user to a group",
+      "region": "AssignUserToGroup"
+    }
+  ],
+  "assignUserToTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Assign a user to a tenant",
+      "region": "AssignUserToTenant"
+    }
+  ],
+  "broadcastSignal": [
+    {
+      "file": "signal.d",
+      "label": "Broadcast signal",
+      "region": "BroadcastSignal"
+    }
+  ],
+  "cancelBatchOperation": [
+    {
+      "file": "batch_operation.d",
+      "label": "Cancel Batch operation",
+      "region": "CancelBatchOperation"
+    }
+  ],
+  "cancelClusterRebalance": [
+    {
+      "file": "cluster.d",
+      "label": "Stop the running rebalance",
+      "region": "CancelClusterRebalance"
+    }
+  ],
+  "cancelProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Cancel process instance",
+      "region": "CancelProcessInstance"
+    }
+  ],
+  "cancelProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Cancel process instances (batch)",
+      "region": "CancelProcessInstancesBatchOperation"
+    }
+  ],
+  "changeClusterMode": [
+    {
+      "file": "recovery.d",
+      "label": "Change cluster mode",
+      "region": "ChangeClusterMode"
+    }
+  ],
+  "changeClusterModeAsClusterAdmin": [
+    {
+      "file": "recovery.d",
+      "label": "Change the cluster mode of one or every physical tenant",
+      "region": "ChangeClusterModeAsClusterAdmin"
+    }
+  ],
+  "completeJob": [
+    {
+      "file": "job.d",
+      "label": "Complete job",
+      "region": "CompleteJob"
+    }
+  ],
+  "completeUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Complete user task",
+      "region": "CompleteUserTask"
+    }
+  ],
+  "correlateMessage": [
+    {
+      "file": "message.d",
+      "label": "Correlate message",
+      "region": "CorrelateMessage"
+    }
+  ],
+  "createAdminUser": [
+    {
+      "file": "setup.d",
+      "label": "Create admin user",
+      "region": "CreateAdminUser"
+    }
+  ],
+  "createAgentInstance": [
+    {
+      "file": "agent_instance.d",
+      "label": "Create agent instance",
+      "region": "CreateAgentInstance"
+    }
+  ],
+  "createAuthorization": [
+    {
+      "file": "authorization.d",
+      "label": "Create authorization",
+      "region": "CreateAuthorization"
+    }
+  ],
+  "createDeployment": [
+    {
+      "file": "resource.d",
+      "label": "Deploy resources",
+      "region": "CreateDeployment"
+    }
+  ],
+  "createDocument": [
+    {
+      "file": "document.d",
+      "label": "Upload document",
+      "region": "CreateDocument"
+    }
+  ],
+  "createDocumentLink": [
+    {
+      "file": "document.d",
+      "label": "Create document link",
+      "region": "CreateDocumentLink"
+    }
+  ],
+  "createDocuments": [
+    {
+      "file": "document.d",
+      "label": "Upload multiple documents",
+      "region": "CreateDocuments"
+    }
+  ],
+  "createElementInstanceVariables": [
+    {
+      "file": "element_instance.d",
+      "label": "Update element instance variables",
+      "region": "CreateElementInstanceVariables"
+    }
+  ],
+  "createGlobalClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Create a global-scoped cluster variable",
+      "region": "CreateGlobalClusterVariable"
+    }
+  ],
+  "createGlobalTaskListener": [
+    {
+      "file": "global_listener.d",
+      "label": "Create global user task listener",
+      "region": "CreateGlobalTaskListener"
+    }
+  ],
+  "createGroup": [
+    {
+      "file": "group.d",
+      "label": "Create group",
+      "region": "CreateGroup"
+    }
+  ],
+  "createMappingRule": [
+    {
+      "file": "mapping_rule.d",
+      "label": "Create mapping rule",
+      "region": "CreateMappingRule"
+    }
+  ],
+  "createProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Create process instance",
+      "region": "CreateProcessInstance"
+    }
+  ],
+  "createRole": [
+    {
+      "file": "role.d",
+      "label": "Create role",
+      "region": "CreateRole"
+    }
+  ],
+  "createTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Create tenant",
+      "region": "CreateTenant"
+    }
+  ],
+  "createTenantClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Create a tenant-scoped cluster variable",
+      "region": "CreateTenantClusterVariable"
+    }
+  ],
+  "createUser": [
+    {
+      "file": "user.d",
+      "label": "Create user",
+      "region": "CreateUser"
+    }
+  ],
+  "deleteAuthorization": [
+    {
+      "file": "authorization.d",
+      "label": "Delete authorization",
+      "region": "DeleteAuthorization"
+    }
+  ],
+  "deleteDecisionInstance": [
+    {
+      "file": "decision_instance.d",
+      "label": "Delete decision instance",
+      "region": "DeleteDecisionInstance"
+    }
+  ],
+  "deleteDecisionInstancesBatchOperation": [
+    {
+      "file": "decision_instance.d",
+      "label": "Delete decision instances (batch)",
+      "region": "DeleteDecisionInstancesBatchOperation"
+    }
+  ],
+  "deleteDocument": [
+    {
+      "file": "document.d",
+      "label": "Delete document",
+      "region": "DeleteDocument"
+    }
+  ],
+  "deleteGlobalClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Delete a global-scoped cluster variable",
+      "region": "DeleteGlobalClusterVariable"
+    }
+  ],
+  "deleteGlobalTaskListener": [
+    {
+      "file": "global_listener.d",
+      "label": "Delete global user task listener",
+      "region": "DeleteGlobalTaskListener"
+    }
+  ],
+  "deleteGroup": [
+    {
+      "file": "group.d",
+      "label": "Delete group",
+      "region": "DeleteGroup"
+    }
+  ],
+  "deleteHistoryBackup": [
+    {
+      "file": "backup.d",
+      "label": "Delete history backup",
+      "region": "DeleteHistoryBackup"
+    }
+  ],
+  "deleteHistoryBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Delete a history backup across physical tenants",
+      "region": "DeleteHistoryBackupAsClusterAdmin"
+    }
+  ],
+  "deleteMappingRule": [
+    {
+      "file": "mapping_rule.d",
+      "label": "Delete a mapping rule",
+      "region": "DeleteMappingRule"
+    }
+  ],
+  "deleteProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Delete process instance",
+      "region": "DeleteProcessInstance"
+    }
+  ],
+  "deleteProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Delete process instances (batch)",
+      "region": "DeleteProcessInstancesBatchOperation"
+    }
+  ],
+  "deleteResource": [
+    {
+      "file": "resource.d",
+      "label": "Delete resource",
+      "region": "DeleteResource"
+    }
+  ],
+  "deleteRole": [
+    {
+      "file": "role.d",
+      "label": "Delete role",
+      "region": "DeleteRole"
+    }
+  ],
+  "deleteRuntimeBackup": [
+    {
+      "file": "backup.d",
+      "label": "Delete runtime backup",
+      "region": "DeleteRuntimeBackup"
+    }
+  ],
+  "deleteRuntimeBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Delete a runtime backup across physical tenants",
+      "region": "DeleteRuntimeBackupAsClusterAdmin"
+    }
+  ],
+  "deleteRuntimeBackupState": [
+    {
+      "file": "backup.d",
+      "label": "Delete runtime backup state",
+      "region": "DeleteRuntimeBackupState"
+    }
+  ],
+  "deleteRuntimeBackupStateAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Delete runtime backup state across physical tenants",
+      "region": "DeleteRuntimeBackupStateAsClusterAdmin"
+    }
+  ],
+  "deleteTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Delete tenant",
+      "region": "DeleteTenant"
+    }
+  ],
+  "deleteTenantClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Delete a tenant-scoped cluster variable",
+      "region": "DeleteTenantClusterVariable"
+    }
+  ],
+  "deleteUser": [
+    {
+      "file": "user.d",
+      "label": "Delete user",
+      "region": "DeleteUser"
+    }
+  ],
+  "evaluateConditionals": [
+    {
+      "file": "conditional.d",
+      "label": "Evaluate root level conditional start events",
+      "region": "EvaluateConditionals"
+    }
+  ],
+  "evaluateDecision": [
+    {
+      "file": "decision_definition.d",
+      "label": "Evaluate decision",
+      "region": "EvaluateDecision"
+    }
+  ],
+  "evaluateExpression": [
+    {
+      "file": "expression.d",
+      "label": "Evaluate an expression",
+      "region": "EvaluateExpression"
+    }
+  ],
+  "failJob": [
+    {
+      "file": "job.d",
+      "label": "Fail job",
+      "region": "FailJob"
+    }
+  ],
+  "getAgentDefinition": [
+    {
+      "file": "agent_definition.d",
+      "label": "Get agent definition",
+      "region": "GetAgentDefinition"
+    }
+  ],
+  "getAgentInstance": [
+    {
+      "file": "agent_instance.d",
+      "label": "Get agent instance",
+      "region": "GetAgentInstance"
+    }
+  ],
+  "getAuditLog": [
+    {
+      "file": "audit_log.d",
+      "label": "Get audit log",
+      "region": "GetAuditLog"
+    }
+  ],
+  "getAuthentication": [
+    {
+      "file": "authentication.d",
+      "label": "Get current user",
+      "region": "GetAuthentication"
+    }
+  ],
+  "getAuthorization": [
+    {
+      "file": "authorization.d",
+      "label": "Get authorization",
+      "region": "GetAuthorization"
+    }
+  ],
+  "getBatchOperation": [
+    {
+      "file": "batch_operation.d",
+      "label": "Get batch operation",
+      "region": "GetBatchOperation"
+    }
+  ],
+  "getClusterExportingStatus": [
+    {
+      "file": "exporting.d",
+      "label": "Get exporting status of the whole cluster",
+      "region": "GetClusterExportingStatus"
+    }
+  ],
+  "getClusterRebalance": [
+    {
+      "file": "cluster.d",
+      "label": "Report the cluster's current leadership balance",
+      "region": "GetClusterRebalance"
+    }
+  ],
+  "getClusterStatus": [
+    {
+      "file": "cluster.d",
+      "label": "Get the status of the whole cluster",
+      "region": "GetClusterStatus"
+    }
+  ],
+  "getClusterTopology": [
+    {
+      "file": "cluster.d",
+      "label": "Get the topology of the whole cluster",
+      "region": "GetClusterTopology"
+    }
+  ],
+  "getClusterUpgradeStatus": [
+    {
+      "file": "cluster.d",
+      "label": "Get the upgrade-readiness status of the whole cluster",
+      "region": "GetClusterUpgradeStatus"
+    }
+  ],
+  "getDecisionDefinition": [
+    {
+      "file": "decision_definition.d",
+      "label": "Get decision definition",
+      "region": "GetDecisionDefinition"
+    }
+  ],
+  "getDecisionDefinitionXML": [
+    {
+      "file": "decision_definition.d",
+      "label": "Get decision definition XML",
+      "region": "GetDecisionDefinitionXML"
+    }
+  ],
+  "getDecisionInstance": [
+    {
+      "file": "decision_instance.d",
+      "label": "Get decision instance",
+      "region": "GetDecisionInstance"
+    }
+  ],
+  "getDecisionRequirements": [
+    {
+      "file": "decision_requirements.d",
+      "label": "Get decision requirements",
+      "region": "GetDecisionRequirements"
+    }
+  ],
+  "getDecisionRequirementsXML": [
+    {
+      "file": "decision_requirements.d",
+      "label": "Get decision requirements XML",
+      "region": "GetDecisionRequirementsXML"
+    }
+  ],
+  "getDocument": [
+    {
+      "file": "document.d",
+      "label": "Download document",
+      "region": "GetDocument"
+    }
+  ],
+  "getElementInstance": [
+    {
+      "file": "element_instance.d",
+      "label": "Get element instance",
+      "region": "GetElementInstance"
+    }
+  ],
+  "getExportingStatus": [
+    {
+      "file": "exporting.d",
+      "label": "Get exporting status",
+      "region": "GetExportingStatus"
+    }
+  ],
+  "getFormByKey": [
+    {
+      "file": "form.d",
+      "label": "Get form by key",
+      "region": "GetFormByKey"
+    }
+  ],
+  "getGlobalClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Get a global-scoped cluster variable",
+      "region": "GetGlobalClusterVariable"
+    }
+  ],
+  "getGlobalJobStatistics": [
+    {
+      "file": "job.d",
+      "label": "Global job statistics",
+      "region": "GetGlobalJobStatistics"
+    }
+  ],
+  "getGlobalTaskListener": [
+    {
+      "file": "global_listener.d",
+      "label": "Get global user task listener",
+      "region": "GetGlobalTaskListener"
+    }
+  ],
+  "getGroup": [
+    {
+      "file": "group.d",
+      "label": "Get group",
+      "region": "GetGroup"
+    }
+  ],
+  "getHistoryBackup": [
+    {
+      "file": "backup.d",
+      "label": "Get history backup",
+      "region": "GetHistoryBackup"
+    }
+  ],
+  "getHistoryBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Get a history backup across physical tenants",
+      "region": "GetHistoryBackupAsClusterAdmin"
+    }
+  ],
+  "getIncident": [
+    {
+      "file": "incident.d",
+      "label": "Get incident",
+      "region": "GetIncident"
+    }
+  ],
+  "getJobErrorStatistics": [
+    {
+      "file": "job.d",
+      "label": "Get error metrics for a job type",
+      "region": "GetJobErrorStatistics"
+    }
+  ],
+  "getJobTimeSeriesStatistics": [
+    {
+      "file": "job.d",
+      "label": "Get time-series metrics for a job type",
+      "region": "GetJobTimeSeriesStatistics"
+    }
+  ],
+  "getJobTypeStatistics": [
+    {
+      "file": "job.d",
+      "label": "Get job statistics by type",
+      "region": "GetJobTypeStatistics"
+    }
+  ],
+  "getJobWorkerStatistics": [
+    {
+      "file": "job.d",
+      "label": "Get job statistics by worker",
+      "region": "GetJobWorkerStatistics"
+    }
+  ],
+  "getLicense": [
+    {
+      "file": "license.d",
+      "label": "Get license status",
+      "region": "GetLicense"
+    }
+  ],
+  "getMappingRule": [
+    {
+      "file": "mapping_rule.d",
+      "label": "Get a mapping rule",
+      "region": "GetMappingRule"
+    }
+  ],
+  "getProcessDefinition": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process definition",
+      "region": "GetProcessDefinition"
+    }
+  ],
+  "getProcessDefinitionInstanceStatistics": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process instance statistics",
+      "region": "GetProcessDefinitionInstanceStatistics"
+    }
+  ],
+  "getProcessDefinitionInstanceVersionStatistics": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process instance statistics by version",
+      "region": "GetProcessDefinitionInstanceVersionStatistics"
+    }
+  ],
+  "getProcessDefinitionMessageSubscriptionStatistics": [
+    {
+      "file": "process_definition.d",
+      "label": "Get message subscription statistics",
+      "region": "GetProcessDefinitionMessageSubscriptionStatistics"
+    }
+  ],
+  "getProcessDefinitionStatistics": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process definition statistics",
+      "region": "GetProcessDefinitionStatistics"
+    }
+  ],
+  "getProcessDefinitionXML": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process definition XML",
+      "region": "GetProcessDefinitionXML"
+    }
+  ],
+  "getProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Get process instance",
+      "region": "GetProcessInstance"
+    }
+  ],
+  "getProcessInstanceCallHierarchy": [
+    {
+      "file": "process_instance.d",
+      "label": "Get call hierarchy",
+      "region": "GetProcessInstanceCallHierarchy"
+    }
+  ],
+  "getProcessInstanceSequenceFlows": [
+    {
+      "file": "process_instance.d",
+      "label": "Get sequence flows",
+      "region": "GetProcessInstanceSequenceFlows"
+    }
+  ],
+  "getProcessInstanceStatistics": [
+    {
+      "file": "process_instance.d",
+      "label": "Get element instance statistics",
+      "region": "GetProcessInstanceStatistics"
+    }
+  ],
+  "getProcessInstanceStatisticsByDefinition": [
+    {
+      "file": "incident.d",
+      "label": "Get process instance statistics by definition",
+      "region": "GetProcessInstanceStatisticsByDefinition"
+    }
+  ],
+  "getProcessInstanceStatisticsByError": [
+    {
+      "file": "incident.d",
+      "label": "Get process instance statistics by error",
+      "region": "GetProcessInstanceStatisticsByError"
+    }
+  ],
+  "getProcessInstanceWaitStateStatistics": [
+    {
+      "file": "process_instance.d",
+      "label": "Get wait state statistics",
+      "region": "GetProcessInstanceWaitStateStatistics"
+    }
+  ],
+  "getResource": [
+    {
+      "file": "resource.d",
+      "label": "Get resource",
+      "region": "GetResource"
+    }
+  ],
+  "getResourceContent": [
+    {
+      "file": "resource.d",
+      "label": "Get RPA resource content (deprecated)",
+      "region": "GetResourceContent"
+    }
+  ],
+  "getResourceContentBinary": [
+    {
+      "file": "resource.d",
+      "label": "Get resource content as binary",
+      "region": "GetResourceContentBinary"
+    }
+  ],
+  "getRestoreStatus": [
+    {
+      "file": "recovery.d",
+      "label": "Get the status of the restore that is currently in progress",
+      "region": "GetRestoreStatus"
+    }
+  ],
+  "getRole": [
+    {
+      "file": "role.d",
+      "label": "Get role",
+      "region": "GetRole"
+    }
+  ],
+  "getRuntimeBackup": [
+    {
+      "file": "backup.d",
+      "label": "Get runtime backup",
+      "region": "GetRuntimeBackup"
+    }
+  ],
+  "getRuntimeBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Get a runtime backup across physical tenants",
+      "region": "GetRuntimeBackupAsClusterAdmin"
+    }
+  ],
+  "getRuntimeBackupState": [
+    {
+      "file": "backup.d",
+      "label": "Get runtime backup state",
+      "region": "GetRuntimeBackupState"
+    }
+  ],
+  "getRuntimeBackupStateAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Get runtime backup state across physical tenants",
+      "region": "GetRuntimeBackupStateAsClusterAdmin"
+    }
+  ],
+  "getStartProcessForm": [
+    {
+      "file": "process_definition.d",
+      "label": "Get process start form",
+      "region": "GetStartProcessForm"
+    }
+  ],
+  "getStatus": [
+    {
+      "file": "cluster.d",
+      "label": "Get physical tenant status",
+      "region": "GetStatus"
+    }
+  ],
+  "getSystemConfiguration": [
+    {
+      "file": "system.d",
+      "label": "System configuration (alpha)",
+      "region": "GetSystemConfiguration"
+    }
+  ],
+  "getTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Get tenant",
+      "region": "GetTenant"
+    }
+  ],
+  "getTenantClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Get a tenant-scoped cluster variable",
+      "region": "GetTenantClusterVariable"
+    }
+  ],
+  "getTopology": [
+    {
+      "file": "cluster.d",
+      "label": "Get cluster topology",
+      "region": "GetTopology"
+    }
+  ],
+  "getUsageMetrics": [
+    {
+      "file": "system.d",
+      "label": "Get usage metrics",
+      "region": "GetUsageMetrics"
+    }
+  ],
+  "getUser": [
+    {
+      "file": "user.d",
+      "label": "Get user",
+      "region": "GetUser"
+    }
+  ],
+  "getUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Get user task",
+      "region": "GetUserTask"
+    }
+  ],
+  "getUserTaskForm": [
+    {
+      "file": "user_task.d",
+      "label": "Get user task form",
+      "region": "GetUserTaskForm"
+    }
+  ],
+  "getVariable": [
+    {
+      "file": "variable.d",
+      "label": "Get variable",
+      "region": "GetVariable"
+    }
+  ],
+  "listHistoryBackups": [
+    {
+      "file": "backup.d",
+      "label": "List history backups",
+      "region": "ListHistoryBackups"
+    }
+  ],
+  "listHistoryBackupsAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "List history backups across physical tenants",
+      "region": "ListHistoryBackupsAsClusterAdmin"
+    }
+  ],
+  "listRuntimeBackups": [
+    {
+      "file": "backup.d",
+      "label": "List runtime backups",
+      "region": "ListRuntimeBackups"
+    }
+  ],
+  "listRuntimeBackupsAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "List runtime backups across physical tenants",
+      "region": "ListRuntimeBackupsAsClusterAdmin"
+    }
+  ],
+  "listSecrets": [
+    {
+      "file": "secret.d",
+      "label": "List secrets",
+      "region": "ListSecrets"
+    }
+  ],
+  "migrateProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Migrate process instance",
+      "region": "MigrateProcessInstance"
+    }
+  ],
+  "migrateProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Migrate process instances (batch)",
+      "region": "MigrateProcessInstancesBatchOperation"
+    }
+  ],
+  "modifyProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Modify process instance",
+      "region": "ModifyProcessInstance"
+    }
+  ],
+  "modifyProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Modify process instances (batch)",
+      "region": "ModifyProcessInstancesBatchOperation"
+    }
+  ],
+  "pauseClusterExporting": [
+    {
+      "file": "exporting.d",
+      "label": "Pause exporting across the whole cluster",
+      "region": "PauseClusterExporting"
+    }
+  ],
+  "pauseExporting": [
+    {
+      "file": "exporting.d",
+      "label": "Pause exporting",
+      "region": "PauseExporting"
+    }
+  ],
+  "pinClock": [
+    {
+      "file": "clock.d",
+      "label": "Pin internal clock (alpha)",
+      "region": "PinClock"
+    }
+  ],
+  "publishMessage": [
+    {
+      "file": "message.d",
+      "label": "Publish message",
+      "region": "PublishMessage"
+    }
+  ],
+  "resetClock": [
+    {
+      "file": "clock.d",
+      "label": "Reset internal clock (alpha)",
+      "region": "ResetClock"
+    }
+  ],
+  "resolveIncident": [
+    {
+      "file": "incident.d",
+      "label": "Resolve incident",
+      "region": "ResolveIncident"
+    }
+  ],
+  "resolveIncidentsBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Resolve related incidents (batch)",
+      "region": "ResolveIncidentsBatchOperation"
+    }
+  ],
+  "resolveProcessInstanceIncidents": [
+    {
+      "file": "process_instance.d",
+      "label": "Resolve related incidents",
+      "region": "ResolveProcessInstanceIncidents"
+    }
+  ],
+  "resolveSecrets": [
+    {
+      "file": "secret.d",
+      "label": "Resolve secrets",
+      "region": "ResolveSecrets"
+    }
+  ],
+  "restore": [
+    {
+      "file": "recovery.d",
+      "label": "Restore from a backup",
+      "region": "Restore"
+    }
+  ],
+  "restoreAsClusterAdmin": [
+    {
+      "file": "recovery.d",
+      "label": "Restore one or every physical tenant from a backup",
+      "region": "RestoreAsClusterAdmin"
+    }
+  ],
+  "resumeBatchOperation": [
+    {
+      "file": "batch_operation.d",
+      "label": "Resume Batch operation",
+      "region": "ResumeBatchOperation"
+    }
+  ],
+  "resumeClusterExporting": [
+    {
+      "file": "exporting.d",
+      "label": "Resume exporting across the whole cluster",
+      "region": "ResumeClusterExporting"
+    }
+  ],
+  "resumeExporting": [
+    {
+      "file": "exporting.d",
+      "label": "Resume exporting",
+      "region": "ResumeExporting"
+    }
+  ],
+  "resumeProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Resume process instance",
+      "region": "ResumeProcessInstance"
+    }
+  ],
+  "resumeProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Resume process instances (batch)",
+      "region": "ResumeProcessInstancesBatchOperation"
+    }
+  ],
+  "searchAgentDefinitions": [
+    {
+      "file": "agent_definition.d",
+      "label": "Search agent definitions",
+      "region": "SearchAgentDefinitions"
+    }
+  ],
+  "searchAgentInstanceHistory": [
+    {
+      "file": "agent_instance.d",
+      "label": "Search agent instance history",
+      "region": "SearchAgentInstanceHistory"
+    }
+  ],
+  "searchAgentInstances": [
+    {
+      "file": "agent_instance.d",
+      "label": "Search agent instances",
+      "region": "SearchAgentInstances"
+    }
+  ],
+  "searchAuditLogs": [
+    {
+      "file": "audit_log.d",
+      "label": "Search audit logs",
+      "region": "SearchAuditLogs"
+    }
+  ],
+  "searchAuthorizations": [
+    {
+      "file": "authorization.d",
+      "label": "Search authorizations",
+      "region": "SearchAuthorizations"
+    }
+  ],
+  "searchBatchOperationItems": [
+    {
+      "file": "batch_operation.d",
+      "label": "Search batch operation items",
+      "region": "SearchBatchOperationItems"
+    }
+  ],
+  "searchBatchOperations": [
+    {
+      "file": "batch_operation.d",
+      "label": "Search batch operations",
+      "region": "SearchBatchOperations"
+    }
+  ],
+  "searchClientsForGroup": [
+    {
+      "file": "group.d",
+      "label": "Search group clients",
+      "region": "SearchClientsForGroup"
+    }
+  ],
+  "searchClientsForRole": [
+    {
+      "file": "role.d",
+      "label": "Search role clients",
+      "region": "SearchClientsForRole"
+    }
+  ],
+  "searchClientsForTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Search clients for tenant",
+      "region": "SearchClientsForTenant"
+    }
+  ],
+  "searchClusterVariables": [
+    {
+      "file": "cluster_variable.d",
+      "label": "searchClusterVariables",
+      "region": "SearchClusterVariables"
+    }
+  ],
+  "searchCorrelatedMessageSubscriptions": [
+    {
+      "file": "message_subscription.d",
+      "label": "Search correlated message subscriptions",
+      "region": "SearchCorrelatedMessageSubscriptions"
+    }
+  ],
+  "searchDecisionDefinitions": [
+    {
+      "file": "decision_definition.d",
+      "label": "Search decision definitions",
+      "region": "SearchDecisionDefinitions"
+    }
+  ],
+  "searchDecisionInstances": [
+    {
+      "file": "decision_instance.d",
+      "label": "Search decision instances",
+      "region": "SearchDecisionInstances"
+    }
+  ],
+  "searchDecisionRequirements": [
+    {
+      "file": "decision_requirements.d",
+      "label": "Search decision requirements",
+      "region": "SearchDecisionRequirements"
+    }
+  ],
+  "searchElementInstanceIncidents": [
+    {
+      "file": "element_instance.d",
+      "label": "Search for incidents of a specific element instance",
+      "region": "SearchElementInstanceIncidents"
+    }
+  ],
+  "searchElementInstanceWaitStates": [
+    {
+      "file": "element_instance.d",
+      "label": "Search element instance wait states",
+      "region": "SearchElementInstanceWaitStates"
+    }
+  ],
+  "searchElementInstances": [
+    {
+      "file": "element_instance.d",
+      "label": "Search element instances",
+      "region": "SearchElementInstances"
+    }
+  ],
+  "searchGlobalTaskListeners": [
+    {
+      "file": "global_listener.d",
+      "label": "Search global user task listeners",
+      "region": "SearchGlobalTaskListeners"
+    }
+  ],
+  "searchGroupIdsForTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Search groups for tenant",
+      "region": "SearchGroupIdsForTenant"
+    }
+  ],
+  "searchGroups": [
+    {
+      "file": "group.d",
+      "label": "Search groups",
+      "region": "SearchGroups"
+    }
+  ],
+  "searchGroupsForRole": [
+    {
+      "file": "role.d",
+      "label": "Search role groups",
+      "region": "SearchGroupsForRole"
+    }
+  ],
+  "searchIncidents": [
+    {
+      "file": "incident.d",
+      "label": "Search incidents",
+      "region": "SearchIncidents"
+    }
+  ],
+  "searchJobs": [
+    {
+      "file": "job.d",
+      "label": "Search jobs",
+      "region": "SearchJobs"
+    }
+  ],
+  "searchMappingRule": [
+    {
+      "file": "mapping_rule.d",
+      "label": "Search mapping rules",
+      "region": "SearchMappingRule"
+    }
+  ],
+  "searchMappingRulesForGroup": [
+    {
+      "file": "group.d",
+      "label": "Search group mapping rules",
+      "region": "SearchMappingRulesForGroup"
+    }
+  ],
+  "searchMappingRulesForRole": [
+    {
+      "file": "role.d",
+      "label": "Search role mapping rules",
+      "region": "SearchMappingRulesForRole"
+    }
+  ],
+  "searchMappingRulesForTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Search mapping rules for tenant",
+      "region": "SearchMappingRulesForTenant"
+    }
+  ],
+  "searchMessageSubscriptions": [
+    {
+      "file": "message_subscription.d",
+      "label": "Search message subscriptions",
+      "region": "SearchMessageSubscriptions"
+    }
+  ],
+  "searchOwnAuthorizations": [
+    {
+      "file": "authentication.d",
+      "label": "Search own authorizations",
+      "region": "SearchOwnAuthorizations"
+    }
+  ],
+  "searchProcessDefinitionVariableNames": [
+    {
+      "file": "process_definition.d",
+      "label": "Search process definition variable names",
+      "region": "SearchProcessDefinitionVariableNames"
+    }
+  ],
+  "searchProcessDefinitions": [
+    {
+      "file": "process_definition.d",
+      "label": "Search process definitions",
+      "region": "SearchProcessDefinitions"
+    }
+  ],
+  "searchProcessInstanceIncidents": [
+    {
+      "file": "process_instance.d",
+      "label": "Search related incidents",
+      "region": "SearchProcessInstanceIncidents"
+    }
+  ],
+  "searchProcessInstances": [
+    {
+      "file": "process_instance.d",
+      "label": "Search process instances",
+      "region": "SearchProcessInstances"
+    }
+  ],
+  "searchResources": [
+    {
+      "file": "resource.d",
+      "label": "Search resources",
+      "region": "SearchResources"
+    }
+  ],
+  "searchRoles": [
+    {
+      "file": "role.d",
+      "label": "Search roles",
+      "region": "SearchRoles"
+    }
+  ],
+  "searchRolesForGroup": [
+    {
+      "file": "group.d",
+      "label": "Search group roles",
+      "region": "SearchRolesForGroup"
+    }
+  ],
+  "searchRolesForTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Search roles for tenant",
+      "region": "SearchRolesForTenant"
+    }
+  ],
+  "searchTenants": [
+    {
+      "file": "tenant.d",
+      "label": "Search tenants",
+      "region": "SearchTenants"
+    }
+  ],
+  "searchUserTaskAuditLogs": [
+    {
+      "file": "user_task.d",
+      "label": "Search user task audit logs",
+      "region": "SearchUserTaskAuditLogs"
+    }
+  ],
+  "searchUserTaskEffectiveVariables": [
+    {
+      "file": "user_task.d",
+      "label": "Search user task effective variables",
+      "region": "SearchUserTaskEffectiveVariables"
+    }
+  ],
+  "searchUserTaskVariables": [
+    {
+      "file": "user_task.d",
+      "label": "Search user task variables",
+      "region": "SearchUserTaskVariables"
+    }
+  ],
+  "searchUserTasks": [
+    {
+      "file": "user_task.d",
+      "label": "Search user tasks",
+      "region": "SearchUserTasks"
+    }
+  ],
+  "searchUsers": [
+    {
+      "file": "user.d",
+      "label": "Search users",
+      "region": "SearchUsers"
+    }
+  ],
+  "searchUsersForGroup": [
+    {
+      "file": "group.d",
+      "label": "Search group users",
+      "region": "SearchUsersForGroup"
+    }
+  ],
+  "searchUsersForRole": [
+    {
+      "file": "role.d",
+      "label": "Search role users",
+      "region": "SearchUsersForRole"
+    }
+  ],
+  "searchUsersForTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Search users for tenant",
+      "region": "SearchUsersForTenant"
+    }
+  ],
+  "searchVariables": [
+    {
+      "file": "variable.d",
+      "label": "Search variables",
+      "region": "SearchVariables"
+    }
+  ],
+  "suspendBatchOperation": [
+    {
+      "file": "batch_operation.d",
+      "label": "Suspend Batch operation",
+      "region": "SuspendBatchOperation"
+    }
+  ],
+  "suspendProcessInstance": [
+    {
+      "file": "process_instance.d",
+      "label": "Suspend process instance",
+      "region": "SuspendProcessInstance"
+    }
+  ],
+  "suspendProcessInstancesBatchOperation": [
+    {
+      "file": "process_instance.d",
+      "label": "Suspend process instances (batch)",
+      "region": "SuspendProcessInstancesBatchOperation"
+    }
+  ],
+  "syncRuntimeBackupState": [
+    {
+      "file": "backup.d",
+      "label": "Force-write runtime backup state",
+      "region": "SyncRuntimeBackupState"
+    }
+  ],
+  "syncRuntimeBackupStateAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Force-write runtime backup state across physical tenants",
+      "region": "SyncRuntimeBackupStateAsClusterAdmin"
+    }
+  ],
+  "takeHistoryBackup": [
+    {
+      "file": "backup.d",
+      "label": "Take a history backup",
+      "region": "TakeHistoryBackup"
+    }
+  ],
+  "takeHistoryBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Take a history backup on one or every physical tenant",
+      "region": "TakeHistoryBackupAsClusterAdmin"
+    }
+  ],
+  "takeRuntimeBackup": [
+    {
+      "file": "backup.d",
+      "label": "Take a runtime backup",
+      "region": "TakeRuntimeBackup"
+    }
+  ],
+  "takeRuntimeBackupAsClusterAdmin": [
+    {
+      "file": "backup.d",
+      "label": "Take a runtime backup on one or every physical tenant",
+      "region": "TakeRuntimeBackupAsClusterAdmin"
+    }
+  ],
+  "throwJobError": [
+    {
+      "file": "job.d",
+      "label": "Throw error for job",
+      "region": "ThrowJobError"
+    }
+  ],
+  "triggerClusterRebalance": [
+    {
+      "file": "cluster.d",
+      "label": "Trigger a cluster-wide leadership rebalance",
+      "region": "TriggerClusterRebalance"
+    }
+  ],
+  "unassignClientFromGroup": [
+    {
+      "file": "group.d",
+      "label": "Unassign a client from a group",
+      "region": "UnassignClientFromGroup"
+    }
+  ],
+  "unassignClientFromTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Unassign a client from a tenant",
+      "region": "UnassignClientFromTenant"
+    }
+  ],
+  "unassignGroupFromTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Unassign a group from a tenant",
+      "region": "UnassignGroupFromTenant"
+    }
+  ],
+  "unassignMappingRuleFromGroup": [
+    {
+      "file": "group.d",
+      "label": "Unassign a mapping rule from a group",
+      "region": "UnassignMappingRuleFromGroup"
+    }
+  ],
+  "unassignMappingRuleFromTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Unassign a mapping rule from a tenant",
+      "region": "UnassignMappingRuleFromTenant"
+    }
+  ],
+  "unassignRoleFromClient": [
+    {
+      "file": "role.d",
+      "label": "Unassign a role from a client",
+      "region": "UnassignRoleFromClient"
+    }
+  ],
+  "unassignRoleFromGroup": [
+    {
+      "file": "role.d",
+      "label": "Unassign a role from a group",
+      "region": "UnassignRoleFromGroup"
+    }
+  ],
+  "unassignRoleFromMappingRule": [
+    {
+      "file": "role.d",
+      "label": "Unassign a role from a mapping rule",
+      "region": "UnassignRoleFromMappingRule"
+    }
+  ],
+  "unassignRoleFromTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Unassign a role from a tenant",
+      "region": "UnassignRoleFromTenant"
+    }
+  ],
+  "unassignRoleFromUser": [
+    {
+      "file": "role.d",
+      "label": "Unassign a role from a user",
+      "region": "UnassignRoleFromUser"
+    }
+  ],
+  "unassignUserFromGroup": [
+    {
+      "file": "group.d",
+      "label": "Unassign a user from a group",
+      "region": "UnassignUserFromGroup"
+    }
+  ],
+  "unassignUserFromTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Unassign a user from a tenant",
+      "region": "UnassignUserFromTenant"
+    }
+  ],
+  "unassignUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Unassign user task",
+      "region": "UnassignUserTask"
+    }
+  ],
+  "updateAgentInstance": [
+    {
+      "file": "agent_instance.d",
+      "label": "Update agent instance",
+      "region": "UpdateAgentInstance"
+    }
+  ],
+  "updateAuthorization": [
+    {
+      "file": "authorization.d",
+      "label": "Update authorization",
+      "region": "UpdateAuthorization"
+    }
+  ],
+  "updateGlobalClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Update a global-scoped cluster variable",
+      "region": "UpdateGlobalClusterVariable"
+    }
+  ],
+  "updateGlobalTaskListener": [
+    {
+      "file": "global_listener.d",
+      "label": "Update global user task listener",
+      "region": "UpdateGlobalTaskListener"
+    }
+  ],
+  "updateGroup": [
+    {
+      "file": "group.d",
+      "label": "Update group",
+      "region": "UpdateGroup"
+    }
+  ],
+  "updateJob": [
+    {
+      "file": "job.d",
+      "label": "Update job",
+      "region": "UpdateJob"
+    }
+  ],
+  "updateJobsBatchOperation": [
+    {
+      "file": "job.d",
+      "label": "Update jobs (batch)",
+      "region": "UpdateJobsBatchOperation"
+    }
+  ],
+  "updateMappingRule": [
+    {
+      "file": "mapping_rule.d",
+      "label": "Update mapping rule",
+      "region": "UpdateMappingRule"
+    }
+  ],
+  "updateRole": [
+    {
+      "file": "role.d",
+      "label": "Update role",
+      "region": "UpdateRole"
+    }
+  ],
+  "updateTenant": [
+    {
+      "file": "tenant.d",
+      "label": "Update tenant",
+      "region": "UpdateTenant"
+    }
+  ],
+  "updateTenantClusterVariable": [
+    {
+      "file": "cluster_variable.d",
+      "label": "Update a tenant-scoped cluster variable",
+      "region": "UpdateTenantClusterVariable"
+    }
+  ],
+  "updateUser": [
+    {
+      "file": "user.d",
+      "label": "Update user",
+      "region": "UpdateUser"
+    }
+  ],
+  "updateUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Update user task",
+      "region": "UpdateUserTask"
+    }
+  ]
+}
