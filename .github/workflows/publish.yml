@@ -41,11 +41,18 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # `secrets` is not allowed in step `if:`; expose presence as a flag.
+      HAS_VAULT: ${{ secrets.VAULT_ADDR != '' }}
     steps:
-      # semantic-release commits and pushes to a ruleset-protected branch;
-      # GITHUB_TOKEN cannot bypass a ruleset, so it runs as camunda-sdk-automation.
+      # Preferred identity: the camunda-sdk-automation app (from Vault), which
+      # can push through branch rulesets. Fail open: if Vault is not configured
+      # or the app token cannot be minted, fall back to GITHUB_TOKEN (works while
+      # main/stable/* carry no rulesets). The run summary says which one ran.
       - name: Import secrets
         id: secrets
+        if: env.HAS_VAULT == 'true'
+        continue-on-error: true
         uses: hashicorp/vault-action@v4.0.0
         with:
           url: ${{ secrets.VAULT_ADDR }}
@@ -60,6 +67,8 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
+        if: steps.secrets.outcome == 'success'
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ steps.secrets.outputs.APP_ID }}
@@ -70,7 +79,19 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - name: Report release identity
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "$APP_TOKEN" ]; then
+            echo "Releasing as camunda-sdk-automation (GitHub App via Vault)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            msg="Vault/app token unavailable (vault=${{ steps.secrets.outcome }}, app=${{ steps.app-token.outcome }}); releasing with GITHUB_TOKEN. Pushes fail if a branch ruleset blocks github-actions."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Fetch remote refs for semantic-release
         run: |
@@ -80,7 +101,7 @@ jobs:
 
       - name: Export stable line config
         run: |
-          echo "CAMUNDA_SDK_CURRENT_STABLE_MAJOR=${{ vars['CAMUNDA_SDK_CURRENT_STABLE_MAJOR'] }}" >> $GITHUB_ENV
+          echo "CAMUNDA_SDK_CURRENT_STABLE_MAJOR=${{ vars['CAMUNDA_SDK_CURRENT_STABLE_MAJOR'] }}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -93,8 +114,13 @@ jobs:
         env:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          if [ -n "$APP_SLUG" ]; then
+            git config user.name "${APP_SLUG}[bot]"
+            git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fi
 
       # Same model as the JS SDK: each release re-bundles the spec from
       # camunda/camunda (SPEC_REF default in package.json: main on main,
@@ -141,7 +167,7 @@ jobs:
 
       - name: Publish (semantic-release)
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           DUB_REGISTRY_TOKEN: ${{ secrets.DUB_REGISTRY_TOKEN }}
           CAMUNDA_SDK_CURRENT_STABLE_MAJOR: ${{ vars.CAMUNDA_SDK_CURRENT_STABLE_MAJOR }}
         run: npx semantic-release
