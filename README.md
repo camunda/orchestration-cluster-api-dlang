@@ -47,12 +47,26 @@ support.
 
 ## Install
 
-Add the package as a dub dependency once it is published, or vendor this repo:
+Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orchestration-sdk):
 
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk": { "path": "../orchestration-cluster-api-dlang" }
+    "camunda-orchestration-sdk": "~>11.0.0-alpha"
+  }
+}
+```
+
+`main` publishes **11.x alpha** prereleases (Camunda 8.11). `stable/N` publishes
+`N.x` on the release channel. Until the first tag exists, vendor the repo:
+
+```json
+{
+  "dependencies": {
+    "camunda-orchestration-sdk": {
+      "repository": "git+https://github.com/camunda/orchestration-cluster-api-dlang.git",
+      "version": "~main"
+    }
   }
 }
 ```

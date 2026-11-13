@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "release": "semantic-release"
+  },
+  "devDependencies": {
+    "@camunda8/sdk-infra": "1.11.1",
+    "@semantic-release/changelog": "6.0.3",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/git": "10.0.1",
+    "semantic-release": "25.0.9"
+  }
+}

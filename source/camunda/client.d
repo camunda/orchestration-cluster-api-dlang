@@ -14,6 +14,7 @@ import camunda.http;
 import camunda.jsonx;
 import camunda.retry;
 import camunda.safeio : readBytes;
+import camunda.version_ : sdkUserAgent, sdkVersion;
 import camunda.worker;
 import std.format : format;
 import std.json;
@@ -57,7 +58,7 @@ final class CamundaClient
     private Authentication _auth;
     private Clock _clock;
     private BackpressureManager _bp;
-    private string userAgent = "camunda-orchestration-sdk-d/0.1.0";
+    private string userAgent = sdkUserAgent;
 
     this(CamundaOptions options)
     {
@@ -263,6 +264,8 @@ unittest
         .withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     assert(c.config.restAddress == "http://localhost:8080/v2");
     assert(c.config.authStrategy == AuthStrategy.none);
+    assert(sdkVersion.length > 0);
+    assert(sdkUserAgent.length > "camunda-orchestration-sdk-d/".length);
 }
 
 unittest

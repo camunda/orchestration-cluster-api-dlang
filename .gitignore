@@ -19,6 +19,7 @@ examples/readme
 external-spec/upstream/
 external-spec/upstream/**/.tmp*
 node_modules/
+package-lock.json
 .openapi-generator/
 .env
 __pycache__/

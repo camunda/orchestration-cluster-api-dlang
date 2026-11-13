@@ -11,4 +11,5 @@ public import camunda.config : AuthStrategy, BackpressureProfile, CamundaConfig,
 public import camunda.errors;
 public import camunda.eventual : ConsistencyOptions;
 public import camunda.generated;
+public import camunda.version_ : sdkUserAgent, sdkVersion;
 public import camunda.worker : Job, JobAction, JobWorker, JobWorkerConfig;

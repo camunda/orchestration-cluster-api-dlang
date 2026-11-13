@@ -55,7 +55,6 @@ To pick up a newer spec, copy `external-spec/bundled/` from the JS SDK and run
   surfaces, not in the PHP/Rust core either (or only partially).
 - **Pagination helpers** as a first-class `.paginate` on search ops.
 - **Integration tests** against a live cluster.
-- **dub registry publish**.
 - **camunda-docs sync workflow** (the generator is here; the docs-site workflow is not).
 
 ## Safety
