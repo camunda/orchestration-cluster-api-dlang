@@ -187,9 +187,7 @@ final class CamundaClient
         req.headers = _auth.headers();
         req.headers["Accept"] = "application/json, */*";
         req.headers["User-Agent"] = userAgent;
-        if (body_.type != JSONType.null_
-            && !(body_.type == JSONType.object && body_.objectNoRef.length == 0)
-            && method != "GET")
+        if (shouldSendJsonBody(method, body_))
         {
             req.body_ = body_.toString;
             req.contentType = "application/json";
@@ -286,4 +284,23 @@ unittest
     assert(threw);
     auto loose = JobKey.assumeExists("anything");
     assert(loose.value == "anything");
+}
+
+/// An empty JSON object is a present body (`{}`), not an absent one.
+/// `JSONValue.init` / `null` still means "no body". See #1.
+bool shouldSendJsonBody(string method, const JSONValue body_)
+{
+    if (method == "GET") return false;
+    return body_.type != JSONType.null_;
+}
+
+unittest
+{
+    assert(!shouldSendJsonBody("GET", parseJSON("{}")));
+    assert(!shouldSendJsonBody("POST", JSONValue.init));
+    assert(!shouldSendJsonBody("POST", JSONValue(null)));
+    assert(shouldSendJsonBody("POST", parseJSON("{}")));
+    assert(shouldSendJsonBody("PUT", parseJSON(`{"a":1}`)));
+    assert(shouldSendJsonBody("PATCH", parseJSON("[]")));
+    assert(parseJSON("{}").toString == "{}");
 }
