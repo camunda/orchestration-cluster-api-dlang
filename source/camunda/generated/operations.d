@@ -410,7 +410,7 @@ mixin template GeneratedOperations()
     EvaluateConditionalResult evaluateConditionals(ConditionalEvaluationInstruction body_ = ConditionalEvaluationInstruction.init)
     {
         const path_ = "/conditionals/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return EvaluateConditionalResult.fromJson(payload);
     }
 
@@ -426,7 +426,7 @@ mixin template GeneratedOperations()
     EvaluateDecisionResult evaluateDecision(DecisionEvaluationInstruction body_ = DecisionEvaluationInstruction.init)
     {
         const path_ = "/decision-definitions/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return EvaluateDecisionResult.fromJson(payload);
     }
 
@@ -645,7 +645,7 @@ mixin template GeneratedOperations()
     ExpressionEvaluationResult evaluateExpression(ExpressionEvaluationRequest body_ = ExpressionEvaluationRequest.init)
     {
         const path_ = "/expression/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return ExpressionEvaluationResult.fromJson(payload);
     }
 
@@ -1035,7 +1035,7 @@ mixin template GeneratedOperations()
     MessageCorrelationResult correlateMessage(MessageCorrelationRequest body_ = MessageCorrelationRequest.init)
     {
         const path_ = "/messages/correlation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return MessageCorrelationResult.fromJson(payload);
     }
 
@@ -1043,7 +1043,7 @@ mixin template GeneratedOperations()
     MessagePublicationResult publishMessage(MessagePublicationRequest body_ = MessagePublicationRequest.init)
     {
         const path_ = "/messages/publication";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return MessagePublicationResult.fromJson(payload);
     }
 
@@ -1127,7 +1127,7 @@ mixin template GeneratedOperations()
     CreateProcessInstanceResult createProcessInstance(ProcessInstanceCreationInstruction body_ = ProcessInstanceCreationInstruction.init)
     {
         const path_ = "/process-instances";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return CreateProcessInstanceResult.fromJson(payload);
     }
 
@@ -1535,7 +1535,7 @@ mixin template GeneratedOperations()
     SignalBroadcastResult broadcastSignal(SignalBroadcastRequest body_ = SignalBroadcastRequest.init)
     {
         const path_ = "/signals/broadcast";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return SignalBroadcastResult.fromJson(payload);
     }
 
