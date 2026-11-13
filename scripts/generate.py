@@ -87,9 +87,37 @@ def camel(name: str) -> str:
     return name[0].lower() + name[1:]
 
 
+# Set by load(): the bundled spec, for following deep JSON-pointer refs.
+_SPEC: dict = {}
+_COMPONENT_PREFIX = "#/components/schemas/"
+
+
 def ref_name(node: object) -> str | None:
-    if isinstance(node, dict) and isinstance(node.get("$ref"), str):
-        return node["$ref"].rsplit("/", 1)[-1]
+    """Component name a `$ref` resolves to.
+
+    The bundler can emit pointers *into* a component (e.g.
+    `#/components/schemas/X/allOf/0`) when dedup matched a nested member.
+    Follow those to the component they finally name, instead of taking the
+    last path segment (which would be `0`).
+    """
+    seen: set[str] = set()
+    while isinstance(node, dict) and isinstance(node.get("$ref"), str):
+        ref = node["$ref"]
+        if ref in seen:
+            sys.exit(f"cyclic $ref: {ref}")
+        seen.add(ref)
+        if not ref.startswith(_COMPONENT_PREFIX):
+            return ref.rsplit("/", 1)[-1]
+        parts = ref[len(_COMPONENT_PREFIX):].split("/")
+        if len(parts) == 1:
+            return parts[0]
+        target: object = _SPEC.get("components", {}).get("schemas", {})
+        for part in parts:
+            part = part.replace("~1", "/").replace("~0", "~")
+            target = target[int(part)] if isinstance(target, list) else target[part]
+        if not (isinstance(target, dict) and "$ref" in target):
+            sys.exit(f"unsupported deep $ref to an inline schema: {ref}")
+        node = target
     return None
 
 
@@ -136,6 +164,7 @@ def load() -> Spec:
     if not META_PATH.is_file():
         sys.exit(f"missing spec metadata: {META_PATH}")
     spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    _SPEC.update(spec)
     meta = json.loads(META_PATH.read_text(encoding="utf-8"))
     return Spec(spec, meta)
 
@@ -750,6 +779,11 @@ def op_success_schema(spec: Spec, op: dict) -> tuple[str | None, str]:
     if status == 204:
         return None, "void"
     ref = op.get("successResponseSchemaRef")
+    # camunda-schema-bundler <=2.4.5 records the last pointer segment for deep
+    # refs (e.g. "0" for #/components/schemas/X/allOf/0). Trust the metadata
+    # only when it names a real component; otherwise resolve from the spec.
+    if ref and ref not in (spec.spec.get("components") or {}).get("schemas", {}):
+        ref = None
     if ref:
         kind = classify(spec, ref)
         if kind == "key":
