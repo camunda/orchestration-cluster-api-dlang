@@ -57,8 +57,14 @@ Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orche
 }
 ```
 
-`main` publishes **11.x alpha** prereleases (Camunda 8.11). `stable/N` publishes
-`N.x` on the release channel. Until the first tag exists, vendor the repo:
+Release lines (SDK major = Camunda minor):
+
+| Branch | Spec source (camunda/camunda) | Publishes | dub constraint |
+| --- | --- | --- | --- |
+| `main` | `main` (8.11 prerelease) | `11.0.0-alpha.N` | `~>11.0.0-alpha` |
+| `stable/10` | `stable/8.10` | `10.x.y` (latest) | `~>10.0` |
+
+To vendor the repo instead:
 
 ```json
 {
