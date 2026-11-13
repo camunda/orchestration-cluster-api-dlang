@@ -86,15 +86,6 @@ void get_user_task_form(CamundaClient client, UserTaskKey userTaskKey)
 }
 // endregion GetUserTaskForm
 
-// region LookupUserTask
-/// Look up an active user task (alpha) (`POST /user-tasks/{userTaskKey}/lookup`).
-void lookup_user_task(CamundaClient client, UserTaskKey userTaskKey, UserTaskLookupRequest body_)
-{
-    auto result = client.lookupUserTask(userTaskKey, body_);
-    cast(void) result;
-}
-// endregion LookupUserTask
-
 // region SearchUserTaskVariables
 /// Search user task variables (`POST /user-tasks/{userTaskKey}/variables/search`).
 void search_user_task_variables(CamundaClient client, UserTaskKey userTaskKey, UserTaskVariableSearchQueryRequest body_, string truncateValues = null)

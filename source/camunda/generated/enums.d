@@ -1112,7 +1112,6 @@ JSONValue toJson(OwnerTypeEnum value) { return JSONValue(cast(string) value); }
 enum PermissionTypeEnum : string
 {
     ACCESS = "ACCESS",
-    ANSWER = "ANSWER",
     CANCEL_PROCESS_INSTANCE = "CANCEL_PROCESS_INSTANCE",
     CLAIM = "CLAIM",
     CLAIM_USER_TASK = "CLAIM_USER_TASK",
@@ -1166,7 +1165,6 @@ PermissionTypeEnum parsePermissionTypeEnum(string value)
     switch (value)
     {
     case "ACCESS": return PermissionTypeEnum.ACCESS;
-    case "ANSWER": return PermissionTypeEnum.ANSWER;
     case "CANCEL_PROCESS_INSTANCE": return PermissionTypeEnum.CANCEL_PROCESS_INSTANCE;
     case "CLAIM": return PermissionTypeEnum.CLAIM;
     case "CLAIM_USER_TASK": return PermissionTypeEnum.CLAIM_USER_TASK;
@@ -1268,7 +1266,6 @@ enum ResourceTypeEnum : string
     GROUP = "GROUP",
     MAPPING_RULE = "MAPPING_RULE",
     MESSAGE = "MESSAGE",
-    PROBE = "PROBE",
     PROCESS_DEFINITION = "PROCESS_DEFINITION",
     RESOURCE = "RESOURCE",
     ROLE = "ROLE",
@@ -1298,7 +1295,6 @@ ResourceTypeEnum parseResourceTypeEnum(string value)
     case "GROUP": return ResourceTypeEnum.GROUP;
     case "MAPPING_RULE": return ResourceTypeEnum.MAPPING_RULE;
     case "MESSAGE": return ResourceTypeEnum.MESSAGE;
-    case "PROBE": return ResourceTypeEnum.PROBE;
     case "PROCESS_DEFINITION": return ResourceTypeEnum.PROCESS_DEFINITION;
     case "RESOURCE": return ResourceTypeEnum.RESOURCE;
     case "ROLE": return ResourceTypeEnum.ROLE;
@@ -1420,37 +1416,6 @@ TenantFilterEnum fromJson(TenantFilterEnum)(JSONValue v)
     return parseTenantFilterEnum(v.type == JSONType.string ? v.str : v.toString);
 }
 JSONValue toJson(TenantFilterEnum value) { return JSONValue(cast(string) value); }
-
-/// The lifecycle state of an active user task. A state ending in `-ING` means a change to the task is in progress, for example waiting for task listeners; the task fields still hold the values from before the change. A claim in progress is reported as `ASSIGNING`, as in the user task search.
-enum UserTaskLookupStateEnum : string
-{
-    CREATING = "CREATING",
-    CREATED = "CREATED",
-    ASSIGNING = "ASSIGNING",
-    UPDATING = "UPDATING",
-    COMPLETING = "COMPLETING",
-    CANCELING = "CANCELING",
-}
-
-UserTaskLookupStateEnum parseUserTaskLookupStateEnum(string value)
-{
-    switch (value)
-    {
-    case "CREATING": return UserTaskLookupStateEnum.CREATING;
-    case "CREATED": return UserTaskLookupStateEnum.CREATED;
-    case "ASSIGNING": return UserTaskLookupStateEnum.ASSIGNING;
-    case "UPDATING": return UserTaskLookupStateEnum.UPDATING;
-    case "COMPLETING": return UserTaskLookupStateEnum.COMPLETING;
-    case "CANCELING": return UserTaskLookupStateEnum.CANCELING;
-    default: throw new EnumDecodeError("UserTaskLookupStateEnum", value);
-    }
-}
-
-UserTaskLookupStateEnum fromJson(UserTaskLookupStateEnum)(JSONValue v)
-{
-    return parseUserTaskLookupStateEnum(v.type == JSONType.string ? v.str : v.toString);
-}
-JSONValue toJson(UserTaskLookupStateEnum value) { return JSONValue(cast(string) value); }
 
 /// The state of the user task. Note: FAILED state is only for legacy job-worker-based tasks.
 enum UserTaskStateEnum : string

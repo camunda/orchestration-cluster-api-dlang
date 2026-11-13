@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.0.0",
-  "specHash": "sha256:dcfd1b015d1e24c70c3288101ab7cbbab420a4ebda5641d68e787a32eaee0266",
+  "specHash": "sha256:f1b5abf8965a948a5bd39e8dff1be0ec2a7843de7e32a4cf67976e4017f62d2b",
   "semanticKeys": [
     {
       "name": "AgentDefinitionKey",
@@ -1577,20 +1577,6 @@
         }
       ],
       "stableId": "category-filter-property"
-    },
-    {
-      "name": "ClearableDateTime",
-      "kind": "hybrid-union",
-      "description": "A date-time in RFC 3339 format, or an empty string to clear the persisted value.\nA `null` value or omitting the property preserves the persisted value.\n",
-      "branches": [
-        {
-          "branchType": "other"
-        },
-        {
-          "branchType": "other"
-        }
-      ],
-      "stableId": "clearable-date-time"
     },
     {
       "name": "ClusterRestoreOperation",
@@ -3539,7 +3525,7 @@
       "optionalTenantIdInBody": false,
       "sourceFile": "authentication.yaml",
       "requestBodyContentTypes": [],
-      "successResponseSchemaRef": "0",
+      "successResponseSchemaRef": "CamundaUserResult",
       "successStatus": 200,
       "vendorExtensions": {
         "x-eventually-consistent": false,
@@ -4368,39 +4354,6 @@
       }
     },
     {
-      "operationId": "getClock",
-      "path": "/clock",
-      "method": "get",
-      "tags": [
-        "Clock"
-      ],
-      "summary": "Get internal clock",
-      "description": "Returns the current time of the Zeebe engine's internal clock.\nIf the clock is pinned, this is the pinned time. Otherwise, the clock ticks in real time\nand this is the engine's current time.\n\nUse this endpoint to check the time that the engine uses, for example after pinning the\nclock with `PUT /v2/clock`, adding time with `POST /v2/clock/add`, or resetting it with\n`POST /v2/clock/reset`. A pin, add, or reset reaches all partitions shortly after it is\naccepted, so a request sent right after it may still return the previous time.\n",
-      "eventuallyConsistent": false,
-      "hasRequestBody": false,
-      "requestBodyUnion": false,
-      "bodyOnly": false,
-      "pathParams": [],
-      "queryParams": [],
-      "requestBodyUnionRefs": [],
-      "optionalTenantIdInBody": false,
-      "sourceFile": "clock.yaml",
-      "requestBodyContentTypes": [],
-      "successResponseSchemaRef": "ClockResult",
-      "successStatus": 200,
-      "vendorExtensions": {
-        "x-eventually-consistent": false,
-        "x-required-permissions": [
-          {
-            "resourceType": "SYSTEM",
-            "permissionType": "READ"
-          }
-        ],
-        "x-added-in-version": "8.11",
-        "x-scope": "physical-tenant"
-      }
-    },
-    {
       "operationId": "pinClock",
       "path": "/clock",
       "method": "put",
@@ -4408,7 +4361,7 @@
         "Clock"
       ],
       "summary": "Pin internal clock (alpha)",
-      "description": "Set a precise, static time for the Zeebe engine's internal clock.\nWhen the clock is pinned, it remains at the specified time and does not advance.\nTo change the time, the clock must be pinned again with a new timestamp.\nTo move the clock without stopping it, use `POST /v2/clock/add` instead.\nUse `GET /v2/clock` to read the current time of the clock.\n\nThis endpoint is an alpha feature and may be subject to change\nin future releases.\n",
+      "description": "Set a precise, static time for the Zeebe engine's internal clock.\nWhen the clock is pinned, it remains at the specified time and does not advance.\nTo change the time, the clock must be pinned again with a new timestamp.\n\nThis endpoint is an alpha feature and may be subject to change\nin future releases.\n",
       "eventuallyConsistent": false,
       "hasRequestBody": true,
       "requestBodyUnion": false,
@@ -4436,42 +4389,6 @@
       }
     },
     {
-      "operationId": "addClock",
-      "path": "/clock/add",
-      "method": "post",
-      "tags": [
-        "Clock"
-      ],
-      "summary": "Add time to internal clock",
-      "description": "Moves the Zeebe engine's internal clock forward or backward by the given offset.\nUnlike pinning, the clock keeps ticking in real time after the offset is added. If the\nclock is pinned, it stays pinned and moves to the pinned time plus the offset.\n\nEach request adds to the time of the clock, so adding `PT1H` twice moves the clock two\nhours ahead. Use `POST /v2/clock/reset` to remove all added time and return the clock to\nthe system time.\n\nThe response contains the new time of the clock. The change reaches all partitions\nshortly after it is accepted, so a request sent right after it may still use the previous\ntime.\n",
-      "eventuallyConsistent": false,
-      "hasRequestBody": true,
-      "requestBodyUnion": false,
-      "bodyOnly": true,
-      "pathParams": [],
-      "queryParams": [],
-      "requestBodyUnionRefs": [],
-      "optionalTenantIdInBody": false,
-      "sourceFile": "clock.yaml",
-      "requestBodyContentTypes": [
-        "application/json"
-      ],
-      "requestBodySchemaRef": "ClockAddRequest",
-      "successResponseSchemaRef": "ClockResult",
-      "successStatus": 200,
-      "vendorExtensions": {
-        "x-eventually-consistent": false,
-        "x-required-permissions": [
-          {
-            "resourceType": "SYSTEM",
-            "permissionType": "UPDATE"
-          }
-        ],
-        "x-added-in-version": "8.11",
-        "x-scope": "physical-tenant"
-      }
-    },
-    {
       "operationId": "resetClock",
       "path": "/clock/reset",
       "method": "post",
@@ -4479,7 +4396,7 @@
         "Clock"
       ],
       "summary": "Reset internal clock (alpha)",
-      "description": "Resets the Zeebe engine's internal clock to the current system time, enabling it to tick in real-time.\nThis operation is useful for returning the clock to\nnormal behavior after it has been pinned to a specific time or moved with\n`POST /v2/clock/add`.\nUse `GET /v2/clock` to read the current time of the clock.\n\nThis endpoint is an alpha feature and may be subject to change\nin future releases.\n",
+      "description": "Resets the Zeebe engine's internal clock to the current system time, enabling it to tick in real-time.\nThis operation is useful for returning the clock to\nnormal behavior after it has been pinned to a specific time.\n\nThis endpoint is an alpha feature and may be subject to change\nin future releases.\n",
       "eventuallyConsistent": false,
       "hasRequestBody": false,
       "requestBodyUnion": false,
@@ -8444,7 +8361,7 @@
         "Process instance"
       ],
       "summary": "Resolve related incidents (batch)",
-      "description": "Resolves multiple instances of process instances.\nOnly incidents of ACTIVE process instances are resolved. The given filter only narrows the batch.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
+      "description": "Resolves multiple instances of process instances.\nSince only process instances with ACTIVE state can have unresolved incidents, any given\nfilters for state are ignored and overridden during this batch operation.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
       "eventuallyConsistent": false,
       "hasRequestBody": true,
       "requestBodyUnion": false,
@@ -8488,7 +8405,7 @@
         "Process instance"
       ],
       "summary": "Migrate process instances (batch)",
-      "description": "Migrate multiple process instances.\nOnly ACTIVE process instances are migrated. The given filter only narrows the batch.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
+      "description": "Migrate multiple process instances.\nSince only process instances with ACTIVE state can be migrated, any given\nfilters for state are ignored and overridden during this batch operation.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
       "eventuallyConsistent": false,
       "hasRequestBody": true,
       "requestBodyUnion": false,
@@ -8532,7 +8449,7 @@
         "Process instance"
       ],
       "summary": "Modify process instances (batch)",
-      "description": "Modify multiple process instances.\nOnly ACTIVE process instances are modified. The given filter only narrows the batch.\nIn contrast to single modification operation, it is not possible to add variable instructions or modify by element key.\nIt is only possible to use the element id of the source and target.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
+      "description": "Modify multiple process instances.\nSince only process instances with ACTIVE state can be modified, any given\nfilters for state are ignored and overridden during this batch operation.\nIn contrast to single modification operation, it is not possible to add variable instructions or modify by element key.\nIt is only possible to use the element id of the source and target.\nThis is done asynchronously, the progress can be tracked using the batchOperationKey from the response and the batch operation status endpoint (/batch-operations/{batchOperationKey}).\n",
       "eventuallyConsistent": false,
       "hasRequestBody": true,
       "requestBodyUnion": false,
@@ -12895,52 +12812,6 @@
       }
     },
     {
-      "operationId": "lookupUserTask",
-      "path": "/user-tasks/{userTaskKey}/lookup",
-      "method": "post",
-      "tags": [
-        "User task"
-      ],
-      "summary": "Look up an active user task (alpha)",
-      "description": "Returns an active user task together with the variables visible to it, read from the\nengine's state instead of secondary storage. The task and its variables are read at the\nsame point in processing, so they are consistent with each other and with any command the\nengine has already processed, for example the completion of a previous task.\n\nThe response includes the task's lifecycle `state`. Use it to interpret the returned\nvalues: while a change to the task is in progress, the task fields and variables are the\nones from before the change, and `state` names the pending change. For example, with\n`ASSIGNING` the returned `assignee` is still the previous one, because task listeners can\ndeny the new assignment; with `COMPLETING` the variables don't include the ones sent with\nthe completion yet.\n\nOnly active tasks can be looked up. The lookup returns 404 when the task doesn't exist,\nwhen it was already completed or canceled (use the user task search for those), or when it\nbelongs to a tenant the caller isn't assigned to. It returns 409 when the task's process\ninstance is banned: an instance that hit an unrecoverable error and can only be canceled.\n\nEach lookup is processed by the engine. Use it when a task is opened, not for polling.\n\nThis endpoint is an alpha feature and may be subject to change\nin future releases.\n",
-      "eventuallyConsistent": false,
-      "hasRequestBody": true,
-      "requestBodyUnion": false,
-      "bodyOnly": false,
-      "pathParams": [
-        "userTaskKey"
-      ],
-      "queryParams": [],
-      "requestBodyUnionRefs": [],
-      "optionalTenantIdInBody": false,
-      "sourceFile": "user-tasks.yaml",
-      "requestBodyContentTypes": [
-        "application/json"
-      ],
-      "requestBodySchemaRef": "UserTaskLookupRequest",
-      "successResponseSchemaRef": "UserTaskLookupResult",
-      "successStatus": 200,
-      "vendorExtensions": {
-        "x-eventually-consistent": false,
-        "x-required-permissions": [
-          {
-            "anyOf": [
-              {
-                "resourceType": "PROCESS_DEFINITION",
-                "permissionType": "READ_USER_TASK"
-              },
-              {
-                "resourceType": "USER_TASK",
-                "permissionType": "READ"
-              }
-            ]
-          }
-        ],
-        "x-added-in-version": "8.11",
-        "x-scope": "physical-tenant"
-      }
-    },
-    {
       "operationId": "searchUserTaskVariables",
       "path": "/user-tasks/{userTaskKey}/variables/search",
       "method": "post",
@@ -13268,8 +13139,8 @@
   ],
   "integrity": {
     "totalSemanticKeys": 44,
-    "totalUnions": 69,
-    "totalOperations": 247,
+    "totalUnions": 68,
+    "totalOperations": 244,
     "totalEventuallyConsistent": 95,
     "totalDeprecatedEnumSchemas": 2,
     "totalSemanticProviders": 22

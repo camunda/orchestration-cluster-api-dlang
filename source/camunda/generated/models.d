@@ -7041,125 +7041,6 @@ struct AuditLogSearchQuerySortRequest
     }
 
 }
-/// A `CamundaUserResult` with `isAnonymous` set to `false`, so `username` is always set. `GET /authentication/me` returns `CamundaUserResult`. Clients that only handle a caller with an identity can narrow the result to this schema once they checked `isAnonymous`.
-struct AuthenticatedCamundaUserResult
-{
-    JSONValue raw;
-
-    static AuthenticatedCamundaUserResult fromJson(JSONValue value)
-    {
-        AuthenticatedCamundaUserResult m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static AuthenticatedCamundaUserResult initEmpty()
-    {
-        AuthenticatedCamundaUserResult m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// Always `false`, because the caller has an identity.
-    bool has_isAnonymous() const { return jsonHas(raw, "isAnonymous"); }
-    bool isAnonymous() const { return jsonGetBool(raw, "isAnonymous"); }
-    ref AuthenticatedCamundaUserResult isAnonymous(bool value) return
-    {
-        jsonSet(raw, "isAnonymous", JSONValue(value));
-        return this;
-    }
-
-    /// The username of the user.
-    bool has_username() const { return jsonHas(raw, "username"); }
-    Username username() const { return Username.fromJson(jsonGet(raw, "username")); }
-    ref AuthenticatedCamundaUserResult username(Username value) return
-    {
-        jsonSet(raw, "username", value.toJson());
-        return this;
-    }
-
-    /// The display name of the user.
-    bool has_displayName() const { return jsonHas(raw, "displayName"); }
-    string displayName() const { return jsonGetString(raw, "displayName"); }
-    ref AuthenticatedCamundaUserResult displayName(string value) return
-    {
-        jsonSet(raw, "displayName", JSONValue(value));
-        return this;
-    }
-
-    /// The email of the user.
-    bool has_email() const { return jsonHas(raw, "email"); }
-    string email() const { return jsonGetString(raw, "email"); }
-    ref AuthenticatedCamundaUserResult email(string value) return
-    {
-        jsonSet(raw, "email", JSONValue(value));
-        return this;
-    }
-
-    /// The web components the user is authorized to use. When authorizations are disabled for the cluster, this always returns `["*"]`, regardless of the user's actual permissions, since access is not restricted in that case. An anonymous caller of an unprotected API also gets `["*"]`, for the same reason.
-    bool has_authorizedComponents() const { return jsonHas(raw, "authorizedComponents"); }
-    string[] authorizedComponents() const { return jsonGetStringArray(raw, "authorizedComponents"); }
-    ref AuthenticatedCamundaUserResult authorizedComponents(string[] value) return
-    {
-        jsonSet(raw, "authorizedComponents", JSONValue(value));
-        return this;
-    }
-
-    /// The tenants the user is a member of.
-    bool has_tenants() const { return jsonHas(raw, "tenants"); }
-    TenantResult[] tenants() const { return jsonMapArray(raw, "tenants", (JSONValue v) => TenantResult.fromJson(v)); }
-    ref AuthenticatedCamundaUserResult tenants(TenantResult[] value) return
-    {
-        jsonSet(raw, "tenants", jsonFromMapped(value, (TenantResult x) => x.toJson()));
-        return this;
-    }
-
-    /// The groups assigned to the user.
-    bool has_groups() const { return jsonHas(raw, "groups"); }
-    string[] groups() const { return jsonGetStringArray(raw, "groups"); }
-    ref AuthenticatedCamundaUserResult groups(string[] value) return
-    {
-        jsonSet(raw, "groups", JSONValue(value));
-        return this;
-    }
-
-    /// The roles assigned to the user.
-    bool has_roles() const { return jsonHas(raw, "roles"); }
-    string[] roles() const { return jsonGetStringArray(raw, "roles"); }
-    ref AuthenticatedCamundaUserResult roles(string[] value) return
-    {
-        jsonSet(raw, "roles", JSONValue(value));
-        return this;
-    }
-
-    /// The plan of the user.
-    bool has_salesPlanType() const { return jsonHas(raw, "salesPlanType"); }
-    string salesPlanType() const { return jsonGetString(raw, "salesPlanType"); }
-    ref AuthenticatedCamundaUserResult salesPlanType(string value) return
-    {
-        jsonSet(raw, "salesPlanType", JSONValue(value));
-        return this;
-    }
-
-    /// The links to the components in the C8 stack.
-    bool has_c8Links() const { return jsonHas(raw, "c8Links"); }
-    JSONValue c8Links() const { return jsonGet(raw, "c8Links"); }
-    ref AuthenticatedCamundaUserResult c8Links(JSONValue value) return
-    {
-        jsonSet(raw, "c8Links", JSONValue(value));
-        return this;
-    }
-
-    /// Flag for understanding if the user is able to perform logout.
-    bool has_canLogout() const { return jsonHas(raw, "canLogout"); }
-    bool canLogout() const { return jsonGetBool(raw, "canLogout"); }
-    ref AuthenticatedCamundaUserResult canLogout(bool value) return
-    {
-        jsonSet(raw, "canLogout", JSONValue(value));
-        return this;
-    }
-
-}
 /// Configuration for authentication and session management.
 struct AuthenticationConfigurationResponse
 {
@@ -7194,15 +7075,6 @@ struct AuthenticationConfigurationResponse
     ref AuthenticationConfigurationResponse isLoginDelegated(bool value) return
     {
         jsonSet(raw, "isLoginDelegated", JSONValue(value));
-        return this;
-    }
-
-    /// Whether Camunda manages group membership locally, as opposed to delegating it to the identity provider via a groups claim.
-    bool has_isCamundaGroupsEnabled() const { return jsonHas(raw, "isCamundaGroupsEnabled"); }
-    bool isCamundaGroupsEnabled() const { return jsonGetBool(raw, "isCamundaGroupsEnabled"); }
-    ref AuthenticationConfigurationResponse isCamundaGroupsEnabled(bool value) return
-    {
-        jsonSet(raw, "isCamundaGroupsEnabled", JSONValue(value));
         return this;
     }
 
@@ -9034,19 +8906,19 @@ struct Changeset
 
     /// The due date of the task. Reset by providing an empty String.
     bool has_dueDate() const { return jsonHas(raw, "dueDate"); }
-    ClearableDateTime dueDate() const { return ClearableDateTime.fromJson(jsonGet(raw, "dueDate")); }
-    ref Changeset dueDate(ClearableDateTime value) return
+    string dueDate() const { return jsonGetString(raw, "dueDate"); }
+    ref Changeset dueDate(string value) return
     {
-        jsonSet(raw, "dueDate", value.toJson());
+        jsonSet(raw, "dueDate", JSONValue(value));
         return this;
     }
 
     /// The follow-up date of the task. Reset by providing an empty String.
     bool has_followUpDate() const { return jsonHas(raw, "followUpDate"); }
-    ClearableDateTime followUpDate() const { return ClearableDateTime.fromJson(jsonGet(raw, "followUpDate")); }
-    ref Changeset followUpDate(ClearableDateTime value) return
+    string followUpDate() const { return jsonGetString(raw, "followUpDate"); }
+    ref Changeset followUpDate(string value) return
     {
-        jsonSet(raw, "followUpDate", value.toJson());
+        jsonSet(raw, "followUpDate", JSONValue(value));
         return this;
     }
 
@@ -9086,49 +8958,6 @@ struct CheckpointId
     JSONValue toJson() const { return JSONValue(value); }
 }
 
-/// A date-time in RFC 3339 format, or an empty string to clear the persisted value. A `null` value or omitting the property preserves the persisted value.
-struct ClearableDateTime
-{
-    JSONValue raw;
-
-    static ClearableDateTime fromJson(JSONValue value)
-    {
-        ClearableDateTime m; m.raw = value; return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static ClearableDateTime of(JSONValue value) { return fromJson(value); }
-    static ClearableDateTime exactString(string value) { return fromJson(JSONValue(value)); }
-    static ClearableDateTime exactInt(long value) { return fromJson(JSONValue(value)); }
-}
-/// `ClockAddRequest`
-struct ClockAddRequest
-{
-    JSONValue raw;
-
-    static ClockAddRequest fromJson(JSONValue value)
-    {
-        ClockAddRequest m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static ClockAddRequest initEmpty()
-    {
-        ClockAddRequest m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// The time to add to the clock, as an ISO 8601 duration in days, hours, minutes, and seconds (for example `PT1H` for one hour or `P1D` for one day). Use a negative duration such as `-PT1H` to move the clock backward. The request is rejected if the new time would be before 1970-01-01T00:00:00Z.
-    bool has_offset() const { return jsonHas(raw, "offset"); }
-    string offset() const { return jsonGetString(raw, "offset"); }
-    ref ClockAddRequest offset(string value) return
-    {
-        jsonSet(raw, "offset", JSONValue(value));
-        return this;
-    }
-
-}
 /// `ClockPinRequest`
 struct ClockPinRequest
 {
@@ -9152,35 +8981,6 @@ struct ClockPinRequest
     bool has_timestamp() const { return jsonHas(raw, "timestamp"); }
     long timestamp() const { return jsonGetLong(raw, "timestamp"); }
     ref ClockPinRequest timestamp(long value) return
-    {
-        jsonSet(raw, "timestamp", JSONValue(value));
-        return this;
-    }
-
-}
-/// `ClockResult`
-struct ClockResult
-{
-    JSONValue raw;
-
-    static ClockResult fromJson(JSONValue value)
-    {
-        ClockResult m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static ClockResult initEmpty()
-    {
-        ClockResult m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// The current time of the clock, as an ISO 8601 date-time.
-    bool has_timestamp() const { return jsonHas(raw, "timestamp"); }
-    string timestamp() const { return jsonGetString(raw, "timestamp"); }
-    ref ClockResult timestamp(string value) return
     {
         jsonSet(raw, "timestamp", JSONValue(value));
         return this;
@@ -12969,15 +12769,6 @@ struct DecisionInstanceGetQueryResult
         return this;
     }
 
-    /// The storage ordinal this decision instance's data belongs to. This is `null` for data exported before storage ordinals were introduced in version 8.11.
-    bool has_storageOrdinal() const { return jsonHas(raw, "storageOrdinal"); }
-    int storageOrdinal() const { return cast(int) jsonGetLong(raw, "storageOrdinal"); }
-    ref DecisionInstanceGetQueryResult storageOrdinal(int value) return
-    {
-        jsonSet(raw, "storageOrdinal", JSONValue(value));
-        return this;
-    }
-
     /// The tenant ID of the decision instance.
     bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
     TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
@@ -13172,15 +12963,6 @@ struct DecisionInstanceResult
     ref DecisionInstanceResult state(DecisionInstanceStateEnum value) return
     {
         jsonSet(raw, "state", JSONValue(cast(string) value));
-        return this;
-    }
-
-    /// The storage ordinal this decision instance's data belongs to. This is `null` for data exported before storage ordinals were introduced in version 8.11.
-    bool has_storageOrdinal() const { return jsonHas(raw, "storageOrdinal"); }
-    int storageOrdinal() const { return cast(int) jsonGetLong(raw, "storageOrdinal"); }
-    ref DecisionInstanceResult storageOrdinal(int value) return
-    {
-        jsonSet(raw, "storageOrdinal", JSONValue(value));
         return this;
     }
 
@@ -13785,15 +13567,6 @@ struct DeploymentConfigurationResponse
     ref DeploymentConfigurationResponse isMultiTenancyEnabled(bool value) return
     {
         jsonSet(raw, "isMultiTenancyEnabled", JSONValue(value));
-        return this;
-    }
-
-    /// Whether the tenants management API and UI are enabled.
-    bool has_isTenantsApiEnabled() const { return jsonHas(raw, "isTenantsApiEnabled"); }
-    bool isTenantsApiEnabled() const { return jsonGetBool(raw, "isTenantsApiEnabled"); }
-    ref DeploymentConfigurationResponse isTenantsApiEnabled(bool value) return
-    {
-        jsonSet(raw, "isTenantsApiEnabled", JSONValue(value));
         return this;
     }
 
@@ -16131,10 +15904,10 @@ struct ExpressionEvaluationRequest
 
     /// Required when the expression references tenant-scoped cluster variables
     bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
-    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
-    ref ExpressionEvaluationRequest tenantId(TenantId value) return
+    string tenantId() const { return jsonGetString(raw, "tenantId"); }
+    ref ExpressionEvaluationRequest tenantId(string value) return
     {
-        jsonSet(raw, "tenantId", value.toJson());
+        jsonSet(raw, "tenantId", JSONValue(value));
         return this;
     }
 
@@ -18474,15 +18247,6 @@ struct IncidentResult
         return this;
     }
 
-    /// The storage ordinal this incident's data belongs to. This is `null` for data exported before storage ordinals were introduced in version 8.11.
-    bool has_storageOrdinal() const { return jsonHas(raw, "storageOrdinal"); }
-    int storageOrdinal() const { return cast(int) jsonGetLong(raw, "storageOrdinal"); }
-    ref IncidentResult storageOrdinal(int value) return
-    {
-        jsonSet(raw, "storageOrdinal", JSONValue(value));
-        return this;
-    }
-
 }
 /// `IncidentSearchQuery`
 struct IncidentSearchQuery
@@ -19773,21 +19537,21 @@ struct JobResultCorrections
         return this;
     }
 
-    /// The due date of the task. Clear by providing an empty String.
+    /// The due date of the task.
     bool has_dueDate() const { return jsonHas(raw, "dueDate"); }
-    ClearableDateTime dueDate() const { return ClearableDateTime.fromJson(jsonGet(raw, "dueDate")); }
-    ref JobResultCorrections dueDate(ClearableDateTime value) return
+    string dueDate() const { return jsonGetString(raw, "dueDate"); }
+    ref JobResultCorrections dueDate(string value) return
     {
-        jsonSet(raw, "dueDate", value.toJson());
+        jsonSet(raw, "dueDate", JSONValue(value));
         return this;
     }
 
-    /// The follow-up date of the task. Clear by providing an empty String.
+    /// The follow-up date of the task.
     bool has_followUpDate() const { return jsonHas(raw, "followUpDate"); }
-    ClearableDateTime followUpDate() const { return ClearableDateTime.fromJson(jsonGet(raw, "followUpDate")); }
-    ref JobResultCorrections followUpDate(ClearableDateTime value) return
+    string followUpDate() const { return jsonGetString(raw, "followUpDate"); }
+    ref JobResultCorrections followUpDate(string value) return
     {
-        jsonSet(raw, "followUpDate", value.toJson());
+        jsonSet(raw, "followUpDate", JSONValue(value));
         return this;
     }
 
@@ -20171,15 +19935,6 @@ struct JobSearchResult
     ref JobSearchResult businessId(BusinessId value) return
     {
         jsonSet(raw, "businessId", value.toJson());
-        return this;
-    }
-
-    /// The storage ordinal this job's data belongs to. This is `null` for data exported before storage ordinals were introduced in version 8.11.
-    bool has_storageOrdinal() const { return jsonHas(raw, "storageOrdinal"); }
-    int storageOrdinal() const { return cast(int) jsonGetLong(raw, "storageOrdinal"); }
-    ref JobSearchResult storageOrdinal(int value) return
-    {
-        jsonSet(raw, "storageOrdinal", JSONValue(value));
         return this;
     }
 
@@ -26638,15 +26393,6 @@ struct ProcessInstanceResult
         return this;
     }
 
-    /// The storage ordinal this process instance's data belongs to. This is `null` for data exported before storage ordinals were introduced in version 8.11.
-    bool has_storageOrdinal() const { return jsonHas(raw, "storageOrdinal"); }
-    int storageOrdinal() const { return cast(int) jsonGetLong(raw, "storageOrdinal"); }
-    ref ProcessInstanceResult storageOrdinal(int value) return
-    {
-        jsonSet(raw, "storageOrdinal", JSONValue(value));
-        return this;
-    }
-
 }
 /// The process instance filter that defines which process instances should be resumed.
 struct ProcessInstanceResumptionBatchOperationRequest
@@ -28406,35 +28152,6 @@ struct RoleUpdateResult
     }
 
 }
-/// Role user filter request
-struct RoleUserFilterRequest
-{
-    JSONValue raw;
-
-    static RoleUserFilterRequest fromJson(JSONValue value)
-    {
-        RoleUserFilterRequest m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static RoleUserFilterRequest initEmpty()
-    {
-        RoleUserFilterRequest m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// The username search filters.
-    bool has_username() const { return jsonHas(raw, "username"); }
-    StringFilterProperty username() const { return StringFilterProperty.fromJson(jsonGet(raw, "username")); }
-    ref RoleUserFilterRequest username(StringFilterProperty value) return
-    {
-        jsonSet(raw, "username", value.toJson());
-        return this;
-    }
-
-}
 /// `RoleUserResult`
 struct RoleUserResult
 {
@@ -28488,15 +28205,6 @@ struct RoleUserSearchQueryRequest
     ref RoleUserSearchQueryRequest page(SearchQueryPageRequest value) return
     {
         jsonSet(raw, "page", value.toJson());
-        return this;
-    }
-
-    /// The user filter criteria.
-    bool has_filter() const { return jsonHas(raw, "filter"); }
-    RoleUserFilterRequest filter() const { return RoleUserFilterRequest.fromJson(jsonGet(raw, "filter")); }
-    ref RoleUserSearchQueryRequest filter(RoleUserFilterRequest value) return
-    {
-        jsonSet(raw, "filter", value.toJson());
         return this;
     }
 
@@ -30139,7 +29847,7 @@ struct TenantSearchQuerySortRequest
         return m;
     }
 
-    /// The field to sort by. `key` is deprecated and should not be used anymore.
+    /// The field to sort by.
     bool has_field() const { return jsonHas(raw, "field"); }
     string field() const { return jsonGetString(raw, "field"); }
     ref TenantSearchQuerySortRequest field(string value) return
@@ -31400,15 +31108,6 @@ struct UserTaskFilter
         return this;
     }
 
-    /// Whether the user task is suspended because its owning process instance is suspended.
-    bool has_isSuspended() const { return jsonHas(raw, "isSuspended"); }
-    bool isSuspended() const { return jsonGetBool(raw, "isSuspended"); }
-    ref UserTaskFilter isSuspended(bool value) return
-    {
-        jsonSet(raw, "isSuspended", JSONValue(value));
-        return this;
-    }
-
     /// The assignee of the user task.
     bool has_assignee() const { return jsonHas(raw, "assignee"); }
     StringFilterProperty assignee() const { return StringFilterProperty.fromJson(jsonGet(raw, "assignee")); }
@@ -31626,15 +31325,6 @@ struct UserTaskFilterFields
         return this;
     }
 
-    /// Whether the user task is suspended because its owning process instance is suspended.
-    bool has_isSuspended() const { return jsonHas(raw, "isSuspended"); }
-    bool isSuspended() const { return jsonGetBool(raw, "isSuspended"); }
-    ref UserTaskFilterFields isSuspended(bool value) return
-    {
-        jsonSet(raw, "isSuspended", JSONValue(value));
-        return this;
-    }
-
     /// The assignee of the user task.
     bool has_assignee() const { return jsonHas(raw, "assignee"); }
     StringFilterProperty assignee() const { return StringFilterProperty.fromJson(jsonGet(raw, "assignee")); }
@@ -31811,259 +31501,6 @@ struct UserTaskFilterFields
     ref UserTaskFilterFields tags(Tag[] value) return
     {
         jsonSet(raw, "tags", jsonFromMapped(value, (Tag x) => x.toJson()));
-        return this;
-    }
-
-}
-/// `UserTaskLookupRequest`
-struct UserTaskLookupRequest
-{
-    JSONValue raw;
-
-    static UserTaskLookupRequest fromJson(JSONValue value)
-    {
-        UserTaskLookupRequest m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static UserTaskLookupRequest initEmpty()
-    {
-        UserTaskLookupRequest m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// The names of the variables to return. If absent or empty, all variables visible to the user task are returned. A name without a matching variable is left out of the response.
-    bool has_fetchVariables() const { return jsonHas(raw, "fetchVariables"); }
-    string[] fetchVariables() const { return jsonGetStringArray(raw, "fetchVariables"); }
-    ref UserTaskLookupRequest fetchVariables(string[] value) return
-    {
-        jsonSet(raw, "fetchVariables", JSONValue(value));
-        return this;
-    }
-
-}
-/// `UserTaskLookupResult`
-struct UserTaskLookupResult
-{
-    JSONValue raw;
-
-    static UserTaskLookupResult fromJson(JSONValue value)
-    {
-        UserTaskLookupResult m;
-        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
-        return m;
-    }
-    JSONValue toJson() const { return raw; }
-    static UserTaskLookupResult initEmpty()
-    {
-        UserTaskLookupResult m;
-        m.raw = emptyObject();
-        return m;
-    }
-
-    /// The key of the user task.
-    bool has_userTaskKey() const { return jsonHas(raw, "userTaskKey"); }
-    UserTaskKey userTaskKey() const { return UserTaskKey.fromJson(jsonGet(raw, "userTaskKey")); }
-    ref UserTaskLookupResult userTaskKey(UserTaskKey value) return
-    {
-        jsonSet(raw, "userTaskKey", value.toJson());
-        return this;
-    }
-
-    bool has_state() const { return jsonHas(raw, "state"); }
-    UserTaskLookupStateEnum state() const { return parseUserTaskLookupStateEnum(jsonGetString(raw, "state")); }
-    ref UserTaskLookupResult state(UserTaskLookupStateEnum value) return
-    {
-        jsonSet(raw, "state", JSONValue(cast(string) value));
-        return this;
-    }
-
-    /// The element ID of the user task.
-    bool has_elementId() const { return jsonHas(raw, "elementId"); }
-    ElementId elementId() const { return ElementId.fromJson(jsonGet(raw, "elementId")); }
-    ref UserTaskLookupResult elementId(ElementId value) return
-    {
-        jsonSet(raw, "elementId", value.toJson());
-        return this;
-    }
-
-    /// The key of the element instance.
-    bool has_elementInstanceKey() const { return jsonHas(raw, "elementInstanceKey"); }
-    ElementInstanceKey elementInstanceKey() const { return ElementInstanceKey.fromJson(jsonGet(raw, "elementInstanceKey")); }
-    ref UserTaskLookupResult elementInstanceKey(ElementInstanceKey value) return
-    {
-        jsonSet(raw, "elementInstanceKey", value.toJson());
-        return this;
-    }
-
-    /// The key of the process instance.
-    bool has_processInstanceKey() const { return jsonHas(raw, "processInstanceKey"); }
-    ProcessInstanceKey processInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "processInstanceKey")); }
-    ref UserTaskLookupResult processInstanceKey(ProcessInstanceKey value) return
-    {
-        jsonSet(raw, "processInstanceKey", value.toJson());
-        return this;
-    }
-
-    /// The key of the root process instance. The root process instance is the top-level ancestor in the process instance hierarchy. This field is only present for data belonging to process instance hierarchies created in version 8.9 or later.
-    bool has_rootProcessInstanceKey() const { return jsonHas(raw, "rootProcessInstanceKey"); }
-    ProcessInstanceKey rootProcessInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "rootProcessInstanceKey")); }
-    ref UserTaskLookupResult rootProcessInstanceKey(ProcessInstanceKey value) return
-    {
-        jsonSet(raw, "rootProcessInstanceKey", value.toJson());
-        return this;
-    }
-
-    /// The ID of the process definition.
-    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
-    ProcessDefinitionId processDefinitionId() const { return ProcessDefinitionId.fromJson(jsonGet(raw, "processDefinitionId")); }
-    ref UserTaskLookupResult processDefinitionId(ProcessDefinitionId value) return
-    {
-        jsonSet(raw, "processDefinitionId", value.toJson());
-        return this;
-    }
-
-    /// The key of the process definition.
-    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
-    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
-    ref UserTaskLookupResult processDefinitionKey(ProcessDefinitionKey value) return
-    {
-        jsonSet(raw, "processDefinitionKey", value.toJson());
-        return this;
-    }
-
-    /// The version of the process definition.
-    bool has_processDefinitionVersion() const { return jsonHas(raw, "processDefinitionVersion"); }
-    int processDefinitionVersion() const { return cast(int) jsonGetLong(raw, "processDefinitionVersion"); }
-    ref UserTaskLookupResult processDefinitionVersion(int value) return
-    {
-        jsonSet(raw, "processDefinitionVersion", JSONValue(value));
-        return this;
-    }
-
-    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
-    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
-    ref UserTaskLookupResult tenantId(TenantId value) return
-    {
-        jsonSet(raw, "tenantId", value.toJson());
-        return this;
-    }
-
-    /// The assignee of the user task. While the task is in the `CREATING` state, the assignee from the process model is not set yet.
-    bool has_assignee() const { return jsonHas(raw, "assignee"); }
-    string assignee() const { return jsonGetString(raw, "assignee"); }
-    ref UserTaskLookupResult assignee(string value) return
-    {
-        jsonSet(raw, "assignee", JSONValue(value));
-        return this;
-    }
-
-    /// The candidate groups for this user task.
-    bool has_candidateGroups() const { return jsonHas(raw, "candidateGroups"); }
-    string[] candidateGroups() const { return jsonGetStringArray(raw, "candidateGroups"); }
-    ref UserTaskLookupResult candidateGroups(string[] value) return
-    {
-        jsonSet(raw, "candidateGroups", JSONValue(value));
-        return this;
-    }
-
-    /// The candidate users for this user task.
-    bool has_candidateUsers() const { return jsonHas(raw, "candidateUsers"); }
-    string[] candidateUsers() const { return jsonGetStringArray(raw, "candidateUsers"); }
-    ref UserTaskLookupResult candidateUsers(string[] value) return
-    {
-        jsonSet(raw, "candidateUsers", JSONValue(value));
-        return this;
-    }
-
-    /// The due date of the user task.
-    bool has_dueDate() const { return jsonHas(raw, "dueDate"); }
-    string dueDate() const { return jsonGetString(raw, "dueDate"); }
-    ref UserTaskLookupResult dueDate(string value) return
-    {
-        jsonSet(raw, "dueDate", JSONValue(value));
-        return this;
-    }
-
-    /// The follow-up date of the user task.
-    bool has_followUpDate() const { return jsonHas(raw, "followUpDate"); }
-    string followUpDate() const { return jsonGetString(raw, "followUpDate"); }
-    ref UserTaskLookupResult followUpDate(string value) return
-    {
-        jsonSet(raw, "followUpDate", JSONValue(value));
-        return this;
-    }
-
-    /// The key of the form.
-    bool has_formKey() const { return jsonHas(raw, "formKey"); }
-    FormKey formKey() const { return FormKey.fromJson(jsonGet(raw, "formKey")); }
-    ref UserTaskLookupResult formKey(FormKey value) return
-    {
-        jsonSet(raw, "formKey", value.toJson());
-        return this;
-    }
-
-    /// The external form reference.
-    bool has_externalFormReference() const { return jsonHas(raw, "externalFormReference"); }
-    string externalFormReference() const { return jsonGetString(raw, "externalFormReference"); }
-    ref UserTaskLookupResult externalFormReference(string value) return
-    {
-        jsonSet(raw, "externalFormReference", JSONValue(value));
-        return this;
-    }
-
-    /// Custom headers for the user task.
-    bool has_customHeaders() const { return jsonHas(raw, "customHeaders"); }
-    JSONValue customHeaders() const { return jsonGet(raw, "customHeaders"); }
-    ref UserTaskLookupResult customHeaders(JSONValue value) return
-    {
-        jsonSet(raw, "customHeaders", JSONValue(value));
-        return this;
-    }
-
-    /// The priority of the user task. The higher the value the higher the priority.
-    bool has_priority() const { return jsonHas(raw, "priority"); }
-    int priority() const { return cast(int) jsonGetLong(raw, "priority"); }
-    ref UserTaskLookupResult priority(int value) return
-    {
-        jsonSet(raw, "priority", JSONValue(value));
-        return this;
-    }
-
-    bool has_tags() const { return jsonHas(raw, "tags"); }
-    Tag[] tags() const { return jsonMapArray(raw, "tags", (JSONValue v) => Tag.fromJson(v)); }
-    ref UserTaskLookupResult tags(Tag[] value) return
-    {
-        jsonSet(raw, "tags", jsonFromMapped(value, (Tag x) => x.toJson()));
-        return this;
-    }
-
-    /// The business ID of the owning process instance, inherited when the user task was created. This is `null` for user tasks whose owning process instance has no business ID.
-    bool has_businessId() const { return jsonHas(raw, "businessId"); }
-    BusinessId businessId() const { return BusinessId.fromJson(jsonGet(raw, "businessId")); }
-    ref UserTaskLookupResult businessId(BusinessId value) return
-    {
-        jsonSet(raw, "businessId", value.toJson());
-        return this;
-    }
-
-    /// The creation date of the user task.
-    bool has_creationDate() const { return jsonHas(raw, "creationDate"); }
-    string creationDate() const { return jsonGetString(raw, "creationDate"); }
-    ref UserTaskLookupResult creationDate(string value) return
-    {
-        jsonSet(raw, "creationDate", JSONValue(value));
-        return this;
-    }
-
-    /// The variables visible to the user task, as a JSON object of name and value. If a name exists in several scopes, the value of the innermost scope is returned. Values are never truncated.
-    bool has_variables() const { return jsonHas(raw, "variables"); }
-    JSONValue variables() const { return jsonGet(raw, "variables"); }
-    ref UserTaskLookupResult variables(JSONValue value) return
-    {
-        jsonSet(raw, "variables", JSONValue(value));
         return this;
     }
 
@@ -32336,15 +31773,6 @@ struct UserTaskResult
     ref UserTaskResult priority(int value) return
     {
         jsonSet(raw, "priority", JSONValue(value));
-        return this;
-    }
-
-    /// Whether the user task is suspended because its owning process instance is suspended.
-    bool has_isSuspended() const { return jsonHas(raw, "isSuspended"); }
-    bool isSuspended() const { return jsonGetBool(raw, "isSuspended"); }
-    ref UserTaskResult isSuspended(bool value) return
-    {
-        jsonSet(raw, "isSuspended", JSONValue(value));
         return this;
     }
 
