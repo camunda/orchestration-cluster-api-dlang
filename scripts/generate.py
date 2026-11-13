@@ -869,6 +869,43 @@ def op_server_arg(spec: Spec, op: dict) -> str:
     sys.exit(f"unsupported server path {own!r} for {op.get('operationId')} (top-level {top!r})")
 
 
+def _tenant_kind(spec: Spec, schema: dict, depth: int = 0) -> str | None:
+    """"opt" / "req" for a body schema with a tenantId property, else None.
+    oneOf/anyOf is "opt" only when every variant has an optional tenantId."""
+    comps = (spec.spec.get("components") or {}).get("schemas") or {}
+    while isinstance(schema, dict) and "$ref" in schema and depth < 32:
+        ref = schema["$ref"]
+        if not ref.startswith("#/components/schemas/"):
+            return None
+        schema = comps.get(ref.rsplit("/", 1)[-1]) or {}
+        depth += 1
+    if not isinstance(schema, dict):
+        return None
+    variants = schema.get("oneOf") or schema.get("anyOf")
+    if variants:
+        kinds = [_tenant_kind(spec, v, depth + 1) for v in variants]
+        return "opt" if all(k == "opt" for k in kinds) else None
+    props, required = {}, set(schema.get("required") or [])
+    for part in schema.get("allOf") or []:
+        while isinstance(part, dict) and "$ref" in part:
+            part = comps.get(part["$ref"].rsplit("/", 1)[-1]) or {}
+        props.update(part.get("properties") or {})
+        required |= set(part.get("required") or [])
+    props.update(schema.get("properties") or {})
+    if "tenantId" not in props:
+        return None
+    return "req" if "tenantId" in required else "opt"
+
+
+def injects_default_tenant(spec: Spec, op: dict) -> bool:
+    """JSON request body with an optional tenantId: the configured default
+    tenant is filled in when the caller leaves it unset (#8)."""
+    item = (spec.spec.get("paths") or {}).get(op.get("path")) or {}
+    operation = item.get((op.get("method") or "get").lower()) or {}
+    content = ((operation.get("requestBody") or {}).get("content") or {}).get("application/json")
+    return bool(content) and _tenant_kind(spec, content.get("schema") or {}) == "opt"
+
+
 def render_operation(spec: Spec, op: dict) -> str:
     op_id = op["operationId"]
     method = (op.get("method") or "get").upper()
@@ -970,6 +1007,8 @@ def render_operation(spec: Spec, op: dict) -> str:
         query_e = "null"
 
     body_e = body_arg if body_arg else "JSONValue.init"
+    if body_arg and injects_default_tenant(spec, op):
+        body_e = f"this.withDefaultTenant({body_e})"
     server_e = op_server_arg(spec, op)
 
     if rkind == "void":
