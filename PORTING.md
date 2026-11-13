@@ -6,7 +6,7 @@ architecture matches the Rust / PHP siblings: a **generated** client from the
 bundled OpenAPI spec, wrapped by a **hand-written** runtime.
 
 ```sh
-make generate   # regenerate source/camunda/generated/ from external-spec/bundled/
+make generate   # bundle the spec from camunda/camunda, regenerate source/camunda/generated/
 make test       # dub test
 make check      # test + D-Scanner + examples
 ```
@@ -25,8 +25,8 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 | 04 | `source/camunda/generated/operations.d` | `GeneratedOperations` mixin: 244 REST operations |
 | 05 | `source/camunda/generated/package.d` | Re-exports + `generatedSpecHash` / `generatedOperationCount` |
 
-To pick up a newer spec, copy `external-spec/bundled/` from the JS SDK and run
-`make generate`. Change the generator, not the emitted files.
+`make generate` fetches and bundles the spec with `camunda-schema-bundler`
+(same as the JS SDK; `SPEC_REF` selects the camunda/camunda ref). Change the generator, not the emitted files.
 
 ## What is hand-written
 
@@ -46,8 +46,6 @@ To pick up a newer spec, copy `external-spec/bundled/` from the JS SDK and run
 
 ## Known gaps versus the JS SDK
 
-- **Spec fetch/bundle.** The bundled spec is copied from the JS SDK. There is
-  no `camunda-schema-bundler` step here yet.
 - **Engine clock.** `Clock` is injectable; `EngineClock` (pin the broker clock)
   is not ported.
 - **Falcon / command stream.** The Rust SDK's nanobpmn upgrade is not ported.

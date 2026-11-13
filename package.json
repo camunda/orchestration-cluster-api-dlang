@@ -1,6 +1,8 @@
 {
   "private": true,
   "scripts": {
+    "bundle:spec": "camunda-schema-bundler --ref ${SPEC_REF:-main} --output-spec external-spec/bundled/rest-api.bundle.json --output-metadata external-spec/bundled/spec-metadata.json",
+    "bundle:spec:local": "camunda-schema-bundler --spec-dir external-spec/upstream/zeebe/gateway-protocol/src/main/proto/v2 --output-spec external-spec/bundled/rest-api.bundle.json --output-metadata external-spec/bundled/spec-metadata.json",
     "release": "semantic-release"
   },
   "devDependencies": {
@@ -8,6 +10,7 @@
     "@semantic-release/changelog": "6.0.3",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "10.0.1",
+    "camunda-schema-bundler": "2.4.5",
     "semantic-release": "25.0.9"
   }
 }

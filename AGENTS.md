@@ -36,13 +36,14 @@ around them here:
 | `scripts/sync-readme-snippets.py` | Injects `examples/*.d` region snippets into `README.md`. `--check` is the CI gate. |
 | `docs/` | **Generated.** `api-reference.md` and `semantic-types.md`. Never hand-edit. |
 | `scripts/check-safe.sh` | `@safe` / `@trusted` / isolation ratchet. Runs as a dub `preBuildCommands` hook. |
-| `external-spec/bundled/` | Bundled OpenAPI spec + `spec-metadata.json`. Generator inputs. |
+| `external-spec/bundled/` | Bundled OpenAPI spec + `spec-metadata.json`, written by `npm run bundle:spec`. Committed generator inputs. |
 | `examples/` | Compilable usage examples. `examples/readme.d` hosts region-tagged snippets for the README. |
 
 ## Generation pipeline
 
 ```bash
-make generate    # regenerate source/camunda/generated/ and docs/ from the bundled spec
+make generate        # npm run bundle:spec (camunda/camunda @ SPEC_REF, default main) + generate
+make generate-local  # regenerate from the committed external-spec/bundled/ (CI drift gate)
 ```
 
 `scripts/generate.py` reads `external-spec/bundled/rest-api.bundle.json` and
@@ -56,8 +57,10 @@ make generate    # regenerate source/camunda/generated/ and docs/ from the bundl
 6. `docs/api-reference.md` and `docs/semantic-types.md`.
 7. `examples/<tag>.d` + `examples/operation-map.json` — one compilable region per REST operation.
 
-To pick up a newer spec, copy the JS SDK's `external-spec/bundled/` files in and
-re-run `make generate`. Do **not** hand-edit `source/camunda/generated/`, `docs/`,
+The spec is fetched from camunda/camunda and bundled by `camunda-schema-bundler`
+(`npm run bundle:spec`), exactly as in the JS SDK. The default ref lives in
+`package.json`: `main` on `main`, `stable/8.N` on `stable/N`. `publish.yml`
+re-bundles on every release and commits drift as `fix(gen): regenerate artifacts`. Do **not** hand-edit `source/camunda/generated/`, `docs/`,
 or the generated example files.
 
 README snippets are injected from `examples/readme.d` by `make sync-readme`.

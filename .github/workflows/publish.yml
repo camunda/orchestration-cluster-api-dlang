@@ -96,6 +96,49 @@ jobs:
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
+      # Same model as the JS SDK: each release re-bundles the spec from
+      # camunda/camunda (SPEC_REF default in package.json: main on main,
+      # stable/8.N on stable/N), regenerates, and commits any drift as
+      # `fix(gen): regenerate artifacts` so upstream API changes ship.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-1.43.0
+
+      - name: Linux build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libcurl4-openssl-dev zlib1g-dev
+
+      - name: Bundle spec from upstream and regenerate
+        run: |
+          npm run bundle:spec
+          python3 scripts/generate.py
+
+      - name: Detect generated drift
+        id: drift
+        run: |
+          if git diff --quiet -- external-spec/bundled source/camunda/generated docs examples; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- external-spec/bundled source/camunda/generated docs examples
+          fi
+
+      - name: Gate regenerated code
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          dub test
+          dub test :runtime
+          make examples example-coverage sync-readme-check config-reference-check
+
+      - name: Commit generated artifacts
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          git add external-spec/bundled source/camunda/generated docs examples
+          git commit -m "fix(gen): regenerate artifacts"
+
       - name: Publish (semantic-release)
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

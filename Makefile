@@ -1,11 +1,13 @@
-.PHONY: help generate test lint fmt-check check build examples \
+.PHONY: help generate generate-local bundle-spec test lint fmt-check check build examples \
 	sync-readme sync-readme-check config-reference config-reference-check \
 	example-coverage docs-md
 
 help:
 	@echo "Camunda Orchestration Cluster API — D SDK"
 	@echo ""
-	@echo "  make generate                 Regenerate client, docs/, examples/<tag>.d, operation-map"
+	@echo "  make generate                 Fetch + bundle the spec from camunda/camunda (SPEC_REF, default main), then generate"
+	@echo "  make generate-local           Regenerate from the committed bundle (what CI checks)"
+	@echo "  make bundle-spec              Fetch + bundle only (npm run bundle:spec)"
 	@echo "  make test                     dub test (unit tests, @safe gate)"
 	@echo "  make lint                     D-Scanner + check-safe.sh"
 	@echo "  make build                    dub build -b release"
@@ -18,7 +20,12 @@ help:
 	@echo "  make docs-md                  Generate docs-md/d-sdk/ for camunda-docs"
 	@echo "  make check                    Full local CI gate"
 
-generate:
+bundle-spec:
+	npm run bundle:spec
+
+generate: bundle-spec generate-local
+
+generate-local:
 	python3 scripts/generate.py
 
 test:
@@ -61,5 +68,5 @@ docs-md:
 check: test lint examples sync-readme-check config-reference-check example-coverage
 	python3 scripts/generate.py
 	@git diff --exit-code -- source/camunda/generated docs examples || \
-		(echo "generated sources/docs/examples drifted; commit the output of make generate" && exit 1)
+		(echo "generated sources/docs/examples drifted; commit the output of make generate-local" && exit 1)
 	python3 scripts/generate-docusaurus-md.py --validate-links

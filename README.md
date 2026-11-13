@@ -260,12 +260,21 @@ Generated from the bundled spec (do not edit by hand):
 
 ## Regenerating the client
 
+The spec comes from [camunda/camunda](https://github.com/camunda/camunda)
+(`zeebe/gateway-protocol/src/main/proto/v2`), fetched and bundled by
+[camunda-schema-bundler](https://www.npmjs.com/package/camunda-schema-bundler),
+the same tool and pipeline as the JS SDK:
+
 ```sh
-# After copying a newer bundled spec into external-spec/bundled/:
-make generate
+npm install
+make generate                         # bundle from camunda/camunda main, then generate
+SPEC_REF=<branch|tag|sha> make generate
+make generate-local                   # regenerate from the committed bundle only
 make test
 ```
 
+`main` tracks camunda/camunda `main`; `stable/N` tracks `stable/8.N`. Each
+release re-bundles and commits any drift as `fix(gen): regenerate artifacts`.
 `source/camunda/generated/` is never hand-edited.
 
 ## License
