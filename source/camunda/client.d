@@ -78,6 +78,21 @@ final class CamundaClient
         return createDeploymentMultipart(paths, tenant);
     }
 
+    /// `body_` with the configured default tenant (`CAMUNDA_DEFAULT_TENANT_ID`)
+    /// as `tenantId`, unless it is already set. Applied by the generated
+    /// operations whose request has an optional `tenantId`.
+    JSONValue withDefaultTenant(JSONValue body_)
+    {
+        const tenant = config.defaultTenantId;
+        if (!tenant.length || body_.type != JSONType.object) return body_;
+        if (auto t = "tenantId" in body_.objectNoRef)
+            if (t.type != JSONType.null_) return body_;
+        JSONValue copy = emptyObject();
+        foreach (k, v; body_.objectNoRef) copy[k] = v;
+        copy["tenantId"] = tenant;
+        return copy;
+    }
+
     /// A file to upload with `createDocuments` (bytes already in memory).
     static struct DocumentUpload
     {
@@ -245,4 +260,19 @@ unittest
     assert(threw);
     auto loose = JobKey.assumeExists("anything");
     assert(loose.value == "anything");
+}
+
+unittest
+{
+    // #8: the default tenant fills an unset tenantId, never overrides one.
+    auto c = CamundaClient.create(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_DEFAULT_TENANT_ID", "t1"));
+    JSONValue b = parseJSON(`{"name":"m"}`);
+    assert(c.withDefaultTenant(b)["tenantId"].str == "t1");
+    assert("tenantId" !in b.objectNoRef); // caller's value untouched
+    assert(c.withDefaultTenant(parseJSON(`{"tenantId":"mine"}`))["tenantId"].str == "mine");
+    assert(c.withDefaultTenant(parseJSON(`{"tenantId":null}`))["tenantId"].str == "t1");
+    auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    assert("tenantId" !in none.withDefaultTenant(parseJSON(`{"a":1}`)).objectNoRef);
 }
