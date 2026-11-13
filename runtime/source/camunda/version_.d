@@ -4,7 +4,7 @@ module camunda.version_;
 @safe:
 
 /// SemVer of this SDK (`dub.json` `version`, git tag `v` + this string).
-enum sdkVersion = "0.0.0-dev";
+enum sdkVersion = "11.0.0-alpha.1";
 
 /// `User-Agent` product token.
 enum sdkUserAgent = "camunda-orchestration-sdk-d/" ~ sdkVersion;
