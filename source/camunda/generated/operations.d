@@ -513,33 +513,25 @@ mixin template GeneratedOperations()
         return this.requestText("GET", path_, JSONValue.init, null);
     }
 
-    /// Deploy resources (`POST /deployments`).
+    /// Deploy resources (`POST /deployments`). Multipart: use `deployResources`.
+    deprecated("createDeployment is multipart/form-data: use CamundaClient.deployResources(...)")
     DeploymentResult createDeploymentOp(JSONValue body_ = JSONValue.init)
     {
-        const path_ = "/deployments";
-        auto payload = this.requestJson("POST", path_, body_, null);
-        return DeploymentResult.fromJson(payload);
+        throw new ConfigException("createDeployment is multipart/form-data: use CamundaClient.deployResources(...)");
     }
 
-    /// Upload document (`POST /documents`).
+    /// Upload document (`POST /documents`). Multipart: use `createDocument`.
+    deprecated("createDocument is multipart/form-data: use CamundaClient.createDocument(...)")
     DocumentReference createDocumentOp(JSONValue body_ = JSONValue.init, string storeId = null, string documentId = null)
     {
-        const path_ = "/documents";
-        string[string] query;
-        if (storeId !is null) query["storeId"] = storeId;
-        if (documentId !is null) query["documentId"] = documentId;
-        auto payload = this.requestJson("POST", path_, body_, query);
-        return DocumentReference.fromJson(payload);
+        throw new ConfigException("createDocument is multipart/form-data: use CamundaClient.createDocument(...)");
     }
 
-    /// Upload multiple documents (`POST /documents/batch`).
+    /// Upload multiple documents (`POST /documents/batch`). Multipart: use `createDocuments`.
+    deprecated("createDocuments is multipart/form-data: use CamundaClient.createDocuments(...)")
     DocumentCreationBatchResponse createDocumentsOp(JSONValue body_ = JSONValue.init, string storeId = null)
     {
-        const path_ = "/documents/batch";
-        string[string] query;
-        if (storeId !is null) query["storeId"] = storeId;
-        auto payload = this.requestJson("POST", path_, body_, query);
-        return DocumentCreationBatchResponse.fromJson(payload);
+        throw new ConfigException("createDocuments is multipart/form-data: use CamundaClient.createDocuments(...)");
     }
 
     /// Download document (`GET /documents/{documentId}`).
