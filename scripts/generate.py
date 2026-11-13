@@ -824,6 +824,30 @@ def op_success_schema(spec: Spec, op: dict) -> tuple[str | None, str]:
     return "JSONValue", "json"
 
 
+def _server_path(servers: list | None) -> str | None:
+    """Path part of the first server URL (`{schema}://{host}:{port}/v2` -> `/v2`)."""
+    if not servers:
+        return None
+    url = servers[0].get("url") or ""
+    rest = url.split("://", 1)[-1]
+    i = rest.find("/")
+    return "" if i < 0 else rest[i:].rstrip("/")
+
+
+def op_server_arg(spec: Spec, op: dict) -> str:
+    """`, ServerBase.root` when the operation (or its path) declares the bare-root
+    server instead of the top-level `/v2` one (cluster-admin ops, #6)."""
+    item = (spec.spec.get("paths") or {}).get(op.get("path")) or {}
+    operation = item.get((op.get("method") or "get").lower()) or {}
+    own = _server_path(operation.get("servers") or item.get("servers"))
+    top = _server_path(spec.spec.get("servers")) or ""
+    if own is None or own == top:
+        return ""
+    if own == "":
+        return ", ServerBase.root"
+    sys.exit(f"unsupported server path {own!r} for {op.get('operationId')} (top-level {top!r})")
+
+
 def render_operation(spec: Spec, op: dict) -> str:
     op_id = op["operationId"]
     method = (op.get("method") or "get").upper()
@@ -911,16 +935,17 @@ def render_operation(spec: Spec, op: dict) -> str:
         query_e = "null"
 
     body_e = body_arg if body_arg else "JSONValue.init"
+    server_e = op_server_arg(spec, op)
 
     if rkind == "void":
-        lines.append(f"        this.requestVoid({d_string(method)}, path_, {body_e}, {query_e});")
+        lines.append(f"        this.requestVoid({d_string(method)}, path_, {body_e}, {query_e}{server_e});")
     elif rkind == "bytes":
-        lines.append(f"        return this.requestBytes({d_string(method)}, path_, {body_e}, {query_e});")
+        lines.append(f"        return this.requestBytes({d_string(method)}, path_, {body_e}, {query_e}{server_e});")
     elif rkind == "text":
-        lines.append(f"        return this.requestText({d_string(method)}, path_, {body_e}, {query_e});")
+        lines.append(f"        return this.requestText({d_string(method)}, path_, {body_e}, {query_e}{server_e});")
     elif rkind == "array":
         inner = (ret or "JSONValue[]")[:-2]
-        lines.append(f"        auto payload = this.requestJson({d_string(method)}, path_, {body_e}, {query_e});")
+        lines.append(f"        auto payload = this.requestJson({d_string(method)}, path_, {body_e}, {query_e}{server_e});")
         if inner == "JSONValue":
             lines.append("        return jsonAsArray(payload);")
         elif inner == "string":
@@ -929,7 +954,7 @@ def render_operation(spec: Spec, op: dict) -> str:
             lines.append(f"        return jsonMapValues(payload, (JSONValue v) => {inner}.fromJson(v));")
     else:
         # json object / key / enum / JSONValue
-        lines.append(f"        auto payload = this.requestJson({d_string(method)}, path_, {body_e}, {query_e});")
+        lines.append(f"        auto payload = this.requestJson({d_string(method)}, path_, {body_e}, {query_e}{server_e});")
         if ret == "JSONValue":
             lines.append("        return payload;")
         else:
