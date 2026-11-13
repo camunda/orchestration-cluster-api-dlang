@@ -118,6 +118,11 @@ for review-comment fix-ups and regeneration commits.
 `source/camunda/version_.d`, tags `vX.Y.Z`, opens a GitHub Release, and pings
 code.dlang.org when `DUB_REGISTRY_TOKEN` is set.
 
+Release identity fails open: with Vault secrets (`VAULT_ADDR`, …) it pushes as
+the `camunda-sdk-automation` app, which can bypass branch rulesets; without
+them, or if Vault/the app token fails, it uses `GITHUB_TOKEN` and warns in the
+run summary. Adding rulesets to `main`/`stable/*` requires the Vault secrets.
+
 Set repo variable `CAMUNDA_SDK_CURRENT_STABLE_MAJOR` (same as the other SDKs)
 so `stable/<that>` is the `latest` channel. First registry listing is a
 one-time register of this GitHub repo on https://code.dlang.org.
