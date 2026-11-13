@@ -104,24 +104,28 @@ final class CamundaClient
 
     // --- transport used by the generated facade --------------------------------
 
-    JSONValue requestJson(string method, string path, JSONValue body_, string[string] query)
+    JSONValue requestJson(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        return _t.requestJson(method, path, body_, query);
+        return _t.requestJson(method, path, body_, query, server);
     }
 
-    void requestVoid(string method, string path, JSONValue body_, string[string] query)
+    void requestVoid(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        _t.requestVoid(method, path, body_, query);
+        _t.requestVoid(method, path, body_, query, server);
     }
 
-    string requestText(string method, string path, JSONValue body_, string[string] query)
+    string requestText(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        return _t.requestText(method, path, body_, query);
+        return _t.requestText(method, path, body_, query, server);
     }
 
-    immutable(ubyte)[] requestBytes(string method, string path, JSONValue body_, string[string] query)
+    immutable(ubyte)[] requestBytes(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        return _t.requestBytes(method, path, body_, query);
+        return _t.requestBytes(method, path, body_, query, server);
     }
 
     private DeploymentResult createDeploymentMultipart(string[] paths, string tenantId)

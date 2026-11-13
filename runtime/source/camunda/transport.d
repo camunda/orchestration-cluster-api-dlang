@@ -44,6 +44,33 @@ struct CamundaOptions
 }
 
 /// Generic, spec-agnostic Camunda REST transport.
+
+/// Which spec server an operation is resolved against. Most operations use the
+/// top-level `{schema}://{host}:{port}/v2`; cluster-admin operations
+/// (`/cluster/v2/...`) declare the bare root `{schema}://{host}:{port}`.
+/// (camunda/orchestration-cluster-api-dlang#6)
+enum ServerBase
+{
+    api,
+    root,
+}
+
+/// `restAddress` without its trailing `/v2` (and slashes): the bare-root server.
+string rootAddress(string restAddress) pure
+{
+    auto a = restAddress;
+    while (a.length && a[$ - 1] == '/') a = a[0 .. $ - 1];
+    if (a.length >= 3 && a[$ - 3 .. $] == "/v2") a = a[0 .. $ - 3];
+    return a;
+}
+
+unittest
+{
+    assert(rootAddress("http://localhost:8080/v2") == "http://localhost:8080");
+    assert(rootAddress("https://z.example/v2/") == "https://z.example");
+    assert(rootAddress("https://gw.example/base") == "https://gw.example/base");
+}
+
 final class Transport
 {
     private CamundaConfig _config;
@@ -83,33 +110,38 @@ final class Transport
     void userAgent(string ua) { _userAgent = ua; }
     string userAgent() const { return _userAgent; }
 
-    JSONValue requestJson(string method, string path, JSONValue body_, string[string] query)
+    JSONValue requestJson(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        auto res = guardedRequest(method, path, body_, query);
+        auto res = guardedRequest(method, path, body_, query, server);
         if (!res.body_.length) return emptyObject();
         try return parseJSON(res.body_);
         catch (Exception e)
             throw new SerializationException("failed to parse JSON response: " ~ e.msg, __FILE__, __LINE__, e);
     }
 
-    void requestVoid(string method, string path, JSONValue body_, string[string] query)
+    void requestVoid(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        guardedRequest(method, path, body_, query);
+        guardedRequest(method, path, body_, query, server);
     }
 
-    string requestText(string method, string path, JSONValue body_, string[string] query)
+    string requestText(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        return guardedRequest(method, path, body_, query).body_;
+        return guardedRequest(method, path, body_, query, server).body_;
     }
 
-    immutable(ubyte)[] requestBytes(string method, string path, JSONValue body_, string[string] query)
+    immutable(ubyte)[] requestBytes(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server = ServerBase.api)
     {
-        return guardedRequest(method, path, body_, query).bytes;
+        return guardedRequest(method, path, body_, query, server).bytes;
     }
 
     /// Send a pre-built raw body (e.g. multipart/form-data) with auth,
     /// retry and backpressure. Returns the 2xx response.
-    HttpResponse requestRaw(string method, string path, string contentType, const(ubyte)[] rawBody)
+    HttpResponse requestRaw(string method, string path, string contentType, const(ubyte)[] rawBody,
+        ServerBase server = ServerBase.api)
     {
         _bp.acquire();
         scope (exit) _bp.release();
@@ -117,7 +149,7 @@ final class Transport
         try
         {
             res = withRetry!HttpResponse(_config.retry, _clock, {
-                HttpRequest req = baseRequest(method, path, null);
+                HttpRequest req = baseRequest(method, path, null, server);
                 req.contentType = contentType;
                 req.rawBody = rawBody.dup;
                 return send(req);
@@ -132,7 +164,8 @@ final class Transport
         return res;
     }
 
-    private HttpResponse guardedRequest(string method, string path, JSONValue body_, string[string] query)
+    private HttpResponse guardedRequest(string method, string path, JSONValue body_, string[string] query,
+        ServerBase server)
     {
         _bp.acquire();
         scope (exit) _bp.release();
@@ -140,7 +173,7 @@ final class Transport
         try
         {
             res = withRetry!HttpResponse(_config.retry, _clock, {
-                HttpRequest req = baseRequest(method, path, query);
+                HttpRequest req = baseRequest(method, path, query, server);
                 if (shouldSendJsonBody(method, body_))
                 {
                     req.body_ = body_.toString;
@@ -158,11 +191,18 @@ final class Transport
         return res;
     }
 
-    private HttpRequest baseRequest(string method, string path, string[string] query)
+    /// Base URL for `server`: the configured REST address (`…/v2`), or its
+    /// root for operations whose spec declares the bare-root server.
+    string baseAddress(ServerBase server = ServerBase.api) const
+    {
+        return server == ServerBase.root ? rootAddress(_config.restAddress) : _config.restAddress;
+    }
+
+    private HttpRequest baseRequest(string method, string path, string[string] query, ServerBase server)
     {
         HttpRequest req;
         req.method = method;
-        req.url = joinUrl(_config.restAddress, path, query);
+        req.url = joinUrl(baseAddress(server), path, query);
         req.headers = _auth.headers();
         req.headers["Accept"] = "application/json, */*";
         req.headers["User-Agent"] = _userAgent;
@@ -210,4 +250,14 @@ unittest
     assert(t.userAgent.length > "camunda-orchestration-sdk-d/".length);
     t.userAgent = "d8ctl/1";
     assert(t.userAgent == "d8ctl/1");
+}
+
+unittest
+{
+    // Cluster-admin operations resolve against the bare root (#6).
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_REST_ADDRESS", "http://localhost:8080")
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    assert(joinUrl(t.baseAddress(ServerBase.root), "/cluster/v2/status") == "http://localhost:8080/cluster/v2/status");
+    assert(joinUrl(t.baseAddress(), "/topology") == "http://localhost:8080/v2/topology");
 }
