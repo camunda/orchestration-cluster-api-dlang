@@ -52,20 +52,21 @@ Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orche
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk": "~>11.0.0-alpha"
+    "camunda-orchestration-sdk": "~>10.0"
   }
 }
 ```
 
-`main` publishes **11.x alpha** prereleases (Camunda 8.11). `stable/N` publishes
-`N.x` on the release channel. Until the first tag exists, vendor the repo:
+This is the `stable/10` line: **10.x** releases for Camunda 8.10, generated from
+camunda/camunda `stable/8.10`. `main` publishes 11.0.0 alphas for 8.11.
+To vendor the repo instead:
 
 ```json
 {
   "dependencies": {
     "camunda-orchestration-sdk": {
       "repository": "git+https://github.com/camunda/orchestration-cluster-api-dlang.git",
-      "version": "~main"
+      "version": "~stable/10"
     }
   }
 }
@@ -81,7 +82,7 @@ backpressure and TLS as the full SDK, without compiling the generated models.
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk:runtime": "~>11.0.0-alpha"
+    "camunda-orchestration-sdk:runtime": "~>10.0"
   }
 }
 ```
