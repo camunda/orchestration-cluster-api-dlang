@@ -834,7 +834,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthenticatedCamundaUserResult/allOf/0"
+                  "$ref": "#/components/schemas/CamundaUserResult"
                 }
               }
             }

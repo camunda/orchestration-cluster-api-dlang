@@ -3539,7 +3539,7 @@
       "optionalTenantIdInBody": false,
       "sourceFile": "authentication.yaml",
       "requestBodyContentTypes": [],
-      "successResponseSchemaRef": "0",
+      "successResponseSchemaRef": "CamundaUserResult",
       "successStatus": 200,
       "vendorExtensions": {
         "x-eventually-consistent": false,
