@@ -9,6 +9,15 @@ module example_clock;
 import camunda;
 import std.json;
 
+// region GetClock
+/// Get internal clock (`GET /clock`).
+void get_clock(CamundaClient client)
+{
+    auto result = client.getClock();
+    cast(void) result;
+}
+// endregion GetClock
+
 // region PinClock
 /// Pin internal clock (alpha) (`PUT /clock`).
 void pin_clock(CamundaClient client, ClockPinRequest body_)
@@ -16,6 +25,15 @@ void pin_clock(CamundaClient client, ClockPinRequest body_)
     client.pinClock(body_);
 }
 // endregion PinClock
+
+// region AddClock
+/// Add time to internal clock (`POST /clock/add`).
+void add_clock(CamundaClient client, ClockAddRequest body_)
+{
+    auto result = client.addClock(body_);
+    cast(void) result;
+}
+// endregion AddClock
 
 // region ResetClock
 /// Reset internal clock (alpha) (`POST /clock/reset`).

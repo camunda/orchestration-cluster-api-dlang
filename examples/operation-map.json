@@ -13,6 +13,13 @@
       "region": "ActivateJobs"
     }
   ],
+  "addClock": [
+    {
+      "file": "clock.d",
+      "label": "Add time to internal clock",
+      "region": "AddClock"
+    }
+  ],
   "assignClientToGroup": [
     {
       "file": "group.d",
@@ -517,6 +524,13 @@
       "region": "GetBatchOperation"
     }
   ],
+  "getClock": [
+    {
+      "file": "clock.d",
+      "label": "Get internal clock",
+      "region": "GetClock"
+    }
+  ],
   "getClusterExportingStatus": [
     {
       "file": "exporting.d",
@@ -970,6 +984,13 @@
       "file": "secret.d",
       "label": "List secrets",
       "region": "ListSecrets"
+    }
+  ],
+  "lookupUserTask": [
+    {
+      "file": "user_task.d",
+      "label": "Look up an active user task (alpha)",
+      "region": "LookupUserTask"
     }
   ],
   "migrateProcessInstance": [

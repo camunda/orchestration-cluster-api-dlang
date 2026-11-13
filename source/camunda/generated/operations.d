@@ -294,11 +294,27 @@ mixin template GeneratedOperations()
         this.requestVoid("POST", path_, body_, null);
     }
 
+    /// Get internal clock (`GET /clock`).
+    ClockResult getClock()
+    {
+        const path_ = "/clock";
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        return ClockResult.fromJson(payload);
+    }
+
     /// Pin internal clock (alpha) (`PUT /clock`).
     void pinClock(ClockPinRequest body_ = ClockPinRequest.init)
     {
         const path_ = "/clock";
         this.requestVoid("PUT", path_, body_.toJson(), null);
+    }
+
+    /// Add time to internal clock (`POST /clock/add`).
+    ClockResult addClock(ClockAddRequest body_ = ClockAddRequest.init)
+    {
+        const path_ = "/clock/add";
+        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        return ClockResult.fromJson(payload);
     }
 
     /// Reset internal clock (alpha) (`POST /clock/reset`).
@@ -2102,6 +2118,15 @@ mixin template GeneratedOperations()
         const path_ = "/user-tasks/" ~ encodeComponent(userTaskKeyPath) ~ "/form";
         auto payload = this.requestJson("GET", path_, JSONValue.init, null);
         return FormResult.fromJson(payload);
+    }
+
+    /// Look up an active user task (alpha) (`POST /user-tasks/{userTaskKey}/lookup`).
+    UserTaskLookupResult lookupUserTask(UserTaskKey userTaskKey, UserTaskLookupRequest body_ = UserTaskLookupRequest.init)
+    {
+    const userTaskKeyPath = userTaskKey.value;
+        const path_ = "/user-tasks/" ~ encodeComponent(userTaskKeyPath) ~ "/lookup";
+        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        return UserTaskLookupResult.fromJson(payload);
     }
 
     /// Search user task variables (`POST /user-tasks/{userTaskKey}/variables/search`).
