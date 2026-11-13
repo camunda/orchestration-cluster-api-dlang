@@ -394,7 +394,7 @@ mixin template GeneratedOperations()
     EvaluateConditionalResult evaluateConditionals(ConditionalEvaluationInstruction body_ = ConditionalEvaluationInstruction.init)
     {
         const path_ = "/conditionals/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return EvaluateConditionalResult.fromJson(payload);
     }
 
@@ -410,7 +410,7 @@ mixin template GeneratedOperations()
     EvaluateDecisionResult evaluateDecision(DecisionEvaluationInstruction body_ = DecisionEvaluationInstruction.init)
     {
         const path_ = "/decision-definitions/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return EvaluateDecisionResult.fromJson(payload);
     }
 
@@ -497,33 +497,25 @@ mixin template GeneratedOperations()
         return this.requestText("GET", path_, JSONValue.init, null);
     }
 
-    /// Deploy resources (`POST /deployments`).
+    /// Deploy resources (`POST /deployments`). Multipart: use `deployResources`.
+    deprecated("createDeployment is multipart/form-data: use CamundaClient.deployResources(...)")
     DeploymentResult createDeploymentOp(JSONValue body_ = JSONValue.init)
     {
-        const path_ = "/deployments";
-        auto payload = this.requestJson("POST", path_, body_, null);
-        return DeploymentResult.fromJson(payload);
+        throw new ConfigException("createDeployment is multipart/form-data: use CamundaClient.deployResources(...)");
     }
 
-    /// Upload document (`POST /documents`).
+    /// Upload document (`POST /documents`). Multipart: use `createDocument`.
+    deprecated("createDocument is multipart/form-data: use CamundaClient.createDocument(...)")
     DocumentReference createDocumentOp(JSONValue body_ = JSONValue.init, string storeId = null, string documentId = null)
     {
-        const path_ = "/documents";
-        string[string] query;
-        if (storeId !is null) query["storeId"] = storeId;
-        if (documentId !is null) query["documentId"] = documentId;
-        auto payload = this.requestJson("POST", path_, body_, query);
-        return DocumentReference.fromJson(payload);
+        throw new ConfigException("createDocument is multipart/form-data: use CamundaClient.createDocument(...)");
     }
 
-    /// Upload multiple documents (`POST /documents/batch`).
+    /// Upload multiple documents (`POST /documents/batch`). Multipart: use `createDocuments`.
+    deprecated("createDocuments is multipart/form-data: use CamundaClient.createDocuments(...)")
     DocumentCreationBatchResponse createDocumentsOp(JSONValue body_ = JSONValue.init, string storeId = null)
     {
-        const path_ = "/documents/batch";
-        string[string] query;
-        if (storeId !is null) query["storeId"] = storeId;
-        auto payload = this.requestJson("POST", path_, body_, query);
-        return DocumentCreationBatchResponse.fromJson(payload);
+        throw new ConfigException("createDocuments is multipart/form-data: use CamundaClient.createDocuments(...)");
     }
 
     /// Download document (`GET /documents/{documentId}`).
@@ -637,7 +629,7 @@ mixin template GeneratedOperations()
     ExpressionEvaluationResult evaluateExpression(ExpressionEvaluationRequest body_ = ExpressionEvaluationRequest.init)
     {
         const path_ = "/expression/evaluation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return ExpressionEvaluationResult.fromJson(payload);
     }
 
@@ -1027,7 +1019,7 @@ mixin template GeneratedOperations()
     MessageCorrelationResult correlateMessage(MessageCorrelationRequest body_ = MessageCorrelationRequest.init)
     {
         const path_ = "/messages/correlation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return MessageCorrelationResult.fromJson(payload);
     }
 
@@ -1035,7 +1027,7 @@ mixin template GeneratedOperations()
     MessagePublicationResult publishMessage(MessagePublicationRequest body_ = MessagePublicationRequest.init)
     {
         const path_ = "/messages/publication";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return MessagePublicationResult.fromJson(payload);
     }
 
@@ -1119,7 +1111,7 @@ mixin template GeneratedOperations()
     CreateProcessInstanceResult createProcessInstance(ProcessInstanceCreationInstruction body_ = ProcessInstanceCreationInstruction.init)
     {
         const path_ = "/process-instances";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return CreateProcessInstanceResult.fromJson(payload);
     }
 
@@ -1527,7 +1519,7 @@ mixin template GeneratedOperations()
     SignalBroadcastResult broadcastSignal(SignalBroadcastRequest body_ = SignalBroadcastRequest.init)
     {
         const path_ = "/signals/broadcast";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
         return SignalBroadcastResult.fromJson(payload);
     }
 
@@ -1777,7 +1769,7 @@ mixin template GeneratedOperations()
     ExportingStatusResponse getClusterExportingStatus()
     {
         const path_ = "/cluster/v2/exporting";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ExportingStatusResponse.fromJson(payload);
     }
 
@@ -1787,14 +1779,14 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/exporting/pause";
         string[string] query;
         if (soft !is null) query["soft"] = soft;
-        this.requestVoid("POST", path_, JSONValue.init, query);
+        this.requestVoid("POST", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Resume exporting across the whole cluster (`POST /cluster/v2/exporting/resume`).
     void resumeClusterExporting()
     {
         const path_ = "/cluster/v2/exporting/resume";
-        this.requestVoid("POST", path_, JSONValue.init, null);
+        this.requestVoid("POST", path_, JSONValue.init, null, ServerBase.root);
     }
 
     /// List runtime backups across physical tenants (`GET /cluster/v2/backups/runtime`).
@@ -1804,7 +1796,7 @@ mixin template GeneratedOperations()
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (prefix !is null) query["prefix"] = prefix;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return jsonMapValues(payload, (JSONValue v) => ClusterRuntimeBackupInfo.fromJson(v));
     }
 
@@ -1814,7 +1806,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterTakeRuntimeBackupResponse.fromJson(payload);
     }
 
@@ -1824,7 +1816,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupState.fromJson(payload);
     }
 
@@ -1834,7 +1826,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Force-write runtime backup state across physical tenants (`POST /cluster/v2/backups/runtime/state/sync`).
@@ -1843,7 +1835,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state/sync";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, JSONValue.init, query);
+        auto payload = this.requestJson("POST", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupState.fromJson(payload);
     }
 
@@ -1854,7 +1846,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupInfo.fromJson(payload);
     }
 
@@ -1865,7 +1857,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// List history backups across physical tenants (`GET /cluster/v2/backups/history`).
@@ -1876,7 +1868,7 @@ mixin template GeneratedOperations()
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (prefix !is null) query["prefix"] = prefix;
         if (verbose !is null) query["verbose"] = verbose;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return jsonMapValues(payload, (JSONValue v) => ClusterHistoryBackupInfo.fromJson(v));
     }
 
@@ -1886,7 +1878,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterTakeHistoryBackupResponse.fromJson(payload);
     }
 
@@ -1897,7 +1889,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterHistoryBackupInfo.fromJson(payload);
     }
 
@@ -1908,7 +1900,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Change the cluster mode of one or every physical tenant (`PATCH /cluster/v2/mode`).
@@ -1919,7 +1911,7 @@ mixin template GeneratedOperations()
         query["mode"] = mode;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("PATCH", path_, JSONValue.init, query);
+        auto payload = this.requestJson("PATCH", path_, JSONValue.init, query, ServerBase.root);
         return ClusterModeChangeResponse.fromJson(payload);
     }
 
@@ -1927,7 +1919,7 @@ mixin template GeneratedOperations()
     ClusterBalanceResponse getClusterRebalance()
     {
         const path_ = "/cluster/v2/rebalance";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterBalanceResponse.fromJson(payload);
     }
 
@@ -1937,7 +1929,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/rebalance";
         string[string] query;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterBalanceResponse.fromJson(payload);
     }
 
@@ -1945,7 +1937,7 @@ mixin template GeneratedOperations()
     RebalanceCancellationResponse cancelClusterRebalance()
     {
         const path_ = "/cluster/v2/rebalance";
-        auto payload = this.requestJson("DELETE", path_, JSONValue.init, null);
+        auto payload = this.requestJson("DELETE", path_, JSONValue.init, null, ServerBase.root);
         return RebalanceCancellationResponse.fromJson(payload);
     }
 
@@ -1956,7 +1948,7 @@ mixin template GeneratedOperations()
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterRestoreResponse.fromJson(payload);
     }
 
@@ -1964,7 +1956,7 @@ mixin template GeneratedOperations()
     ClusterStatusResponse getClusterStatus()
     {
         const path_ = "/cluster/v2/status";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterStatusResponse.fromJson(payload);
     }
 
@@ -1972,7 +1964,7 @@ mixin template GeneratedOperations()
     ClusterUpgradeStatusResponse getClusterUpgradeStatus()
     {
         const path_ = "/cluster/v2/status/upgrade";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterUpgradeStatusResponse.fromJson(payload);
     }
 
@@ -1980,7 +1972,7 @@ mixin template GeneratedOperations()
     ClusterTopologyResponse getClusterTopology()
     {
         const path_ = "/cluster/v2/topology";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterTopologyResponse.fromJson(payload);
     }
 

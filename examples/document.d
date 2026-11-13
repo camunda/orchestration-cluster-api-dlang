@@ -11,18 +11,18 @@ import std.json;
 
 // region CreateDocument
 /// Upload document (`POST /documents`).
-void create_document(CamundaClient client, JSONValue body_, string storeId = null, string documentId = null)
+void create_document(CamundaClient client, string path, string storeId = null)
 {
-    auto result = client.createDocumentOp(body_, storeId, documentId);
+    auto result = client.createDocument(path, null, storeId);
     cast(void) result;
 }
 // endregion CreateDocument
 
 // region CreateDocuments
 /// Upload multiple documents (`POST /documents/batch`).
-void create_documents(CamundaClient client, JSONValue body_, string storeId = null)
+void create_documents(CamundaClient client, string[] paths, string storeId = null)
 {
-    auto result = client.createDocumentsOp(body_, storeId);
+    auto result = client.createDocuments(paths, storeId);
     cast(void) result;
 }
 // endregion CreateDocuments

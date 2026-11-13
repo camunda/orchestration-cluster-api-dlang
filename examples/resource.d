@@ -11,9 +11,9 @@ import std.json;
 
 // region CreateDeployment
 /// Deploy resources (`POST /deployments`).
-void create_deployment(CamundaClient client, JSONValue body_)
+void create_deployment(CamundaClient client, string[] paths)
 {
-    auto result = client.createDeploymentOp(body_);
+    auto result = client.deployResources(paths);
     cast(void) result;
 }
 // endregion CreateDeployment
