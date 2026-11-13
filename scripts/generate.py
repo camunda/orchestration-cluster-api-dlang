@@ -56,6 +56,27 @@ CURATED_NAMES = {
 }
 
 
+# multipart/form-data operations go through hand-written CamundaClient methods
+# (the generic request* path is JSON only). The generated `<op>Op` stays for
+# source compatibility but is deprecated and throws. A new multipart operation
+# without an entry here stops generation (#7).
+MULTIPART_CURATED = {
+    "createDeployment": "deployResources",
+    "createDocument": "createDocument",
+    "createDocuments": "createDocuments",
+}
+
+# Example signature + call for each multipart operation (hand-written method).
+MULTIPART_EXAMPLES = {
+    "createDeployment": ("string[] paths", "client.deployResources(paths)"),
+    "createDocument": ("string path, string storeId = null",
+                       "client.createDocument(path, null, storeId)"),
+    "createDocuments": ("string[] paths, string storeId = null",
+                        "client.createDocuments(paths, storeId)"),
+}
+assert MULTIPART_EXAMPLES.keys() == MULTIPART_CURATED.keys()
+
+
 def log(hook: str, msg: str) -> None:
     print(f"  [{hook}] {msg}")
 
@@ -915,6 +936,20 @@ def render_operation(spec: Spec, op: dict) -> str:
 
     sig_args = ", ".join(args)
     ret_ty = ret or "void"
+    if is_multipart:
+        curated = MULTIPART_CURATED.get(op_id)
+        if not curated:
+            sys.exit(f"multipart operation {op_id} has no hand-written method; add it to MULTIPART_CURATED and CamundaClient")
+        msg = f"{op_id} is multipart/form-data: use CamundaClient.{curated}(...)"
+        return "\n".join([
+            f"    /// {summary} (`{method} {path}`). Multipart: use `{curated}`.",
+            f"    deprecated({d_string(msg)})",
+            f"    {ret_ty} {fn}({sig_args})",
+            "    {",
+            f"        throw new ConfigException({d_string(msg)});",
+            "    }",
+            "",
+        ])
     lines = [
         f"    /// {summary} (`{method} {path}`).",
         f"    {ret_ty} {fn}({sig_args})",
@@ -1174,6 +1209,19 @@ def render_example_fn(spec: Spec, op: dict) -> str:
     summary = (op.get("summary") or op_id).strip().replace("\n", " ")
     method = (op.get("method") or "get").upper()
     path = op.get("path") or "/"
+    if op_id in MULTIPART_EXAMPLES:
+        params, call = MULTIPART_EXAMPLES[op_id]
+        return "\n".join([
+            f"// region {region}",
+            f"/// {summary} (`{method} {path}`).",
+            f"void {snake_ident(op_id)}(CamundaClient client, {params})",
+            "{",
+            f"    auto result = {call};",
+            "    cast(void) result;",
+            "}",
+            f"// endregion {region}",
+            "",
+        ])
     decls, call_args = example_call_args(spec, op)
     d_fn = snake_ident(op_id)
     param_list = ", ".join(["CamundaClient client"] + decls)

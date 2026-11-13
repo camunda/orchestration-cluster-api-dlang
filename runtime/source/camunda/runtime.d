@@ -13,5 +13,6 @@ public import camunda.clock : Clock, LiveClock, TestClock, liveClock;
 public import camunda.config : AuthStrategy, BackpressureProfile, CamundaConfig, LogLevel, RetryConfig, TlsConfig, WorkerDefaults;
 public import camunda.errors;
 public import camunda.eventual : ConsistencyOptions;
+public import camunda.multipart : Multipart, mimeTypeFor;
 public import camunda.transport : CamundaOptions, ServerBase, Transport, rootAddress, shouldSendJsonBody;
 public import camunda.version_ : sdkUserAgent, sdkVersion;

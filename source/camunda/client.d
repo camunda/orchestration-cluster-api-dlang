@@ -11,6 +11,8 @@ import camunda.errors;
 import camunda.eventual;
 import camunda.generated;
 import camunda.jsonx;
+import camunda.http : HttpResponse;
+import camunda.multipart;
 import camunda.safeio : readBytes;
 import camunda.transport;
 import camunda.version_ : sdkUserAgent, sdkVersion;
@@ -76,6 +78,72 @@ final class CamundaClient
         return createDeploymentMultipart(paths, tenant);
     }
 
+    /// A file to upload with `createDocuments` (bytes already in memory).
+    static struct DocumentUpload
+    {
+        string fileName;
+        const(ubyte)[] bytes;
+        /// MIME type; guessed from `fileName` when empty.
+        string contentType;
+        /// Optional per-document metadata (`metadataList[i]`).
+        DocumentMetadata metadata;
+    }
+
+    /// Upload a document from a local file (`POST /documents`, multipart `file`).
+    /// `contentType` is guessed from the extension when empty.
+    DocumentReference createDocument(string path, string contentType = null, string storeId = null,
+        string documentId = null, DocumentMetadata metadata = DocumentMetadata.init)
+    {
+        return createDocument(readBytes(path), baseName(path), contentType, storeId, documentId, metadata);
+    }
+
+    /// Upload a document from memory (`POST /documents`, multipart `file`).
+    DocumentReference createDocument(const(ubyte)[] bytes, string fileName, string contentType = null,
+        string storeId = null, string documentId = null, DocumentMetadata metadata = DocumentMetadata.init)
+    {
+        auto m = Multipart.create();
+        m.addFile("file", fileName, contentType.length ? contentType : mimeTypeFor(fileName), bytes);
+        if (metadata.raw.type != JSONType.null_) m.addField("metadata", metadata.toJson().toString, "application/json");
+        string[string] query;
+        if (storeId.length) query["storeId"] = storeId;
+        if (documentId.length) query["documentId"] = documentId;
+        auto res = _t.requestRaw("POST", "/documents", m.contentType, m.body_, ServerBase.api, query);
+        return parseMultipartResult!DocumentReference(res, "document");
+    }
+
+    /// Upload several local files in one request (`POST /documents/batch`, multipart `files`).
+    DocumentCreationBatchResponse createDocuments(string[] paths, string storeId = null)
+    {
+        DocumentUpload[] uploads;
+        foreach (p; paths) uploads ~= DocumentUpload(baseName(p), readBytes(p));
+        return createDocuments(uploads, storeId);
+    }
+
+    /// Upload several documents in one request. A partial failure is a 207 with
+    /// `failedDocuments` set in the response, not an exception.
+    DocumentCreationBatchResponse createDocuments(DocumentUpload[] uploads, string storeId = null)
+    {
+        if (!uploads.length)
+            throw new ConfigException("createDocuments() requires at least one document.");
+        auto m = Multipart.create();
+        bool anyMetadata;
+        foreach (u; uploads)
+        {
+            m.addFile("files", u.fileName, u.contentType.length ? u.contentType : mimeTypeFor(u.fileName), u.bytes);
+            anyMetadata = anyMetadata || u.metadata.raw.type != JSONType.null_;
+        }
+        if (anyMetadata)
+        {
+            JSONValue[] list;
+            foreach (u; uploads) list ~= u.metadata.raw.type != JSONType.null_ ? u.metadata.toJson() : emptyObject();
+            m.addField("metadataList", JSONValue(list).toString, "application/json");
+        }
+        string[string] query;
+        if (storeId.length) query["storeId"] = storeId;
+        auto res = _t.requestRaw("POST", "/documents/batch", m.contentType, m.body_, ServerBase.api, query);
+        return parseMultipartResult!DocumentCreationBatchResponse(res, "document batch");
+    }
+
     /// Poll `op` until it succeeds (retrying 404s) or the timeout elapses.
     T eventual(T)(ConsistencyOptions opts, scope T delegate() @safe op)
     {
@@ -130,33 +198,19 @@ final class CamundaClient
 
     private DeploymentResult createDeploymentMultipart(string[] paths, string tenantId)
     {
-        // Build a multipart/form-data body. Each file is a `resources` part.
-        enum boundary = "----camunda-sdk-d-boundary";
-        ubyte[] bodyBuf;
-        void append(string s) { bodyBuf ~= cast(const(ubyte)[]) s; }
-        foreach (p; paths)
-        {
-            auto name = baseName(p);
-            auto bytes = readBytes(p);
-            append("--" ~ boundary ~ "\r\n");
-            append("Content-Disposition: form-data; name=\"resources\"; filename=\"" ~ name ~ "\"\r\n");
-            append("Content-Type: application/octet-stream\r\n\r\n");
-            bodyBuf ~= bytes;
-            append("\r\n");
-        }
-        if (tenantId.length)
-        {
-            append("--" ~ boundary ~ "\r\n");
-            append("Content-Disposition: form-data; name=\"tenantId\"\r\n\r\n");
-            append(tenantId);
-            append("\r\n");
-        }
-        append("--" ~ boundary ~ "--\r\n");
+        // Each file is a `resources` part; tenantId is a plain field.
+        auto m = Multipart.create();
+        foreach (p; paths) m.addFile("resources", baseName(p), "application/octet-stream", readBytes(p));
+        if (tenantId.length) m.addField("tenantId", tenantId);
+        auto res = _t.requestRaw("POST", "/deployments", m.contentType, m.body_);
+        return parseMultipartResult!DeploymentResult(res, "deployment");
+    }
 
-        auto res = _t.requestRaw("POST", "/deployments", "multipart/form-data; boundary=" ~ boundary, bodyBuf);
-        try return DeploymentResult.fromJson(parseJSON(res.body_));
+    private static T parseMultipartResult(T)(HttpResponse res, string what)
+    {
+        try return T.fromJson(res.body_.length ? parseJSON(res.body_) : emptyObject());
         catch (Exception e)
-            throw new SerializationException("failed to parse deployment response: " ~ e.msg, __FILE__, __LINE__, e);
+            throw new SerializationException("failed to parse " ~ what ~ " response: " ~ e.msg, __FILE__, __LINE__, e);
     }
 }
 

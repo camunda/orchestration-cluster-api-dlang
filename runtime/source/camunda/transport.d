@@ -141,7 +141,7 @@ final class Transport
     /// Send a pre-built raw body (e.g. multipart/form-data) with auth,
     /// retry and backpressure. Returns the 2xx response.
     HttpResponse requestRaw(string method, string path, string contentType, const(ubyte)[] rawBody,
-        ServerBase server = ServerBase.api)
+        ServerBase server = ServerBase.api, string[string] query = null)
     {
         _bp.acquire();
         scope (exit) _bp.release();
@@ -149,7 +149,7 @@ final class Transport
         try
         {
             res = withRetry!HttpResponse(_config.retry, _clock, {
-                HttpRequest req = baseRequest(method, path, null, server);
+                HttpRequest req = baseRequest(method, path, query, server);
                 req.contentType = contentType;
                 req.rawBody = rawBody.dup;
                 return send(req);
