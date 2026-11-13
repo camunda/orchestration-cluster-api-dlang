@@ -1793,7 +1793,7 @@ mixin template GeneratedOperations()
     ExportingStatusResponse getClusterExportingStatus()
     {
         const path_ = "/cluster/v2/exporting";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ExportingStatusResponse.fromJson(payload);
     }
 
@@ -1803,14 +1803,14 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/exporting/pause";
         string[string] query;
         if (soft !is null) query["soft"] = soft;
-        this.requestVoid("POST", path_, JSONValue.init, query);
+        this.requestVoid("POST", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Resume exporting across the whole cluster (`POST /cluster/v2/exporting/resume`).
     void resumeClusterExporting()
     {
         const path_ = "/cluster/v2/exporting/resume";
-        this.requestVoid("POST", path_, JSONValue.init, null);
+        this.requestVoid("POST", path_, JSONValue.init, null, ServerBase.root);
     }
 
     /// List runtime backups across physical tenants (`GET /cluster/v2/backups/runtime`).
@@ -1820,7 +1820,7 @@ mixin template GeneratedOperations()
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (prefix !is null) query["prefix"] = prefix;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return jsonMapValues(payload, (JSONValue v) => ClusterRuntimeBackupInfo.fromJson(v));
     }
 
@@ -1830,7 +1830,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterTakeRuntimeBackupResponse.fromJson(payload);
     }
 
@@ -1840,7 +1840,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupState.fromJson(payload);
     }
 
@@ -1850,7 +1850,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Force-write runtime backup state across physical tenants (`POST /cluster/v2/backups/runtime/state/sync`).
@@ -1859,7 +1859,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/state/sync";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, JSONValue.init, query);
+        auto payload = this.requestJson("POST", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupState.fromJson(payload);
     }
 
@@ -1870,7 +1870,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterRuntimeBackupInfo.fromJson(payload);
     }
 
@@ -1881,7 +1881,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/runtime/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// List history backups across physical tenants (`GET /cluster/v2/backups/history`).
@@ -1892,7 +1892,7 @@ mixin template GeneratedOperations()
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (prefix !is null) query["prefix"] = prefix;
         if (verbose !is null) query["verbose"] = verbose;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return jsonMapValues(payload, (JSONValue v) => ClusterHistoryBackupInfo.fromJson(v));
     }
 
@@ -1902,7 +1902,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history";
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterTakeHistoryBackupResponse.fromJson(payload);
     }
 
@@ -1913,7 +1913,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        auto payload = this.requestJson("GET", path_, JSONValue.init, query);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, query, ServerBase.root);
         return ClusterHistoryBackupInfo.fromJson(payload);
     }
 
@@ -1924,7 +1924,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/backups/history/" ~ encodeComponent(backupIdPath);
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
-        this.requestVoid("DELETE", path_, JSONValue.init, query);
+        this.requestVoid("DELETE", path_, JSONValue.init, query, ServerBase.root);
     }
 
     /// Change the cluster mode of one or every physical tenant (`PATCH /cluster/v2/mode`).
@@ -1935,7 +1935,7 @@ mixin template GeneratedOperations()
         query["mode"] = mode;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("PATCH", path_, JSONValue.init, query);
+        auto payload = this.requestJson("PATCH", path_, JSONValue.init, query, ServerBase.root);
         return ClusterModeChangeResponse.fromJson(payload);
     }
 
@@ -1943,7 +1943,7 @@ mixin template GeneratedOperations()
     ClusterBalanceResponse getClusterRebalance()
     {
         const path_ = "/cluster/v2/rebalance";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterBalanceResponse.fromJson(payload);
     }
 
@@ -1953,7 +1953,7 @@ mixin template GeneratedOperations()
         const path_ = "/cluster/v2/rebalance";
         string[string] query;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterBalanceResponse.fromJson(payload);
     }
 
@@ -1961,7 +1961,7 @@ mixin template GeneratedOperations()
     RebalanceCancellationResponse cancelClusterRebalance()
     {
         const path_ = "/cluster/v2/rebalance";
-        auto payload = this.requestJson("DELETE", path_, JSONValue.init, null);
+        auto payload = this.requestJson("DELETE", path_, JSONValue.init, null, ServerBase.root);
         return RebalanceCancellationResponse.fromJson(payload);
     }
 
@@ -1972,7 +1972,7 @@ mixin template GeneratedOperations()
         string[string] query;
         if (physicalTenantId !is null) query["physicalTenantId"] = physicalTenantId;
         if (dryRun !is null) query["dryRun"] = dryRun;
-        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query, ServerBase.root);
         return ClusterRestoreResponse.fromJson(payload);
     }
 
@@ -1980,7 +1980,7 @@ mixin template GeneratedOperations()
     ClusterStatusResponse getClusterStatus()
     {
         const path_ = "/cluster/v2/status";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterStatusResponse.fromJson(payload);
     }
 
@@ -1988,7 +1988,7 @@ mixin template GeneratedOperations()
     ClusterUpgradeStatusResponse getClusterUpgradeStatus()
     {
         const path_ = "/cluster/v2/status/upgrade";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterUpgradeStatusResponse.fromJson(payload);
     }
 
@@ -1996,7 +1996,7 @@ mixin template GeneratedOperations()
     ClusterTopologyResponse getClusterTopology()
     {
         const path_ = "/cluster/v2/topology";
-        auto payload = this.requestJson("GET", path_, JSONValue.init, null);
+        auto payload = this.requestJson("GET", path_, JSONValue.init, null, ServerBase.root);
         return ClusterTopologyResponse.fromJson(payload);
     }
 
