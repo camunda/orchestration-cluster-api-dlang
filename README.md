@@ -71,6 +71,33 @@ Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orche
 }
 ```
 
+### Transport only: `camunda-orchestration-sdk:runtime`
+
+If you call the REST API generically (a CLI, a proxy, a catalog-driven tool)
+and do not need the typed operations, depend on the runtime sub-package. It
+has the same `CAMUNDA_*` configuration, auth (NONE / BASIC / OAuth), retry,
+backpressure and TLS as the full SDK, without compiling the generated models.
+
+```json
+{
+  "dependencies": {
+    "camunda-orchestration-sdk:runtime": "~>11.0.0-alpha"
+  }
+}
+```
+
+<!-- snippet-source: examples/readme.d | regions: RuntimeOnly -->
+```d
+import camunda.runtime;
+import std.json;
+
+auto t = Transport.fromEnv();
+JSONValue topo = t.requestJson("GET", "/topology", JSONValue.init, null);
+```
+
+The full SDK depends on `:runtime`; `CamundaClient.transport` exposes the same
+object.
+
 ## Quick start
 
 <!-- snippet-source: examples/readme.d | regions: QuickStart -->
@@ -217,7 +244,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 
 ## Safety
 
-Every module is `@safe`. Escapes live in `source/camunda/safeio.d` (and three
+Every module is `@safe`. Escapes live in `runtime/source/camunda/safeio.d` (and three
 libcurl / JSON / Base64 wrappers) and are budgeted by `scripts/check-safe.sh`.
 The build uses `-preview=dip1000` and `-preview=nosharedaccess` and keeps
 bounds checks on in release.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stamp the semantic-release-resolved version into dub.json and
-# source/camunda/version.d. Invoked by @semantic-release/exec prepareCmd.
+# runtime/source/camunda/version_.d. Invoked by @semantic-release/exec prepareCmd.
 set -euo pipefail
 
 VERSION="${1:?usage: prepare-release.sh <version>}"
@@ -14,7 +14,7 @@ data["version"] = version
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2) + "\n")
 PY
 
-cat > "$REPO_ROOT/source/camunda/version_.d" <<D
+cat > "$REPO_ROOT/runtime/source/camunda/version_.d" <<D
 /// Package version, stamped by \`scripts/prepare-release.sh\` during semantic-release.
 module camunda.version_;
 
@@ -27,4 +27,4 @@ enum sdkVersion = "${VERSION}";
 enum sdkUserAgent = "camunda-orchestration-sdk-d/" ~ sdkVersion;
 D
 
-echo "[prepare-release] Wrote version ${VERSION} to dub.json and source/camunda/version_.d"
+echo "[prepare-release] Wrote version ${VERSION} to dub.json and runtime/source/camunda/version_.d"

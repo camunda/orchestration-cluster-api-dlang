@@ -2,7 +2,7 @@
 """Generate / check the configuration reference table in README.md.
 
 The table is the single source of truth for supported CAMUNDA_* variables
-(kept here next to the resolver in source/camunda/config.d). Injected between
+(kept here next to the resolver in runtime/source/camunda/config.d). Injected between
 <!-- BEGIN_CONFIG_REFERENCE --> and <!-- END_CONFIG_REFERENCE -->.
 
 Usage:
@@ -21,7 +21,7 @@ BEGIN = "<!-- BEGIN_CONFIG_REFERENCE -->"
 END = "<!-- END_CONFIG_REFERENCE -->"
 
 # Mirrors CamundaConfig.resolve / the JS SCHEMA. Keep in lockstep with
-# source/camunda/config.d — the --check gate fails the README if this table
+# runtime/source/camunda/config.d — the --check gate fails the README if this table
 # is not what is published.
 CONFIG_REFERENCE: list[tuple[str, str, str]] = [
     ("CAMUNDA_REST_ADDRESS", "http://localhost:8080",

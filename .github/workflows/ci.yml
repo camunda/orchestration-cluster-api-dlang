@@ -25,8 +25,8 @@ jobs:
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libcurl4-openssl-dev zlib1g-dev
-      - run: dub test
-      - run: dub build -b release
+      - run: dub test && dub test :runtime
+      - run: dub build -b release && dub build -b release :runtime
 
   lint:
     name: D-Scanner
@@ -37,7 +37,7 @@ jobs:
         with:
           compiler: ldc-1.43.0
       - run: ./scripts/check-safe.sh
-      - run: dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source
+      - run: dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source runtime/source
 
   generate:
     name: Generation is current

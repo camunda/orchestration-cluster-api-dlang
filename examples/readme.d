@@ -26,6 +26,18 @@ void quickStart()
     cast(void) topology;
 }
 
+void runtimeOnly()
+{
+    // region RuntimeOnly
+    import camunda.runtime;
+    import std.json;
+
+    auto t = Transport.fromEnv();
+    JSONValue topo = t.requestJson("GET", "/topology", JSONValue.init, null);
+    // endregion RuntimeOnly
+    cast(void) topo;
+}
+
 void programmaticOverrides()
 {
     // region Overrides

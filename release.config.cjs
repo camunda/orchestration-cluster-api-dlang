@@ -2,7 +2,7 @@ const base = require('@camunda8/sdk-infra/configs/release.config.base.cjs');
 
 // D packages are consumed from git tags (and, once registered, code.dlang.org).
 // There is no compiled artifact to upload: publishing is "stamp dub.json +
-// source/camunda/version.d, push the tag". scripts/notify-dub.sh then pings
+// runtime/source/camunda/version_.d, push the tag". scripts/notify-dub.sh then pings
 // the DUB registry so the new version syncs immediately.
 module.exports = {
   ...base,
@@ -18,7 +18,7 @@ module.exports = {
     [
       '@semantic-release/git',
       {
-        assets: ['CHANGELOG.md', 'dub.json', 'source/camunda/version_.d'],
+        assets: ['CHANGELOG.md', 'dub.json', 'runtime/source/camunda/version_.d'],
         message:
           'chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}',
       },

@@ -10,40 +10,15 @@ import camunda.config;
 import camunda.errors;
 import camunda.eventual;
 import camunda.generated;
-import camunda.http;
 import camunda.jsonx;
-import camunda.retry;
 import camunda.safeio : readBytes;
+import camunda.transport;
 import camunda.version_ : sdkUserAgent, sdkVersion;
 import camunda.worker;
-import std.format : format;
 import std.json;
 import std.path : baseName;
 
-/// Options for constructing a `CamundaClient`.
-struct CamundaOptions
-{
-    string[string] config;
-    Clock clock;
-
-    static CamundaOptions create()
-    {
-        CamundaOptions o;
-        return o;
-    }
-
-    CamundaOptions withKey(string key, string value)
-    {
-        config[key] = value;
-        return this;
-    }
-
-    CamundaOptions withClock(Clock clock)
-    {
-        this.clock = clock;
-        return this;
-    }
-}
+public import camunda.transport : CamundaOptions;
 
 /// The Camunda 8 Orchestration Cluster SDK — synchronous client.
 ///
@@ -54,20 +29,11 @@ final class CamundaClient
 {
     mixin GeneratedOperations;
 
-    private CamundaConfig _config;
-    private Authentication _auth;
-    private Clock _clock;
-    private BackpressureManager _bp;
-    private string userAgent = sdkUserAgent;
+    private Transport _t;
 
     this(CamundaOptions options)
     {
-        _config = options.config is null
-            ? CamundaConfig.fromEnv()
-            : CamundaConfig.fromEnv(options.config);
-        _clock = options.clock is null ? liveClock() : options.clock;
-        _auth = new Authentication(_config, _clock);
-        _bp = new BackpressureManager(_config.backpressureProfile, _clock);
+        _t = new Transport(options);
     }
 
     static CamundaClient fromEnv()
@@ -87,10 +53,12 @@ final class CamundaClient
         return new CamundaClient(options);
     }
 
-    const(CamundaConfig) config() const { return _config; }
-    Clock clock() { return _clock; }
-    Authentication auth() { return _auth; }
-    BackpressureState backpressureState() const { return _bp.state(); }
+    /// The shared transport (also usable on its own via `camunda.runtime`).
+    Transport transport() { return _t; }
+    const(CamundaConfig) config() const { return _t.config; }
+    Clock clock() { return _t.clock; }
+    Authentication auth() { return _t.auth; }
+    BackpressureState backpressureState() const { return _t.backpressureState; }
 
     /// Fetch the cluster topology.
     TopologyResponse topology()
@@ -104,109 +72,56 @@ final class CamundaClient
         if (!paths.length)
             throw new ConfigException("deployResources() requires at least one file path.");
         auto tenant = tenantId.length ? tenantId
-            : (_config.defaultTenantId.length ? _config.defaultTenantId : null);
+            : (config.defaultTenantId.length ? config.defaultTenantId : null);
         return createDeploymentMultipart(paths, tenant);
     }
 
     /// Poll `op` until it succeeds (retrying 404s) or the timeout elapses.
     T eventual(T)(ConsistencyOptions opts, scope T delegate() @safe op)
     {
-        return poll!T(opts, _config.eventualPollDefaultMs, _clock, op, (const T) => true);
+        return poll!T(opts, config.eventualPollDefaultMs, _t.clock, op, (const T) => true);
     }
 
     /// Poll `op` until `predicate` is true.
     T eventual(T)(ConsistencyOptions opts, scope T delegate() @safe op,
         scope bool delegate(const T) @safe predicate)
     {
-        return poll!T(opts, _config.eventualPollDefaultMs, _clock, op, predicate);
+        return poll!T(opts, config.eventualPollDefaultMs, _t.clock, op, predicate);
     }
 
     JobWorker createJobWorker(JobWorkerConfig cfg)
     {
-        cfg.applyDefaults(_config.workerDefaults);
-        if (!cfg.tenantIds.length && _config.tenantIds.length)
-            cfg.tenantIds = _config.tenantIds.dup;
+        cfg.applyDefaults(config.workerDefaults);
+        if (!cfg.tenantIds.length && config.tenantIds.length)
+            cfg.tenantIds = config.tenantIds.dup;
         return new JobWorker(this, cfg);
     }
 
     JobWorkerConfig workerConfig(string jobType)
     {
-        return JobWorkerConfig.fromDefaults(jobType, _config.workerDefaults);
+        return JobWorkerConfig.fromDefaults(jobType, config.workerDefaults);
     }
 
     // --- transport used by the generated facade --------------------------------
 
     JSONValue requestJson(string method, string path, JSONValue body_, string[string] query)
     {
-        auto res = guardedRequest(method, path, body_, query);
-        if (!res.body_.length) return emptyObject();
-        try return parseJSON(res.body_);
-        catch (Exception e)
-            throw new SerializationException("failed to parse JSON response: " ~ e.msg, __FILE__, __LINE__, e);
+        return _t.requestJson(method, path, body_, query);
     }
 
     void requestVoid(string method, string path, JSONValue body_, string[string] query)
     {
-        guardedRequest(method, path, body_, query);
+        _t.requestVoid(method, path, body_, query);
     }
 
     string requestText(string method, string path, JSONValue body_, string[string] query)
     {
-        return guardedRequest(method, path, body_, query).body_;
+        return _t.requestText(method, path, body_, query);
     }
 
     immutable(ubyte)[] requestBytes(string method, string path, JSONValue body_, string[string] query)
     {
-        return guardedRequest(method, path, body_, query).bytes;
-    }
-
-    private HttpResponse guardedRequest(string method, string path, JSONValue body_, string[string] query)
-    {
-        _bp.acquire();
-        scope (exit) _bp.release();
-        HttpResponse res;
-        try
-        {
-            res = withRetry!HttpResponse(_config.retry, _clock, {
-                return sendOnce(method, path, body_, query);
-            });
-        }
-        catch (Exception e)
-        {
-            if (isBackpressureError(e)) _bp.recordBackpressure();
-            throw e;
-        }
-        _bp.recordHealthyHint();
-        return res;
-    }
-
-    private HttpResponse sendOnce(string method, string path, JSONValue body_, string[string] query)
-    {
-        HttpRequest req;
-        req.method = method;
-        req.url = joinUrl(_config.restAddress, path, query);
-        req.headers = _auth.headers();
-        req.headers["Accept"] = "application/json, */*";
-        req.headers["User-Agent"] = userAgent;
-        if (shouldSendJsonBody(method, body_))
-        {
-            req.body_ = body_.toString;
-            req.contentType = "application/json";
-        }
-        applyTls(req);
-        HttpResponse res;
-        try res = perform(req);
-        catch (NetworkException e) throw e;
-        if (res.status >= 200 && res.status < 300) return res;
-        throw new ApiException(res.status, res.body_);
-    }
-
-    private void applyTls(ref HttpRequest req)
-    {
-        req.certPath = _config.tls.certPath;
-        req.keyPath = _config.tls.keyPath;
-        req.caPath = _config.tls.caPath;
-        req.keyPassphrase = _config.tls.keyPassphrase;
+        return _t.requestBytes(method, path, body_, query);
     }
 
     private DeploymentResult createDeploymentMultipart(string[] paths, string tenantId)
@@ -234,23 +149,7 @@ final class CamundaClient
         }
         append("--" ~ boundary ~ "--\r\n");
 
-        _bp.acquire();
-        scope (exit) _bp.release();
-        auto res = withRetry!HttpResponse(_config.retry, _clock, {
-            HttpRequest req;
-            req.method = "POST";
-            req.url = joinUrl(_config.restAddress, "/deployments");
-            req.headers = _auth.headers();
-            req.headers["Accept"] = "application/json";
-            req.headers["User-Agent"] = userAgent;
-            req.contentType = "multipart/form-data; boundary=" ~ boundary;
-            req.rawBody = bodyBuf;
-            applyTls(req);
-            auto r = perform(req);
-            if (r.status >= 200 && r.status < 300) return r;
-            throw new ApiException(r.status, r.body_);
-        });
-        _bp.recordHealthyHint();
+        auto res = _t.requestRaw("POST", "/deployments", "multipart/form-data; boundary=" ~ boundary, bodyBuf);
         try return DeploymentResult.fromJson(parseJSON(res.body_));
         catch (Exception e)
             throw new SerializationException("failed to parse deployment response: " ~ e.msg, __FILE__, __LINE__, e);
@@ -287,23 +186,4 @@ unittest
     assert(threw);
     auto loose = JobKey.assumeExists("anything");
     assert(loose.value == "anything");
-}
-
-/// An empty JSON object is a present body (`{}`), not an absent one.
-/// `JSONValue.init` / `null` still means "no body". See #1.
-bool shouldSendJsonBody(string method, const JSONValue body_)
-{
-    if (method == "GET") return false;
-    return body_.type != JSONType.null_;
-}
-
-unittest
-{
-    assert(!shouldSendJsonBody("GET", parseJSON("{}")));
-    assert(!shouldSendJsonBody("POST", JSONValue.init));
-    assert(!shouldSendJsonBody("POST", JSONValue(null)));
-    assert(shouldSendJsonBody("POST", parseJSON("{}")));
-    assert(shouldSendJsonBody("PUT", parseJSON(`{"a":1}`)));
-    assert(shouldSendJsonBody("PATCH", parseJSON("[]")));
-    assert(parseJSON("{}").toString == "{}");
 }

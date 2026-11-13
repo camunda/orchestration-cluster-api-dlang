@@ -28,8 +28,9 @@ around them here:
 
 | Path | Ownership and intent |
 | --- | --- |
-| `source/camunda/` | Hand-written runtime: config, auth, HTTP, retry, clock, backpressure, eventual, worker, client. **Primary edit surface.** |
-| `source/camunda/safeio.d` | The `@trusted` C-boundary. Review like Rust `unsafe`. |
+| `runtime/source/camunda/` | `:runtime` sub-package. Spec-agnostic transport: config, auth, HTTP, retry, clock, backpressure, eventual, `transport.d` (`Transport`), `runtime.d` (entry). Must not import `camunda.generated`. **Primary edit surface.** |
+| `runtime/source/camunda/safeio.d` | The `@trusted` C-boundary. Review like Rust `unsafe`. |
+| `source/camunda/` | Typed SDK on top of `:runtime`: `client.d` (`CamundaClient` wraps `Transport` + generated facade), `worker.d`, `package.d`. |
 | `source/camunda/generated/` | **Generated.** Produced by `make generate`. Never hand-edit. |
 | `scripts/generate.py` | Numbered generation hooks (01 keys … 06 markdown docs). **Primary edit surface** for generated output. |
 | `scripts/sync-readme-snippets.py` | Injects `examples/*.d` region snippets into `README.md`. `--check` is the CI gate. |

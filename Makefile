@@ -23,13 +23,15 @@ generate:
 
 test:
 	dub test
+	dub test :runtime
 
 lint:
 	./scripts/check-safe.sh
-	dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source
+	dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source runtime/source
 
 build:
 	dub build -b release
+	dub build -b release :runtime
 
 examples:
 	@set -e; \

@@ -25,3 +25,4 @@ package-lock.json
 __pycache__/
 *.pyc
 docs-md/
+/camunda-orchestration-sdk-runtime*
