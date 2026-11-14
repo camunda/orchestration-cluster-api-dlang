@@ -135,6 +135,65 @@ struct Parser
 
     noreturn fail(string what) { throw new Exception(format("JSON: %s at offset %s", what, i)); }
 
+    char peek()
+    {
+        if (i >= s.length)
+            fail("unexpected end");
+        return s[i];
+    }
+
+    J literal(string word, Kind k, bool b = false)
+    {
+        if (s.length - i < word.length || s[i .. i + word.length] != word)
+            fail("invalid literal");
+        i += word.length;
+        auto n = new J(k);
+        n.boolean = b;
+        return n;
+    }
+
+    bool isDigit(size_t at) const { return at < s.length && s[at] >= '0' && s[at] <= '9'; }
+
+    /// Strict RFC 8259 number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+    J number()
+    {
+        const start = i;
+        if (i < s.length && s[i] == '-')
+            i++;
+        if (!isDigit(i))
+            fail("invalid number");
+        if (s[i] == '0')
+        {
+            i++;
+            if (isDigit(i))
+                fail("invalid number (leading zero)");
+        }
+        else
+            while (isDigit(i))
+                i++;
+        if (i < s.length && s[i] == '.')
+        {
+            i++;
+            if (!isDigit(i))
+                fail("invalid number (fraction)");
+            while (isDigit(i))
+                i++;
+        }
+        if (i < s.length && (s[i] == 'e' || s[i] == 'E'))
+        {
+            i++;
+            if (i < s.length && (s[i] == '+' || s[i] == '-'))
+                i++;
+            if (!isDigit(i))
+                fail("invalid number (exponent)");
+            while (isDigit(i))
+                i++;
+        }
+        auto n = new J(Kind.number);
+        n.text = s[start .. i];
+        return n;
+    }
+
     void expect(char c)
     {
         if (i >= s.length || s[i] != c)
@@ -154,7 +213,7 @@ struct Parser
             i++;
             auto o = J.obj();
             ws();
-            if (s[i] == '}') { i++; return o; }
+            if (peek() == '}') { i++; return o; }
             for (;;)
             {
                 ws();
@@ -163,7 +222,7 @@ struct Parser
                 expect(':');
                 o.set(k, value());
                 ws();
-                if (s[i] == ',') { i++; continue; }
+                if (peek() == ',') { i++; continue; }
                 expect('}');
                 return o;
             }
@@ -173,36 +232,39 @@ struct Parser
             i++;
             auto a = new J(Kind.array);
             ws();
-            if (s[i] == ']') { i++; return a; }
+            if (peek() == ']') { i++; return a; }
             for (;;)
             {
                 a.items ~= value();
                 ws();
-                if (s[i] == ',') { i++; continue; }
+                if (peek() == ',') { i++; continue; }
                 expect(']');
                 return a;
             }
         }
         case '"':
             return J.str(str());
-        case 't': i += 4; { auto b = new J(Kind.bool_); b.boolean = true; return b; }
-        case 'f': i += 5; return new J(Kind.bool_);
-        case 'n': i += 4; return new J(Kind.null_);
+        case 't': return literal("true", Kind.bool_, true);
+        case 'f': return literal("false", Kind.bool_);
+        case 'n': return literal("null", Kind.null_);
+        case '-': case '0': .. case '9':
+            return number();
         default:
-            const start = i;
-            while (i < s.length && "+-0123456789.eE".canFind(s[i]))
-                i++;
-            if (i == start)
-                fail("unexpected character");
-            auto n = new J(Kind.number);
-            n.text = s[start .. i];
-            return n;
+            fail("unexpected character");
         }
     }
 
     uint hex4()
     {
-        auto v = s[i .. i + 4].to!uint(16);
+        if (s.length - i < 4)
+            fail("truncated \\u escape");
+        uint v;
+        foreach (ch; s[i .. i + 4])
+        {
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
+                fail("invalid \\u escape");
+        }
+        v = s[i .. i + 4].to!uint(16);
         i += 4;
         return v;
     }
@@ -223,6 +285,8 @@ struct Parser
                 buf.put(c);
                 continue;
             }
+            if (i >= s.length)
+                fail("unterminated string");
             const e = s[i++];
             switch (e)
             {
@@ -248,6 +312,19 @@ struct Parser
             }
         }
     }
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+    foreach (bad; ["truX", "tru", "fals", "nul", "nulx", "01", "+1", "-", "1.", ".5", "1e", "1e+",
+            "--1", "1.2.3", "[1,", "{\"a\":1", "[", "{", "\"\\u12\"", "\"\\uZZZZ\"", "\"\\", "x"])
+        assertThrown(parseJson(bad), bad);
+    assert(parseJson("true").boolean && !parseJson("false").boolean);
+    assert(parseJson("null").kind == Kind.null_);
+    foreach (ok; ["0", "-0", "10", "-1.5e+3", "2E-2", "0.25"])
+        assert(parseJson(ok).text == ok, ok);
+    assert(parseJson(`{"a":[1,true,null]}`).isObj);
 }
 
 J parseJson(string text)
