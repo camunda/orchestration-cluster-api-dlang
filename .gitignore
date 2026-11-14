@@ -24,3 +24,4 @@ package-lock.json
 .env
 docs-md/
 /camunda-orchestration-sdk-runtime*
+/camunda-orchestration-sdk-openapi*

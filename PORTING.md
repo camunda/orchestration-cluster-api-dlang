@@ -44,6 +44,13 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 | `camunda/errors.d` | `errors.ts` | Typed exception taxonomy |
 | `camunda/jsonx.d`, `safeio.d` | — | `@safe` JSON + C-boundary |
 
+## Subpackages
+
+| Subpackage | Path | Purpose |
+| --- | --- | --- |
+| `:runtime` | `runtime/source/camunda/` | Spec-agnostic transport: config, auth, HTTP, retry, clock, backpressure, eventual. |
+| `:openapi` | `openapi/source/camunda/openapi/` | Hardened, Phobos-only OpenAPI reader shared by `scripts/generate.d` and d8ctl: order-preserving JSON, `Spec`, `$ref`/`allOf` resolution, schema flattening. Typed `OpenApiException` with JSON-pointer paths; depth/size/`$ref`-chain limits; cycle detection. |
+
 ## Known gaps versus the JS SDK
 
 - **Engine clock.** `Clock` is injectable; `EngineClock` (pin the broker clock)

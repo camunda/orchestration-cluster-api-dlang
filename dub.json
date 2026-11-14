@@ -83,6 +83,47 @@
       "preBuildCommands": [
         "$PACKAGE_DIR/scripts/check-safe.sh"
       ]
+    },
+    {
+      "name": "openapi",
+      "description": "Hardened, Phobos-only OpenAPI reader: ordered JSON, $ref/allOf resolution, schema flattening.",
+      "targetType": "library",
+      "targetName": "camunda-orchestration-sdk-openapi",
+      "sourcePaths": [
+        "openapi/source"
+      ],
+      "importPaths": [
+        "openapi/source"
+      ],
+      "toolchainRequirements": {
+        "dmd": "no",
+        "gdc": "no",
+        "ldc": ">=1.43.0"
+      },
+      "dflags": [
+        "-allinst",
+        "-preview=dip1000",
+        "-preview=nosharedaccess"
+      ],
+      "dflags-ldc": [
+        "-fno-delete-null-pointer-checks"
+      ],
+      "buildTypes": {
+        "release": {
+          "buildOptions": [
+            "releaseMode",
+            "optimize",
+            "inline"
+          ],
+          "dflags-ldc": [
+            "-boundscheck=on",
+            "-link-defaultlib-shared=false"
+          ]
+        }
+      },
+      "preBuildCommands": [
+        "$PACKAGE_DIR/scripts/check-safe.sh"
+      ]
     }
   ]
 }

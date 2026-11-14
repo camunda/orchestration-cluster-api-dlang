@@ -4,8 +4,9 @@
 # in small `@trusted` lambdas or functions. Runs before each `dub build` and
 # `dub test` (dub.json preBuildCommands), so a violation fails the build.
 cd "$(dirname "$0")/.." || exit 2
-# Both packages: the typed SDK (source/) and :runtime (runtime/source/).
-SRC="source runtime/source"
+# All packages: the typed SDK (source/), :runtime (runtime/source/) and
+# :openapi (openapi/source/).
+SRC="source runtime/source openapi/source"
 SAFEIO=runtime/source/camunda/safeio.d
 status=0
 for f in $(grep -rL '^@safe:' $SRC --include='*.d'); do

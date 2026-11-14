@@ -34,15 +34,17 @@ generate-local:
 test:
 	dub test
 	dub test :runtime
+	dub test :openapi
 	dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
 
 lint:
 	./scripts/check-safe.sh
-	dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source runtime/source
+	dub run -q dscanner@0.16.0-beta.5 -- --styleCheck --config dscanner.ini source runtime/source openapi/source
 
 build:
 	dub build -b release
 	dub build -b release :runtime
+	dub build -b release :openapi
 
 examples:
 	@set -e; \
