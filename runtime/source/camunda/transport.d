@@ -110,7 +110,11 @@ final class Transport
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
         // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
-        // (case-insensitive) name.
+        // (case-insensitive) name. Validate here too: `options.headers` is a
+        // public field, so direct assignment bypasses `withHeader`; every
+        // programmatic header must fail closed before reaching curl.
+        foreach (k, v; options.headers)
+            validateHeader(k, v);
         _headers = mergeHeadersCaseInsensitive(_config.defaultHeaders, options.headers);
     }
 
@@ -514,4 +518,23 @@ unittest
     assert(t.headers.length == 2);
     assert(t.headers["x-api-key"] == "from-code");
     assert(t.headers["X-Other"] == "env");
+}
+
+unittest
+{
+    // Direct assignment to the public `headers` map must not bypass
+    // validation (header injection via CR/LF).
+    import std.algorithm.searching : canFind;
+    foreach (bad; [["X-Api-Key", "a\r\nInjected: yes"], ["Bad Name", "v"], ["X", "a\0b"]])
+    {
+        auto o = CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE");
+        o.headers[bad[0]] = bad[1];
+        try
+        {
+            new Transport(o);
+            assert(false, "expected ConfigException for direct headers assignment");
+        }
+        catch (ConfigException e)
+            assert(!e.msg.canFind("Injected"), e.msg);
+    }
 }
