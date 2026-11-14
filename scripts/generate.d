@@ -1,6 +1,7 @@
 /+ dub.sdl:
 name "generate"
 targetPath ".dub/bin"
+dependency "camunda-orchestration-sdk:openapi" path=".."
 +/
 /**
 Generate the D SDK from the bundled OpenAPI spec + spec-metadata.
@@ -35,357 +36,9 @@ import std.stdio : stderr, writeln;
 import std.string : indexOf, strip, stripRight, toLower, toUpper;
 import std.utf : decode, stride;
 
-// ---------------------------------------------------------------------------
-// Order-preserving JSON (std.json uses associative arrays, which lose the
-// key order the generator relies on for properties and operations).
-// ---------------------------------------------------------------------------
-
-enum Kind { null_, bool_, number, string_, array, object }
-
-final class J
-{
-    Kind kind;
-    bool boolean;
-    string text; // string value, or the raw number literal
-    J[] items;
-    string[] keys;
-    J[string] fields;
-
-    this(Kind k) { kind = k; }
-
-    static J str(string s) { auto j = new J(Kind.string_); j.text = s; return j; }
-    static J obj() { return new J(Kind.object); }
-    static J arr(J[] xs) { auto j = new J(Kind.array); j.items = xs; return j; }
-
-    void set(string k, J v)
-    {
-        if (k !in fields)
-            keys ~= k;
-        fields[k] = v;
-    }
-
-    bool isObj() const { return kind == Kind.object; }
-    bool isArr() const { return kind == Kind.array; }
-    bool isStr() const { return kind == Kind.string_; }
-}
-
-/// `node.get(key)`; null when missing or `node` is not an object.
-J get(J node, string key)
-{
-    if (node is null || node.kind != Kind.object)
-        return null;
-    if (auto p = key in node.fields)
-        return *p;
-    return null;
-}
-
-bool has(J node, string key) { return node !is null && node.isObj && (key in node.fields) !is null; }
-
-/// Python truthiness.
-bool truthy(J v)
-{
-    if (v is null)
-        return false;
-    final switch (v.kind)
-    {
-    case Kind.null_: return false;
-    case Kind.bool_: return v.boolean;
-    case Kind.number: return v.text.to!double != 0;
-    case Kind.string_: return v.text.length > 0;
-    case Kind.array: return v.items.length > 0;
-    case Kind.object: return v.keys.length > 0;
-    }
-}
-
-/// `a or b`.
-J or(J a, J b) { return truthy(a) ? a : b; }
-
-/// `value or fallback` for string-valued fields.
-string orS(J v, string fallback) { return truthy(v) ? pyStr(v) : fallback; }
-
-/// Python `str(value)`.
-string pyStr(J v)
-{
-    if (v is null)
-        return "None";
-    final switch (v.kind)
-    {
-    case Kind.null_: return "None";
-    case Kind.bool_: return v.boolean ? "True" : "False";
-    case Kind.number: return v.text;
-    case Kind.string_: return v.text;
-    case Kind.array: case Kind.object:
-        throw new Exception("unexpected container where a scalar was expected");
-    }
-}
-
-J[] itemsOf(J v) { return v !is null && v.isArr ? v.items : null; }
-string[] keysOf(J v) { return v !is null && v.isObj ? v.keys : null; }
-
-struct Parser
-{
-    string s;
-    size_t i;
-
-    void ws()
-    {
-        while (i < s.length && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t'))
-            i++;
-    }
-
-    noreturn fail(string what) { throw new Exception(format("JSON: %s at offset %s", what, i)); }
-
-    char peek()
-    {
-        if (i >= s.length)
-            fail("unexpected end");
-        return s[i];
-    }
-
-    J literal(string word, Kind k, bool b = false)
-    {
-        if (s.length - i < word.length || s[i .. i + word.length] != word)
-            fail("invalid literal");
-        i += word.length;
-        auto n = new J(k);
-        n.boolean = b;
-        return n;
-    }
-
-    bool isDigit(size_t at) const { return at < s.length && s[at] >= '0' && s[at] <= '9'; }
-
-    /// Strict RFC 8259 number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
-    J number()
-    {
-        const start = i;
-        if (i < s.length && s[i] == '-')
-            i++;
-        if (!isDigit(i))
-            fail("invalid number");
-        if (s[i] == '0')
-        {
-            i++;
-            if (isDigit(i))
-                fail("invalid number (leading zero)");
-        }
-        else
-            while (isDigit(i))
-                i++;
-        if (i < s.length && s[i] == '.')
-        {
-            i++;
-            if (!isDigit(i))
-                fail("invalid number (fraction)");
-            while (isDigit(i))
-                i++;
-        }
-        if (i < s.length && (s[i] == 'e' || s[i] == 'E'))
-        {
-            i++;
-            if (i < s.length && (s[i] == '+' || s[i] == '-'))
-                i++;
-            if (!isDigit(i))
-                fail("invalid number (exponent)");
-            while (isDigit(i))
-                i++;
-        }
-        auto n = new J(Kind.number);
-        n.text = s[start .. i];
-        return n;
-    }
-
-    void expect(char c)
-    {
-        if (i >= s.length || s[i] != c)
-            fail("expected '" ~ c ~ "'");
-        i++;
-    }
-
-    J value()
-    {
-        ws();
-        if (i >= s.length)
-            fail("unexpected end");
-        switch (s[i])
-        {
-        case '{':
-        {
-            i++;
-            auto o = J.obj();
-            ws();
-            if (peek() == '}') { i++; return o; }
-            for (;;)
-            {
-                ws();
-                auto k = str();
-                ws();
-                expect(':');
-                o.set(k, value());
-                ws();
-                if (peek() == ',') { i++; continue; }
-                expect('}');
-                return o;
-            }
-        }
-        case '[':
-        {
-            i++;
-            auto a = new J(Kind.array);
-            ws();
-            if (peek() == ']') { i++; return a; }
-            for (;;)
-            {
-                a.items ~= value();
-                ws();
-                if (peek() == ',') { i++; continue; }
-                expect(']');
-                return a;
-            }
-        }
-        case '"':
-            return J.str(str());
-        case 't': return literal("true", Kind.bool_, true);
-        case 'f': return literal("false", Kind.bool_);
-        case 'n': return literal("null", Kind.null_);
-        case '-': case '0': .. case '9':
-            return number();
-        default:
-            fail("unexpected character");
-        }
-    }
-
-    uint hex4()
-    {
-        if (s.length - i < 4)
-            fail("truncated \\u escape");
-        uint v;
-        foreach (ch; s[i .. i + 4])
-        {
-            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
-                fail("invalid \\u escape");
-        }
-        v = s[i .. i + 4].to!uint(16);
-        i += 4;
-        return v;
-    }
-
-    string str()
-    {
-        expect('"');
-        auto buf = appender!string;
-        for (;;)
-        {
-            if (i >= s.length)
-                fail("unterminated string");
-            const c = s[i++];
-            if (c == '"')
-                return buf[];
-            if (c < 0x20)
-                fail("unescaped control character in string");
-            if (c != '\\')
-            {
-                buf.put(c);
-                continue;
-            }
-            if (i >= s.length)
-                fail("unterminated string");
-            const e = s[i++];
-            switch (e)
-            {
-            case '"': buf.put('"'); break;
-            case '\\': buf.put('\\'); break;
-            case '/': buf.put('/'); break;
-            case 'b': buf.put('\b'); break;
-            case 'f': buf.put('\f'); break;
-            case 'n': buf.put('\n'); break;
-            case 'r': buf.put('\r'); break;
-            case 't': buf.put('\t'); break;
-            case 'u':
-                dchar cp = hex4();
-                if (cp >= 0xDC00 && cp < 0xE000)
-                    fail("unpaired low surrogate");
-                if (cp >= 0xD800 && cp < 0xDC00)
-                {
-                    if (!(i + 6 <= s.length && s[i] == '\\' && s[i + 1] == 'u'))
-                        fail("unpaired high surrogate");
-                    i += 2;
-                    const lo = hex4();
-                    if (lo < 0xDC00 || lo >= 0xE000)
-                        fail("high surrogate not followed by low surrogate");
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                }
-                buf.put(cp);
-                break;
-            default: fail("bad escape");
-            }
-        }
-    }
-}
-
-unittest
-{
-    import std.exception : assertThrown;
-    foreach (bad; ["truX", "tru", "fals", "nul", "nulx", "01", "+1", "-", "1.", ".5", "1e", "1e+",
-            "--1", "1.2.3", "[1,", "{\"a\":1", "[", "{", "\"\\u12\"", "\"\\uZZZZ\"", "\"\\", "x",
-            "\"a\nb\"", "\"a\tb\"", "\"a\x00b\"", `"\uD800\u0041"`, `"\uD800"`, `"\uDC00"`])
-        assertThrown(parseJson(bad), bad);
-    assert(parseJson("true").boolean && !parseJson("false").boolean);
-    assert(parseJson("null").kind == Kind.null_);
-    foreach (ok; ["0", "-0", "10", "-1.5e+3", "2E-2", "0.25"])
-        assert(parseJson(ok).text == ok, ok);
-    assert(parseJson(`{"a":[1,true,null]}`).isObj);
-    assert(parseJson(`"a\nb\t"`).text == "a\nb\t");
-    assert(parseJson(`"\uD83D\uDE00"`).text == "\U0001F600");
-}
-
-J parseJson(string text)
-{
-    auto p = Parser(text, 0);
-    auto v = p.value();
-    p.ws();
-    if (p.i != text.length)
-        p.fail("trailing data");
-    return v;
-}
-
-/// Python `json.dumps(value, ensure_ascii=...)` for a string.
-string jsonQuote(string value, bool ensureAscii)
-{
-    auto buf = appender!string;
-    buf.put('"');
-    size_t i = 0;
-    while (i < value.length)
-    {
-        const dchar c = decode(value, i);
-        switch (c)
-        {
-        case '"': buf.put(`\"`); break;
-        case '\\': buf.put(`\\`); break;
-        case '\n': buf.put(`\n`); break;
-        case '\r': buf.put(`\r`); break;
-        case '\t': buf.put(`\t`); break;
-        case '\b': buf.put(`\b`); break;
-        case '\f': buf.put(`\f`); break;
-        default:
-            if (c < 0x20)
-                buf.put(format(`\u%04x`, cast(uint) c));
-            else if (ensureAscii && c > 0x7f)
-            {
-                if (c >= 0x10000)
-                {
-                    const v = c - 0x10000;
-                    buf.put(format(`\u%04x\u%04x`, 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)));
-                }
-                else
-                    buf.put(format(`\u%04x`, cast(uint) c));
-            }
-            else
-                buf.put(c);
-        }
-    }
-    buf.put('"');
-    return buf[];
-}
+// Order-preserving JSON, the spec model, and $ref/allOf resolution live in
+// the hardened `:openapi` subpackage (shared with d8ctl).
+import camunda.openapi;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -532,119 +185,8 @@ string camel(string name)
 /// `(text or "").strip().replace("\n", " ")` style description cleanup.
 string oneLine(string s) { return s.strip.replace("\n", " "); }
 
-// Set by load(): the bundled spec, for following deep JSON-pointer refs.
-J SPEC;
-enum COMPONENT_PREFIX = "#/components/schemas/";
-
-/**
-Component name a `$ref` resolves to.
-
-The bundler can emit pointers *into* a component (e.g.
-`#/components/schemas/X/allOf/0`) when dedup matched a nested member.
-Follow those to the component they finally name, instead of taking the
-last path segment (which would be `0`).
-*/
-string refName(J node)
-{
-    bool[string] seen;
-    while (node !is null && node.isObj && node.get("$ref") !is null && node.get("$ref").isStr)
-    {
-        auto r = node.get("$ref").text;
-        if (r in seen)
-            die("cyclic $ref: " ~ r);
-        seen[r] = true;
-        if (!r.startsWith(COMPONENT_PREFIX))
-            return r.split("/")[$ - 1];
-        auto parts = r[COMPONENT_PREFIX.length .. $].split("/");
-        if (parts.length == 1)
-            return parts[0];
-        J target = SPEC.get("components").get("schemas");
-        foreach (part; parts)
-        {
-            part = part.replace("~1", "/").replace("~0", "~");
-            target = target.isArr ? target.items[part.to!size_t] : target.fields[part];
-        }
-        if (!(target.isObj && target.has("$ref")))
-            die("unsupported deep $ref to an inline schema: " ~ r);
-        node = target;
-    }
-    return null;
-}
-
-/// If schema is `{allOf: [{$ref}]}` (optionally with type/description), return the ref.
-string unwrapAllofRef(J schema)
-{
-    string[] refs;
-    bool extras;
-    foreach (p; itemsOf(schema.get("allOf")))
-    {
-        auto r = refName(p);
-        if (r !is null)
-            refs ~= r;
-        else if (p.isObj && truthy(p))
-            extras = true;
-    }
-    if (refs.length == 1 && !extras && !truthy(schema.get("properties")) && !truthy(schema.get("oneOf")))
-        return refs[0];
-    return null;
-}
-
-final class Spec
-{
-    J spec;
-    J meta;
-    J schemas;
-    J[string] semantic;
-    J[] operations;
-    J[string] unions;
-    bool[string] enumNames;
-    bool[string] keyNames;
-
-    this(J spec, J meta)
-    {
-        this.spec = spec;
-        this.meta = meta;
-        schemas = spec.get("components").get("schemas");
-        if (schemas is null)
-            schemas = J.obj();
-        foreach (k; itemsOf(meta.get("semanticKeys")))
-            semantic[k.get("name").text] = k;
-        operations = itemsOf(meta.get("operations")).dup;
-        foreach (u; itemsOf(meta.get("unions")))
-            unions[u.get("name").text] = u;
-        foreach (n; schemas.keys)
-        {
-            auto s = schemas.fields[n];
-            if (s.isObj && s.has("enum") && s.get("enum").isArr)
-                enumNames[n] = true;
-        }
-        // String schemas that are branded keys (semantic + format-named leftovers).
-        foreach (n; semantic.keys)
-            keyNames[n] = true;
-        foreach (n; schemas.keys)
-        {
-            auto s = schemas.fields[n];
-            if (!s.isObj)
-                continue;
-            if (pyStrOrNull(s.get("type")) == "string" && truthy(s.get("x-semantic-type")))
-                keyNames[n] = true;
-            if (n == "ResourceKey" || n == "ScopeKey" || n == "LongKey")
-                keyNames[n] = true;
-        }
-    }
-
-    J schema(string name)
-    {
-        auto s = schemas.get(name);
-        return s !is null && s.isObj ? s : J.obj();
-    }
-
-    bool isEnum(string n) { return (n in enumNames) !is null; }
-    bool isKey(string n) { return (n in keyNames) !is null; }
-}
-
-/// String value of a JSON string, or null for anything else.
-string pyStrOrNull(J v) { return v !is null && v.isStr ? v.text : null; }
+// `Spec`, `refName`, `unwrapAllofRef`, `collectProperties`, `Props`,
+// `pyStrOrNull` and `COMPONENT_PREFIX` come from `camunda.openapi`.
 
 Spec load()
 {
@@ -653,7 +195,6 @@ Spec load()
     if (!exists(META_PATH) || !isFile(META_PATH))
         die("missing spec metadata: " ~ META_PATH);
     auto spec = parseJson(readText(SPEC_PATH));
-    SPEC = spec;
     auto meta = parseJson(readText(META_PATH));
     return new Spec(spec, meta);
 }
@@ -938,7 +479,7 @@ string classify(Spec spec, string name)
     if (t == "string" && !schema.has("enum"))
     {
         // ExactMatch wrappers: allOf -> key/enum
-        auto target = unwrapAllofRef(schema);
+        auto target = spec.unwrapAllofRef(schema);
         if (target !is null)
             return "alias:" ~ target;
         return "string";
@@ -957,7 +498,7 @@ string dTypeForSchema(Spec spec, J schema)
 {
     if (schema is null)
         schema = J.obj();
-    auto r = refName(schema);
+    auto r = spec.refName(schema);
     if (r !is null)
     {
         const kind = classify(spec, r);
@@ -975,7 +516,7 @@ string dTypeForSchema(Spec spec, J schema)
     }
     if (schema.has("allOf"))
     {
-        auto target = unwrapAllofRef(schema);
+        auto target = spec.unwrapAllofRef(schema);
         if (target !is null)
         {
             auto refNode = J.obj();
@@ -999,67 +540,6 @@ string dTypeForSchema(Spec spec, J schema)
     return "JSONValue";
 }
 
-/// Insertion-ordered property map.
-struct Props
-{
-    string[] names;
-    J[string] map;
-
-    void setDefault(string k, J v)
-    {
-        if (k !in map)
-        {
-            names ~= k;
-            map[k] = v;
-        }
-    }
-
-    void put(string k, J v)
-    {
-        if (k !in map)
-            names ~= k;
-        map[k] = v;
-    }
-}
-
-/// Merge own properties with allOf parents (depth-first, own props win).
-Props collectProperties(Spec spec, string name, J schema, ref bool[string] seen)
-{
-    Props props;
-    if (name in seen)
-        return props;
-    seen[name] = true;
-    foreach (part; itemsOf(schema.get("allOf")))
-    {
-        auto r = refName(part);
-        if (r !is null)
-        {
-            auto parent = collectProperties(spec, r, spec.schema(r), seen);
-            foreach (k; parent.names)
-                props.setDefault(k, parent.map[k]);
-        }
-        else if (part.isObj)
-        {
-            auto own = part.get("properties");
-            foreach (k; keysOf(own))
-                props.setDefault(k, own.fields[k]);
-            foreach (sub; itemsOf(part.get("allOf")))
-            {
-                auto r2 = refName(sub);
-                if (r2 !is null)
-                {
-                    auto inner = collectProperties(spec, r2, spec.schema(r2), seen);
-                    foreach (k; inner.names)
-                        props.setDefault(k, inner.map[k]);
-                }
-            }
-        }
-    }
-    auto own = schema.get("properties");
-    foreach (k; keysOf(own))
-        props.put(k, own.fields[k]);
-    return props;
-}
 
 string accessorRead(Spec spec, string dty, string jsonKey)
 {
@@ -1120,7 +600,7 @@ string renderObjectModel(Spec spec, string name, J schema)
 {
     const desc = oneLine(schema.get("description").orS("`" ~ name ~ "`"));
     bool[string] seen;
-    auto props = collectProperties(spec, name, schema, seen);
+    auto props = spec.collectProperties(name, schema, seen);
     string[] lines = ["/// " ~ desc, "struct " ~ name, "{", "    JSONValue raw;", ""];
     lines ~= "    static " ~ name ~ " fromJson(JSONValue value)";
     lines ~= "    {";
@@ -1170,7 +650,7 @@ string renderUnionModel(Spec spec, string name, J schema)
     string[] branches;
     foreach (part; itemsOf(schema.get("oneOf").or(schema.get("anyOf"))))
     {
-        auto r = refName(part);
+        auto r = spec.refName(part);
         if (r !is null)
             branches ~= r;
     }
@@ -1385,7 +865,7 @@ Success opSuccessSchema(Spec spec, J op)
         return Success(dTypeForSchema(spec, schema.get("items").or(J.obj())) ~ "[]", "array");
     if (t == "object" && !truthy(schema.get("properties")) && truthy(schema.get("additionalProperties")))
         return Success("JSONValue", "json");
-    auto r2 = refName(schema);
+    auto r2 = spec.refName(schema);
     if (r2 !is null)
         return Success(r2, "json");
     if (!truthy(content))
