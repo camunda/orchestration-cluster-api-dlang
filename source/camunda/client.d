@@ -288,9 +288,24 @@ unittest
     assert(loose.value == "anything");
 }
 
+version (unittest)
+{
+    /// Run `dg` with tenant env vars cleared so fixtures do not inherit them.
+    private void withoutTenantEnv(scope void delegate() @safe dg)
+    {
+        import std.process : environment;
+        static immutable keys = ["CAMUNDA_DEFAULT_TENANT_ID", "CAMUNDA_TENANT_ID"];
+        string[2] saved;
+        foreach (i, k; keys) { saved[i] = environment.get(k); environment.remove(k); }
+        scope (exit) foreach (i, k; keys) if (saved[i] !is null) environment[k] = saved[i];
+        dg();
+    }
+}
+
 unittest
 {
     // #8: the default tenant fills an unset tenantId, never overrides one.
+    withoutTenantEnv(() {
     auto c = CamundaClient.create(CamundaOptions.create
         .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
         .withKey("CAMUNDA_DEFAULT_TENANT_ID", "t1"));
@@ -303,12 +318,14 @@ unittest
     auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     assert(none.withDefaultTenant(parseJSON(`{"a":1}`))["tenantId"].str == "<default>");
     assert(none.withDefaultTenant(parseJSON(`{"tenantId":"mine"}`))["tenantId"].str == "mine");
+    });
 }
 
 unittest
 {
     // #14: activateJobs gets [effective default] for PROVIDED/unset filter
     // with no ids; explicit ids and ASSIGNED are left alone.
+    withoutTenantEnv(() {
     auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     auto t1 = CamundaClient.create(CamundaOptions.create
         .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
@@ -322,4 +339,5 @@ unittest
     assert("tenantIds" !in none.withDefaultJobTenants(parseJSON(`{"tenantFilter":"ASSIGNED"}`)).objectNoRef);
     assert(t1.effectiveDefaultTenant == "t1");
     assert(none.effectiveDefaultTenant == "<default>");
+    });
 }
