@@ -314,3 +314,28 @@ unittest
     bool[string] seen2;
     assertThrown!OpenApiLimitException(spec2.collectProperties("I", spec2.schema("I"), seen2));
 }
+
+// Operation-level parameters override path-level ones by (name, in), through
+// $refs; servers fall back operation -> path item -> document.
+unittest
+{
+    auto spec = new Spec(parseJson(`{"openapi":"3.0.0","servers":[{"url":"http://doc"}],
+        "components":{"parameters":{"Q":{"name":"q","in":"query","required":false}}},
+        "paths":{"/x":{"parameters":[{"name":"q","in":"query","required":true},
+                                     {"name":"q","in":"header"}],
+            "get":{"operationId":"getX","parameters":[{"$ref":"#/components/parameters/Q"}]}}}}`));
+    auto x = spec.operations[0];
+    auto ps = x.get("parameters").items;
+    assert(ps.length == 2, ps.length.to!string);
+    assert(ps[0].get("in").text == "header");
+    assert(ps[1].get("$ref").text == "#/components/parameters/Q");
+    assert(x.get("servers").items[0].get("url").text == "http://doc");
+    // Unresolvable / cyclic parameter refs and nameless parameters are typed errors.
+    assertThrown!OpenApiException(new Spec(parseJson(
+        `{"paths":{"/x":{"get":{"parameters":[{"$ref":"#/components/parameters/Nope"}]}}}}`)));
+    assertThrown!OpenApiCycleException(new Spec(parseJson(
+        `{"components":{"parameters":{"A":{"$ref":"#/components/parameters/A"}}},
+          "paths":{"/x":{"get":{"parameters":[{"$ref":"#/components/parameters/A"}]}}}}`)));
+    assertThrown!OpenApiException(new Spec(parseJson(
+        `{"paths":{"/x":{"get":{"parameters":[{"in":"query"}]}}}}`)));
+}

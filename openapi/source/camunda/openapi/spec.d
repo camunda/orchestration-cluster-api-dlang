@@ -121,12 +121,16 @@ final class Spec
                         o.set(k, v);
                 o.set("path", J.str(p));
                 o.set("method", J.str(m));
-                J[] params = itemsOf(item.get("parameters")).dup ~ itemsOf(op.get("parameters"));
-                o.set("parameters", J.arr(params));
+                o.set("parameters", J.arr(mergeParameters(item.get("parameters"), "#/paths/" ~ pointerEscape(p), op.get("parameters"), where)));
                 auto hasBody = new J(Kind.bool_);
                 hasBody.boolean = op.has("requestBody");
                 o.set("hasRequestBody", hasBody);
-                if (auto sv = op.get("servers") !is null ? op.get("servers") : item.get("servers"))
+                auto sv = op.get("servers");
+                if (sv is null)
+                    sv = item.get("servers");
+                if (sv is null)
+                    sv = spec.get("servers");
+                if (sv !is null)
                     o.set("servers", sv);
                 auto ext = J.obj();
                 foreach (k; op.keys)
@@ -137,6 +141,61 @@ final class Spec
             }
         }
         return ops;
+    }
+
+    /// Resolve a parameter, following `#/components/parameters/*` `$ref`s
+    /// (bounded by `limits.maxRefChain`, cycles detected).
+    private J resolveParameter(J p, string where)
+    {
+        enum PARAM_PREFIX = "#/components/parameters/";
+        bool[string] seen;
+        size_t chain = 0;
+        while (p !is null && p.isObj && p.get("$ref") !is null && p.get("$ref").isStr)
+        {
+            auto r = p.get("$ref").text;
+            if (r in seen)
+                throw new OpenApiCycleException("cyclic parameter $ref: " ~ r, r);
+            seen[r] = true;
+            if (++chain > limits.maxRefChain)
+                throw new OpenApiLimitException(
+                    "$ref chain longer than " ~ limits.maxRefChain.to!string ~ " at " ~ r, r);
+            if (!r.startsWith(PARAM_PREFIX))
+                throw new OpenApiException("unsupported parameter $ref: " ~ r, where);
+            p = spec.get("components").get("parameters").get(pointerUnescape(r[PARAM_PREFIX.length .. $]));
+            if (p is null)
+                throw new OpenApiException("unresolvable parameter $ref: " ~ r, where);
+        }
+        return p;
+    }
+
+    /// `(in, name)` identity of a parameter; a typed error when either is missing.
+    private string parameterId(J p, string where)
+    {
+        auto r = resolveParameter(p, where);
+        if (r is null || !r.isObj)
+            throw new OpenApiException("parameter is not an object", where);
+        auto n = r.get("name");
+        auto i = r.get("in");
+        if (n is null || !n.isStr || i is null || !i.isStr)
+            throw new OpenApiException("parameter has no string \"name\" and \"in\"", where);
+        return i.text ~ "\0" ~ n.text;
+    }
+
+    /**
+    Path-level parameters overridden by operation-level ones with the same
+    `(name, in)` (OpenAPI 3 semantics). Unmatched path-level parameters come
+    first in order; entries are returned as written (`$ref`s kept).
+    */
+    private J[] mergeParameters(J pathParams, string pathWhere, J opParams, string opWhere)
+    {
+        bool[string] overridden;
+        foreach (i, p; itemsOf(opParams))
+            overridden[parameterId(p, opWhere ~ "/parameters/" ~ i.to!string)] = true;
+        J[] merged;
+        foreach (i, p; itemsOf(pathParams))
+            if (parameterId(p, pathWhere ~ "/parameters/" ~ i.to!string) !in overridden)
+                merged ~= p;
+        return merged ~ itemsOf(opParams);
     }
 
     J schema(string name)
