@@ -53,6 +53,14 @@ struct CamundaOptions
     CamundaOptions withHeader(string name, string value)
     {
         validateHeader(name, value);
+        // Replace any existing entry with the same case-insensitive name so
+        // the latest call always wins, regardless of capitalization.
+        import std.uni : sicmp;
+        string[] stale;
+        foreach (k; headers.byKey)
+            if (sicmp(k, name) == 0) stale ~= k;
+        foreach (k; stale)
+            headers.remove(k);
         headers[name] = value;
         return this;
     }
@@ -83,6 +91,17 @@ string rootAddress(string restAddress) pure
     while (a.length && a[$ - 1] == '/') a = a[0 .. $ - 1];
     if (a.length >= 3 && a[$ - 3 .. $] == "/v2") a = a[0 .. $ - 3];
     return a;
+}
+
+unittest
+{
+    // withHeader: a later call wins regardless of capitalization, both orders.
+    auto a = CamundaOptions.create.withHeader("x-api-key", "old").withHeader("X-Api-Key", "new");
+    assert(a.headers == ["X-Api-Key": "new"]);
+    auto b = CamundaOptions.create.withHeader("X-Api-Key", "old").withHeader("x-api-key", "new");
+    assert(b.headers == ["x-api-key": "new"]);
+    auto c = CamundaOptions.create.withHeader("X-A", "1").withHeader("X-B", "2");
+    assert(c.headers == ["X-A": "1", "X-B": "2"]);
 }
 
 unittest
