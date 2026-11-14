@@ -47,29 +47,44 @@ support.
 
 ## Install
 
-Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orchestration-sdk):
+The SDK is published on the D package registry as
+[`camunda-orchestration-sdk`](https://code.dlang.org/packages/camunda-orchestration-sdk).
+Add it to your project with dub:
+
+```sh
+dub add camunda-orchestration-sdk
+```
+
+This adds the latest stable release (for example `"camunda-orchestration-sdk": "~>10.1.1"`)
+to your `dub.json`. dub picks stable releases over prereleases, so the 11.x
+alphas are not selected unless you ask for them.
+
+This is the `stable/10` line: **10.x** releases for Camunda 8.10, generated from
+camunda/camunda `stable/8.10`. `main` publishes `11.0.0-alpha.N` prereleases for 8.11.
+
+| Camunda | SDK line | Branch | Spec source (camunda/camunda) | `dub.json` constraint |
+| --- | --- | --- | --- | --- |
+| 8.10 | `10.x` (stable) | `stable/10` | `stable/8.10` | `"~>10.1"` |
+| 8.11 (in development) | `11.0.0-alpha.N` (prerelease) | `main` | `main` | `"~>11.0.0-alpha.2"` |
 
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk": "~>10.0"
+    "camunda-orchestration-sdk": "~>10.1"
   }
 }
 ```
 
-This is the `stable/10` line: **10.x** releases for Camunda 8.10, generated from
-camunda/camunda `stable/8.10`. `main` publishes 11.0.0 alphas for 8.11.
-To vendor the repo instead:
+Every release is a git tag (`vX.Y.Z`) with a
+[GitHub Release](https://github.com/camunda/orchestration-cluster-api-dlang/releases);
+the registry picks new tags up automatically.
 
-```json
-{
-  "dependencies": {
-    "camunda-orchestration-sdk": {
-      "repository": "git+https://github.com/camunda/orchestration-cluster-api-dlang.git",
-      "version": "~stable/10"
-    }
-  }
-}
+To build against an unreleased commit, check the branch out and register it
+locally (it then overrides the registry version for matching constraints):
+
+```sh
+git clone -b stable/10 https://github.com/camunda/orchestration-cluster-api-dlang.git
+dub add-local orchestration-cluster-api-dlang   # undo: dub remove-local …
 ```
 
 ### Transport only: `camunda-orchestration-sdk:runtime`
@@ -82,7 +97,7 @@ backpressure and TLS as the full SDK, without compiling the generated models.
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk:runtime": "~>10.0"
+    "camunda-orchestration-sdk:runtime": "~>10.1"
   }
 }
 ```
