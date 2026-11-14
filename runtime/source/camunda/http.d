@@ -6,6 +6,7 @@ module camunda.http;
 import camunda.errors;
 import camunda.jsonx;
 import camunda.safeio : ownText, readBytes;
+import camunda.transport : mergeHeadersCaseInsensitive;
 import std.json;
 import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
@@ -248,4 +249,49 @@ unittest
         assert(!raw.toLower.canFind("content-type"), raw);
         if (m == "POST" || m == "PUT") assert(hasHeader(raw, "content-length: 0"), raw);
     }
+}
+
+// camunda/orchestration-cluster-api-dlang#11: custom headers on the wire.
+unittest
+{
+    import std.algorithm.searching : canFind, count, startsWith;
+    import std.uni : toLower;
+
+    // JSON body: custom headers ride along; an Authorization entry under a
+    // different case replaces the SDK one (no duplicate line).
+    HttpRequest json;
+    json.method = "POST";
+    json.body_ = `{"name":"n"}`;
+    json.contentType = "application/json";
+    json.headers["Authorization"] = "Bearer sdk-token";
+    json.headers["Accept"] = "application/json, */*";
+    json.headers = mergeHeadersCaseInsensitive(json.headers,
+        ["X-Api-Key": "secret-key", "authorization": "Bearer gateway-token"]);
+    auto rawJson = captureRequest(json);
+    assert(hasHeader(rawJson, "x-api-key: secret-key"), rawJson);
+    assert(hasHeader(rawJson, "authorization: Bearer gateway-token"), rawJson);
+    assert(!rawJson.toLower.canFind("sdk-token"), rawJson);
+    assert(rawJson.toLower.count("authorization:") == 1, rawJson);
+    assert(hasHeader(rawJson, "content-type: application/json"), rawJson);
+    assert(bodyOf(rawJson) == `{"name":"n"}`, rawJson);
+
+    // Multipart: the boundary Content-Type survives and custom headers are sent.
+    HttpRequest mp;
+    mp.method = "POST";
+    mp.contentType = "multipart/form-data; boundary=XyZ";
+    mp.rawBody = cast(const(ubyte)[]) "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n";
+    mp.headers = mergeHeadersCaseInsensitive(mp.headers, ["X-Api-Key": "secret-key"]);
+    auto rawMp = captureRequest(mp);
+    assert(hasHeader(rawMp, "x-api-key: secret-key"), rawMp);
+    assert(hasHeader(rawMp, "content-type: multipart/form-data; boundary=XyZ"), rawMp);
+    assert(bodyOf(rawMp) == "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n", rawMp);
+
+    // Bodiless: custom headers are sent, still no Content-Type.
+    HttpRequest get;
+    get.method = "GET";
+    get.headers = mergeHeadersCaseInsensitive(get.headers, ["X-Api-Key": "secret-key"]);
+    auto rawGet = captureRequest(get);
+    assert(rawGet.startsWith("GET /v2/things HTTP/1.1\r\n"), rawGet);
+    assert(hasHeader(rawGet, "x-api-key: secret-key"), rawGet);
+    assert(!rawGet.toLower.canFind("content-type"), rawGet);
 }

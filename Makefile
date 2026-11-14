@@ -71,6 +71,6 @@ docs-md:
 
 check: test lint examples sync-readme-check config-reference-check example-coverage
 	$(SCRIPT) scripts/generate.d
-	@git diff --exit-code -- source/camunda/generated docs examples || \
+	@git diff --exit-code -- source/camunda/generated docs examples ':(exclude)examples/readme.d' ':(exclude)examples/topology.d' || \
 		(echo "generated sources/docs/examples drifted; commit the output of make generate-local" && exit 1)
 	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links

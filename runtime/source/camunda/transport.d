@@ -23,6 +23,9 @@ struct CamundaOptions
 {
     string[string] config;
     Clock clock;
+    /// Custom headers applied to every API request, on top of (and winning
+    /// over) `CAMUNDA_DEFAULT_HEADERS`. Values may be secrets: never log them.
+    string[string] headers;
 
     static CamundaOptions create()
     {
@@ -33,6 +36,15 @@ struct CamundaOptions
     CamundaOptions withKey(string key, string value)
     {
         config[key] = value;
+        return this;
+    }
+
+    /// Add a custom header sent with every API request (never to the OAuth
+    /// token endpoint). Applied last, merged case-insensitively, so it may
+    /// replace the SDK's own `Authorization` / `Accept` headers.
+    CamundaOptions withHeader(string name, string value)
+    {
+        headers[name] = value;
         return this;
     }
 
@@ -78,6 +90,7 @@ final class Transport
     private Clock _clock;
     private BackpressureManager _bp;
     private string _userAgent = sdkUserAgent;
+    private string[string] _headers;
 
     this(CamundaOptions options)
     {
@@ -87,6 +100,9 @@ final class Transport
         _clock = options.clock is null ? liveClock() : options.clock;
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
+        // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
+        // (case-insensitive) name.
+        _headers = mergeHeadersCaseInsensitive(_config.defaultHeaders, options.headers);
     }
 
     static Transport fromEnv()
@@ -109,6 +125,10 @@ final class Transport
     /// Override the `User-Agent` (e.g. a CLI identifying itself).
     void userAgent(string ua) { _userAgent = ua; }
     string userAgent() const { return _userAgent; }
+
+    /// The custom headers sent with every request (config + programmatic,
+    /// already merged). Values may be secrets: never log them.
+    const(string[string]) headers() const { return _headers; }
 
     JSONValue requestJson(string method, string path, JSONValue body_, string[string] query,
         ServerBase server = ServerBase.api)
@@ -206,6 +226,11 @@ final class Transport
         req.headers = _auth.headers();
         req.headers["Accept"] = "application/json, */*";
         req.headers["User-Agent"] = _userAgent;
+        // Custom headers go last and merge case-insensitively, so they may
+        // replace the SDK's own Authorization/Accept (matching c8ctl). They
+        // never reach the OAuth token endpoint: that request is built in
+        // auth.d, not here. Values may be secrets: never log them.
+        req.headers = mergeHeadersCaseInsensitive(req.headers, _headers);
         req.certPath = _config.tls.certPath;
         req.keyPath = _config.tls.keyPath;
         req.caPath = _config.tls.caPath;
@@ -227,6 +252,50 @@ bool shouldSendJsonBody(string method, const JSONValue body_)
 {
     if (method == "GET") return false;
     return body_.type != JSONType.null_;
+}
+
+/// Merge `over` onto `base`, matching header names case-insensitively: when
+/// both carry the same name under different cases, the `over` entry replaces
+/// the `base` entry (keeping the `over` spelling) instead of adding a
+/// duplicate line. (camunda/orchestration-cluster-api-dlang#11)
+string[string] mergeHeadersCaseInsensitive(const string[string] base, const string[string] over)
+{
+    import std.string : toLower;
+    string[string] merged = base.dup;
+    foreach (name, value; over)
+    {
+        string existing;
+        foreach (k; merged.keys)
+        {
+            if (k.toLower == name.toLower) { existing = k; break; }
+        }
+        if (existing.length) merged.remove(existing);
+        merged[name] = value;
+    }
+    return merged;
+}
+
+unittest
+{
+    auto merged = mergeHeadersCaseInsensitive(
+        ["Authorization": "Bearer sdk", "Accept": "application/json, */*"],
+        ["authorization": "Bearer custom", "X-Api-Key": "k"]);
+    assert(merged.length == 3);
+    assert(merged["authorization"] == "Bearer custom");
+    assert(merged["Accept"] == "application/json, */*");
+    assert(merged["X-Api-Key"] == "k");
+    // No case-variant duplicates.
+    import std.string : toLower;
+    int authCount;
+    foreach (k; merged.keys) if (k.toLower == "authorization") authCount++;
+    assert(authCount == 1);
+}
+
+unittest
+{
+    // Empty on either side is a copy of the other.
+    assert(mergeHeadersCaseInsensitive(null, ["A": "1"]) == ["A": "1"]);
+    assert(mergeHeadersCaseInsensitive(["A": "1"], null) == ["A": "1"]);
 }
 
 unittest
@@ -260,4 +329,17 @@ unittest
         .withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     assert(joinUrl(t.baseAddress(ServerBase.root), "/cluster/v2/status") == "http://localhost:8080/cluster/v2/status");
     assert(joinUrl(t.baseAddress(), "/topology") == "http://localhost:8080/v2/topology");
+}
+
+unittest
+{
+    // camunda/orchestration-cluster-api-dlang#11: config + programmatic
+    // headers merge case-insensitively; the programmatic one wins.
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_DEFAULT_HEADERS", `{"X-Api-Key":"from-env","X-Other":"env"}`)
+        .withHeader("x-api-key", "from-code"));
+    assert(t.headers.length == 2);
+    assert(t.headers["x-api-key"] == "from-code");
+    assert(t.headers["X-Other"] == "env");
 }
