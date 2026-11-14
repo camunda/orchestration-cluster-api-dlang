@@ -103,6 +103,21 @@ void semanticKeys()
     cast(void) loose;
 }
 
+void customHeaders()
+{
+    // region CustomHeaders
+    import camunda;
+
+    // Env: CAMUNDA_DEFAULT_HEADERS='{"X-Api-Key":"…"}' — or programmatically:
+    auto client = CamundaClient.create(
+        CamundaOptions.create
+            .withHeader("X-Api-Key", "my-gateway-key")
+            .withHeader("X-Correlation-Id", "req-42"),
+    );
+    // endregion CustomHeaders
+    cast(void) client;
+}
+
 void main()
 {
     // Type-check only. Do not run against a live cluster from this file.
