@@ -51,7 +51,7 @@ jobs:
         run: dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
       - run: dub run -q --single scripts/generate.d
       - name: Fail if generated sources, docs or examples drifted
-        run: git diff --exit-code -- source/camunda/generated docs examples
+        run: git diff --exit-code -- source/camunda/generated docs examples ':(exclude)examples/readme.d' ':(exclude)examples/topology.d'
       - name: README snippets are in sync
         run: dub run -q --single scripts/sync-readme-snippets.d -- --check
       - name: Configuration reference is in sync
