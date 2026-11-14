@@ -1,3 +1,10 @@
+# [11.0.0-alpha.3](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.2...v11.0.0-alpha.3) (2026-11-14)
+
+
+### Features
+
+* **runtime:** custom HTTP headers on every request ([#12](https://github.com/camunda/orchestration-cluster-api-dlang/issues/12)) ([8d57e09](https://github.com/camunda/orchestration-cluster-api-dlang/commit/8d57e09b1c0be18811068aa5aeb63c35b538ef95)), closes [#11](https://github.com/camunda/orchestration-cluster-api-dlang/issues/11)
+
 # [11.0.0-alpha.2](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.1...v11.0.0-alpha.2) (2026-11-14)
 
 
