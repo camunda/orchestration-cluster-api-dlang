@@ -186,9 +186,10 @@ auto client = CamundaClient.create(
 
 Custom headers are applied **last** and merged case-insensitively (no
 duplicate header lines), so they may replace the SDK's own `Authorization`
-header — matching c8ctl. The exception is `Content-Type`, which is fixed by
-the request body and cannot be overridden. They are **not** sent to the
-OAuth token endpoint. Header values may be secrets: the SDK never logs them.
+header — matching c8ctl. A custom `Content-Type` overrides even the request
+body's default: for a multipart body you must then preserve the boundary
+parameter yourself. They are **not** sent to the OAuth token endpoint.
+Header values may be secrets: the SDK never logs them.
 
 ## Semantic keys
 
@@ -263,7 +264,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_BASIC_AUTH_USERNAME` | — | Basic-auth username. |
 | `CAMUNDA_BASIC_AUTH_PASSWORD` | — | Basic-auth password. |
 | `CAMUNDA_DEFAULT_TENANT_ID` | — | Default tenant id applied to tenant-aware operations (alias `CAMUNDA_TENANT_ID`). |
-| `CAMUNDA_DEFAULT_HEADERS` | — | Custom headers sent with every API request, as a JSON object of header name to value (`{"X-Api-Key":"…"}`). Applied last, merged case-insensitively (may replace `Authorization`, but not `Content-Type`, which is fixed by the request body); never sent to the OAuth token endpoint. Values may be secrets. |
+| `CAMUNDA_DEFAULT_HEADERS` | — | Custom headers sent with every API request, as a JSON object of header name to value (`{"X-Api-Key":"…"}`). Applied last, merged case-insensitively (may replace `Authorization` — and even `Content-Type`; for a multipart body you must then preserve the boundary parameter yourself); never sent to the OAuth token endpoint. Values may be secrets. |
 | `CAMUNDA_TENANT_ID` | — | Alias for `CAMUNDA_DEFAULT_TENANT_ID`. |
 | `CAMUNDA_TENANT_IDS` | — | Comma-separated default tenant ids (e.g. for job activation). |
 | `CAMUNDA_SDK_BACKPRESSURE_PROFILE` | `BALANCED` | `BALANCED`, `CONSERVATIVE`, `AGGRESSIVE`, or `LEGACY` (observe-only). |

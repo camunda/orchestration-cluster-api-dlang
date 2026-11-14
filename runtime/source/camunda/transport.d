@@ -24,8 +24,10 @@ struct CamundaOptions
     string[string] config;
     Clock clock;
     /// Custom headers applied to every API request, on top of (and winning
-    /// over) `CAMUNDA_DEFAULT_HEADERS`. `Content-Type` is fixed by the body
-    /// and cannot be overridden. Values may be secrets: never log them.
+    /// over) `CAMUNDA_DEFAULT_HEADERS`. A custom `Content-Type` overrides
+    /// even the body's default — for a multipart body you must then preserve
+    /// the boundary parameter yourself. Values may be secrets: never log
+    /// them.
     string[string] headers;
 
     static CamundaOptions create()
@@ -42,8 +44,9 @@ struct CamundaOptions
 
     /// Add a custom header sent with every API request (never to the OAuth
     /// token endpoint). Applied last, merged case-insensitively, so it may
-    /// replace the SDK's own `Authorization` / `Accept` headers — but not
-    /// `Content-Type`, which is fixed by the request body. The name must be
+    /// replace the SDK's own `Authorization` / `Accept` headers — and even
+    /// `Content-Type`: for a multipart body you must then preserve the
+    /// boundary parameter yourself. The name must be
     /// an HTTP token and the value free of control characters (horizontal
     /// tab allowed); anything else is a `ConfigException` whose message
     /// names the header but never the value (it may be a secret).
