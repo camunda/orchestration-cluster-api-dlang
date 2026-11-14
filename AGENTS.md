@@ -114,8 +114,9 @@ for review-comment fix-ups and regeneration commits.
 
 `main` publishes **11.x-alpha** via semantic-release (Camunda 8.11 / next).
 `stable/N` publishes `N.x` on the release channel. The workflow is
-`.github/workflows/publish.yml`. It stamps `dub.json` and
-`source/camunda/version_.d`, tags `vX.Y.Z`, opens a GitHub Release, and pings
+`.github/workflows/publish.yml`. It stamps
+`runtime/source/camunda/version_.d` (never put a `"version"` in `dub.json`:
+code.dlang.org takes versions from git tags and flags a declared one), tags `vX.Y.Z`, opens a GitHub Release, and pings
 code.dlang.org when `DUB_REGISTRY_TOKEN` is set.
 
 Release identity fails open: with Vault secrets (`VAULT_ADDR`, …) it pushes as
