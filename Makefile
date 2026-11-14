@@ -2,6 +2,9 @@
 	sync-readme sync-readme-check config-reference config-reference-check \
 	example-coverage docs-md
 
+# Repo tooling is D, run as dub single-file programs (no Python needed).
+SCRIPT = dub run -q --single
+
 help:
 	@echo "Camunda Orchestration Cluster API — D SDK"
 	@echo ""
@@ -26,7 +29,7 @@ bundle-spec:
 generate: bundle-spec generate-local
 
 generate-local:
-	python3 scripts/generate.py
+	$(SCRIPT) scripts/generate.d
 
 test:
 	dub test
@@ -48,25 +51,25 @@ examples:
 	done
 
 sync-readme:
-	python3 scripts/sync-readme-snippets.py
+	$(SCRIPT) scripts/sync-readme-snippets.d
 
 sync-readme-check:
-	python3 scripts/sync-readme-snippets.py --check
+	$(SCRIPT) scripts/sync-readme-snippets.d -- --check
 
 config-reference:
-	python3 scripts/generate-config-reference.py
+	$(SCRIPT) scripts/generate-config-reference.d
 
 config-reference-check:
-	python3 scripts/generate-config-reference.py --check
+	$(SCRIPT) scripts/generate-config-reference.d -- --check
 
 example-coverage:
-	python3 scripts/check-example-coverage.py
+	$(SCRIPT) scripts/check-example-coverage.d
 
 docs-md:
-	python3 scripts/generate-docusaurus-md.py --validate-links
+	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links
 
 check: test lint examples sync-readme-check config-reference-check example-coverage
-	python3 scripts/generate.py
+	$(SCRIPT) scripts/generate.d
 	@git diff --exit-code -- source/camunda/generated docs examples || \
 		(echo "generated sources/docs/examples drifted; commit the output of make generate-local" && exit 1)
-	python3 scripts/generate-docusaurus-md.py --validate-links
+	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links

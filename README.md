@@ -42,6 +42,9 @@ helps close that gap.
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
 - libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
 
+On macOS: `brew install ldc dub`. Elsewhere, see the
+[LDC releases](https://github.com/ldc-developers/ldc/releases).
+
 DMD and GDC are rejected: the build requires LDC's DIP1000 / nosharedaccess
 support.
 
@@ -282,10 +285,12 @@ Generated from the bundled spec (do not edit by hand):
 The spec comes from [camunda/camunda](https://github.com/camunda/camunda)
 (`zeebe/gateway-protocol/src/main/proto/v2`), fetched and bundled by
 [camunda-schema-bundler](https://www.npmjs.com/package/camunda-schema-bundler),
-the same tool and pipeline as the JS SDK:
+the same tool and pipeline as the JS SDK. The bundled spec is committed, so
+only fetching a new spec needs Node.js. The generator and every repository
+check are D programs in `scripts/`, run by dub with the toolchain above:
 
 ```sh
-npm install
+npm install                           # Node.js: only for make generate / bundle-spec
 make generate                         # bundle from camunda/camunda main, then generate
 SPEC_REF=<branch|tag|sha> make generate
 make generate-local                   # regenerate from the committed bundle only

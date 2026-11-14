@@ -15,7 +15,7 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 
 ## What is generated (do not hand-edit)
 
-`scripts/generate.py` is the pipeline, numbered like the sibling SDKs:
+`scripts/generate.d` is the pipeline, numbered like the sibling SDKs:
 
 | Hook | Output | Contents |
 | --- | --- | --- |

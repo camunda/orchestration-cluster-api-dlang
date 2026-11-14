@@ -44,17 +44,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: dlang-community/setup-dlang@v2
         with:
-          python-version: "3.12"
-      - run: python3 scripts/generate.py
+          compiler: ldc-1.43.0
+      - run: dub run -q --single scripts/generate.d
       - name: Fail if generated sources, docs or examples drifted
         run: git diff --exit-code -- source/camunda/generated docs examples
       - name: README snippets are in sync
-        run: python3 scripts/sync-readme-snippets.py --check
+        run: dub run -q --single scripts/sync-readme-snippets.d -- --check
       - name: Configuration reference is in sync
-        run: python3 scripts/generate-config-reference.py --check
+        run: dub run -q --single scripts/generate-config-reference.d -- --check
       - name: Example coverage is complete
-        run: python3 scripts/check-example-coverage.py
+        run: dub run -q --single scripts/check-example-coverage.d
       - name: Docusaurus markdown
-        run: python3 scripts/generate-docusaurus-md.py --validate-links
+        run: dub run -q --single scripts/generate-docusaurus-md.d -- --validate-links
