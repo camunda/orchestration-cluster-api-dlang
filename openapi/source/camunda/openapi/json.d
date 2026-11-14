@@ -133,6 +133,41 @@ string pointerUnescape(string segment)
     return segment.replace("~1", "/").replace("~0", "~");
 }
 
+/**
+Percent-decode a URI fragment (RFC 3986) so it can be read as an RFC 6901
+JSON pointer. Malformed escapes and non-UTF-8 results are typed errors.
+*/
+string fragmentDecode(string fragment)
+{
+    import std.utf : validate, UTFException;
+    static int hex(char c)
+    {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+    char[] o;
+    for (size_t i = 0; i < fragment.length; i++)
+    {
+        if (fragment[i] != '%')
+        {
+            o ~= fragment[i];
+            continue;
+        }
+        if (i + 2 >= fragment.length || hex(fragment[i + 1]) < 0 || hex(fragment[i + 2]) < 0)
+            throw new OpenApiException("malformed percent-encoding in $ref: " ~ fragment, fragment);
+        o ~= cast(char)(hex(fragment[i + 1]) * 16 + hex(fragment[i + 2]));
+        i += 2;
+    }
+    string r = o.idup;
+    try
+        validate(r);
+    catch (UTFException)
+        throw new OpenApiException("$ref is not valid UTF-8 after percent-decoding: " ~ fragment, fragment);
+    return r;
+}
+
 struct Parser
 {
     string s;

@@ -339,3 +339,58 @@ unittest
     assertThrown!OpenApiException(new Spec(parseJson(
         `{"paths":{"/x":{"get":{"parameters":[{"in":"query"}]}}}}`)));
 }
+
+// Percent-encoded fragments are decoded before JSON-pointer interpretation
+// (schema and parameter refs); malformed encodings are typed errors.
+unittest
+{
+    auto spec = new Spec(specWith(`{"Foo.Bar":{"properties":{"a":{}}},
+        "Use":{"allOf":[{"$ref":"#/components/schemas/Foo%2EBar"}]}}`));
+    bool[string] seen;
+    assert(spec.collectProperties("Use", spec.schema("Use"), seen).names == ["a"]);
+    assertThrown!OpenApiException(spec.refName(parseJson(`{"$ref":"#/components/schemas/Foo%2"}`)));
+    assertThrown!OpenApiException(spec.refName(parseJson(`{"$ref":"#/components/schemas/%ZZ"}`)));
+    assertThrown!OpenApiException(spec.refName(parseJson(`{"$ref":"#/components/schemas/%FF"}`)));
+
+    auto p = new Spec(parseJson(`{"openapi":"3.0.0","components":{"parameters":{"q.x":{"name":"q","in":"query"}}},
+        "paths":{"/x":{"get":{"operationId":"x","parameters":[{"$ref":"#/components/parameters/q%2Ex"}]}}}}`));
+    assert(p.operations.length == 1);
+}
+
+// Path Item $refs are rejected rather than silently dropping operations.
+unittest
+{
+    assertThrown!OpenApiException(new Spec(parseJson(`{"openapi":"3.0.0","paths":{
+        "/base":{"get":{"operationId":"b"}},"/alias":{"$ref":"#/paths/~1base"}}}`)));
+}
+
+// Flattening rejects missing components and non-component refs (direct,
+// in allOf, and via a deep alias) instead of producing empty/wrong props.
+unittest
+{
+    bool[string] seen;
+    auto missing = new Spec(specWith(`{"A":{"allOf":[{"$ref":"#/components/schemas/Missing"}]},
+        "B":{"$ref":"#/components/schemas/Missing"}}`));
+    assertThrown!OpenApiException(missing.collectProperties("A", missing.schema("A"), seen));
+    seen = null;
+    assertThrown!OpenApiException(missing.collectProperties("B", missing.schema("B"), seen));
+    seen = null;
+    auto nonComp = new Spec(specWith(`{"schema":{"properties":{"wrong":{}}},
+        "A":{"allOf":[{"$ref":"#/paths/~1x/get/responses/200/content/application~1json/schema"}]},
+        "D":{"allOf":[{"$ref":"#/components/schemas/Alias/allOf/0"}]},
+        "Alias":{"allOf":[{"$ref":"#/paths/~1x/schema"}]}}`));
+    assertThrown!OpenApiException(nonComp.collectProperties("A", nonComp.schema("A"), seen));
+    seen = null;
+    assertThrown!OpenApiException(nonComp.collectProperties("D", nonComp.schema("D"), seen));
+}
+
+// OpenAPI 3.1: siblings of $ref inside an allOf member contribute.
+unittest
+{
+    auto spec = new Spec(specWith(`{"Base":{"properties":{"id":{}}},
+        "S":{"allOf":[{"$ref":"#/components/schemas/Base","required":["id"],"properties":{"extra":{}}}]}}`));
+    bool[string] seen;
+    auto props = spec.collectProperties("S", spec.schema("S"), seen);
+    assert(props.isRequired("id"));
+    assert(props.names == ["id", "extra"], props.names.to!string);
+}

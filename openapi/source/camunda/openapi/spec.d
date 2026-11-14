@@ -22,7 +22,7 @@ import std.string : startsWith;
 import camunda.openapi.errors
     : OpenApiCycleException, OpenApiException, OpenApiLimitException;
 import camunda.openapi.json
-    : J, Kind, Limits, get, has, itemsOf, keysOf, pointerEscape, pointerUnescape, pyStrOrNull, truthy;
+    : J, Kind, Limits, fragmentDecode, get, has, itemsOf, keysOf, pointerEscape, pointerUnescape, pyStrOrNull, truthy;
 
 /// Component path prefix for local schema `$ref`s.
 enum COMPONENT_PREFIX = "#/components/schemas/";
@@ -106,6 +106,9 @@ final class Spec
             auto item = paths.fields[p];
             if (item is null || !item.isObj)
                 continue;
+            if (item.has("$ref"))
+                throw new OpenApiException("unsupported Path Item $ref (operations would be dropped)",
+                    "#/paths/" ~ pointerEscape(p));
             foreach (m; item.keys)
             {
                 import std.algorithm.searching : canFind;
@@ -152,7 +155,7 @@ final class Spec
         size_t chain = 0;
         while (p !is null && p.isObj && p.get("$ref") !is null && p.get("$ref").isStr)
         {
-            auto r = p.get("$ref").text;
+            auto r = fragmentDecode(p.get("$ref").text);
             if (r in seen)
                 throw new OpenApiCycleException("cyclic parameter $ref: " ~ r, r);
             seen[r] = true;
@@ -220,11 +223,26 @@ final class Spec
     */
     string refName(J node)
     {
+        return resolveRef(node, false);
+    }
+
+    /// Like `refName`, but rejects any `$ref` (including one reached through
+    /// a deep alias) that does not name an existing schema component.
+    string componentRef(J node, string where)
+    {
+        auto n = resolveRef(node, true);
+        if (n !is null && schemas.get(n) is null)
+            throw new OpenApiException("$ref to missing schema component: " ~ COMPONENT_PREFIX ~ pointerEscape(n), where);
+        return n;
+    }
+
+    private string resolveRef(J node, bool componentsOnly)
+    {
         bool[string] seen;
         size_t chain = 0;
         while (node !is null && node.isObj && node.get("$ref") !is null && node.get("$ref").isStr)
         {
-            auto r = node.get("$ref").text;
+            auto r = fragmentDecode(node.get("$ref").text);
             if (r in seen)
                 throw new OpenApiCycleException("cyclic $ref: " ~ r, r);
             seen[r] = true;
@@ -232,7 +250,11 @@ final class Spec
                 throw new OpenApiLimitException(
                     "$ref chain longer than " ~ limits.maxRefChain.to!string ~ " at " ~ r, r);
             if (!r.startsWith(COMPONENT_PREFIX))
-                return r.split("/")[$ - 1];
+            {
+                if (componentsOnly)
+                    throw new OpenApiException("unsupported non-component schema $ref: " ~ r, r);
+                return pointerUnescape(r.split("/")[$ - 1]);
+            }
             auto parts = r[COMPONENT_PREFIX.length .. $].split("/");
             if (parts.length == 1)
                 return pointerUnescape(parts[0]);
@@ -316,17 +338,14 @@ final class Spec
         {
             return collect(r, this.schema(r), seen, depth + 1, COMPONENT_PREFIX ~ pointerEscape(r));
         }
-        auto self = refName(schema);
+        auto self = componentRef(schema, where);
         if (self !is null)
             props.mergeParent(sub(self));
+        // Members are traversed whole: in OpenAPI 3.1 `$ref` siblings
+        // (`required`, `properties`, nested `allOf`) also apply.
         foreach (i, part; itemsOf(schema.get("allOf")))
-        {
-            auto r = refName(part);
-            if (r !is null)
-                props.mergeParent(sub(r));
-            else if (part.isObj)
+            if (part.isObj)
                 props.mergeParent(collect(null, part, seen, depth + 1, where ~ "/allOf/" ~ i.to!string));
-        }
         auto own = schema.get("properties");
         foreach (k; keysOf(own))
             props.put(k, own.fields[k]);
