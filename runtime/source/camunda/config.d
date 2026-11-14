@@ -84,6 +84,10 @@ struct CamundaConfig
     string[] tenantIds;
     BackpressureProfile backpressureProfile = BackpressureProfile.balanced;
     LogLevel logLevel = LogLevel.info;
+    /// Custom headers applied to every API request (never to the OAuth token
+    /// endpoint). Parsed from `CAMUNDA_DEFAULT_HEADERS`. Values may be
+    /// secrets: never log them.
+    string[string] defaultHeaders;
     long eventualPollDefaultMs = 10_000;
     RetryConfig retry;
     TlsConfig tls;
@@ -157,6 +161,7 @@ struct CamundaConfig
 
         c.defaultTenantId = first(["CAMUNDA_DEFAULT_TENANT_ID", "CAMUNDA_TENANT_ID"]);
         c.tenantIds = parseTenantIds(get("CAMUNDA_TENANT_IDS"), c.defaultTenantId);
+        c.defaultHeaders = parseDefaultHeaders(get("CAMUNDA_DEFAULT_HEADERS"));
 
         auto profile = get("CAMUNDA_SDK_BACKPRESSURE_PROFILE");
         if (profile.length) c.backpressureProfile = parseProfile(profile);
@@ -314,6 +319,36 @@ private string[] parseTenantIds(string list, string single)
     return null;
 }
 
+/// Parse `CAMUNDA_DEFAULT_HEADERS`: a JSON object mapping header names to
+/// string values (`{"X-Api-Key":"…"}`). Anything else is a config error that
+/// names the key. Header values may be secrets — the error message never
+/// includes them (in particular the JSON parser's own diagnostic, which can
+/// quote offending input, is not forwarded).
+private string[string] parseDefaultHeaders(string raw)
+{
+    string[string] headers;
+    if (raw is null || !raw.length) return headers;
+    import camunda.transport : validateHeader;
+    import std.json : JSONType, JSONValue, parseJSON;
+    JSONValue j;
+    try j = parseJSON(raw);
+    catch (Exception)
+        throw new ConfigException(
+            "CAMUNDA_DEFAULT_HEADERS must be a JSON object of header name to value");
+    if (j.type != JSONType.object)
+        throw new ConfigException(
+            "CAMUNDA_DEFAULT_HEADERS must be a JSON object of header name to value");
+    foreach (name, value; j.objectNoRef)
+    {
+        if (value.type != JSONType.string)
+            throw new ConfigException(
+                "CAMUNDA_DEFAULT_HEADERS header '" ~ name ~ "' must have a string value");
+        validateHeader(name, value.str, "CAMUNDA_DEFAULT_HEADERS header");
+        headers[name] = value.str;
+    }
+    return headers;
+}
+
 unittest
 {
     auto c = CamundaConfig.fromMap(null);
@@ -399,4 +434,85 @@ unittest
     try CamundaConfig.fromMap(["CAMUNDA_AUTH_STRATEGY": "KERBEROS"]);
     catch (ConfigException) threw = true;
     assert(threw);
+}
+
+unittest
+{
+    auto c = CamundaConfig.fromMap([
+        "CAMUNDA_DEFAULT_HEADERS": `{"X-Api-Key":"abc123","X-Correlation-Id":"req-1"}`,
+    ]);
+    assert(c.defaultHeaders == ["X-Api-Key": "abc123", "X-Correlation-Id": "req-1"]);
+}
+
+unittest
+{
+    // Unset and empty both mean "no custom headers".
+    assert(CamundaConfig.fromMap(null).defaultHeaders.length == 0);
+    assert(CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": ""]).defaultHeaders.length == 0);
+    assert(CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": "{}"]).defaultHeaders.length == 0);
+}
+
+unittest
+{
+    // Malformed values are config errors that name the key (never the values).
+    foreach (bad; ["not json", `["X-Api-Key"]`, `"X-Api-Key"`, `42`,
+        `{"X-Api-Key":42}`, `{"X-Api-Key":{"nested":true}}`, `{"":"v"}`])
+    {
+        try
+        {
+            CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": bad]);
+            assert(false, "expected ConfigException for " ~ bad);
+        }
+        catch (ConfigException e)
+        {
+            import std.algorithm.searching : canFind;
+            assert(e.msg.canFind("CAMUNDA_DEFAULT_HEADERS"), e.msg);
+        }
+    }
+}
+
+unittest
+{
+    // The JSON parser's diagnostic can quote offending input — including
+    // characters inside a malformed secret value — so it is never forwarded.
+    import std.algorithm.searching : canFind;
+    const secret = "hunter2";
+    foreach (bad; [`{"X-Api-Key":"` ~ secret ~ "\x01\"}", `{"X-Api-Key":"` ~ secret ~ `\x"}`,
+        `{"X-Api-Key":"` ~ secret ~ `", "B`])
+    {
+        try
+        {
+            CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": bad]);
+            assert(false, "expected ConfigException");
+        }
+        catch (ConfigException e)
+        {
+            assert(e.msg.canFind("CAMUNDA_DEFAULT_HEADERS"), e.msg);
+            assert(!e.msg.canFind(secret), e.msg);
+        }
+    }
+}
+
+unittest
+{
+    // Header syntax is validated on this path too: an escaped \r\n in a
+    // value must not be able to inject an extra wire header.
+    import std.algorithm.searching : canFind;
+    try
+    {
+        CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": `{"X-Api-Key":"a\r\nInjected: yes"}`]);
+        assert(false, "expected ConfigException");
+    }
+    catch (ConfigException e)
+    {
+        assert(e.msg.canFind("CAMUNDA_DEFAULT_HEADERS"), e.msg);
+        assert(e.msg.canFind("X-Api-Key"), e.msg);
+        assert(!e.msg.canFind("Injected"), e.msg);
+    }
+    try
+    {
+        CamundaConfig.fromMap(["CAMUNDA_DEFAULT_HEADERS": `{"Bad Name":"v"}`]);
+        assert(false, "expected ConfigException");
+    }
+    catch (ConfigException) {}
 }

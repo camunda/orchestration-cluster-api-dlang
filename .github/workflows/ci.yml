@@ -49,7 +49,7 @@ jobs:
           python-version: "3.12"
       - run: python3 scripts/generate.py
       - name: Fail if generated sources, docs or examples drifted
-        run: git diff --exit-code -- source/camunda/generated docs examples
+        run: git diff --exit-code -- source/camunda/generated docs examples ':(exclude)examples/readme.d' ':(exclude)examples/topology.d'
       - name: README snippets are in sync
         run: python3 scripts/sync-readme-snippets.py --check
       - name: Configuration reference is in sync

@@ -6,6 +6,7 @@ module camunda.http;
 import camunda.errors;
 import camunda.jsonx;
 import camunda.safeio : ownText, readBytes;
+import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
 import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
@@ -19,7 +20,13 @@ struct HttpRequest
     const(ubyte)[] rawBody;
     /// Content-Type of the body. Only sent when there is a body; defaults to
     /// `application/json` then. Bodiless requests carry no Content-Type.
+    /// Ignored when `headers` already carries a Content-Type entry (that one
+    /// is sent instead).
     string contentType;
+    /// Send an empty `Expect` header to suppress curl's `100-continue` round
+    /// trip on requests with a body (gateways answer it inconsistently).
+    /// Cleared by baseRequest when the caller set an explicit Expect header.
+    bool suppressExpect = true;
     long timeoutMs = 30_000;
     // mTLS
     string certPath;
@@ -65,12 +72,17 @@ HttpResponse perform(const ref HttpRequest req) @trusted
     if (req.rawBody.length) payload = req.rawBody;
     else if (req.body_.length) payload = req.body_;
     const hasBody = payload.length > 0 && req.method != "GET" && req.method != "HEAD";
+    // Content-Type/Expect defaults are filled in only when the caller's
+    // headers do not already carry the name: an explicit custom header always
+    // wins, for every request shape. (camunda/orchestration-cluster-api-dlang#12)
+    const customContentType = hasHeaderNamed(req.headers, "content-type");
+    const customExpect = hasHeaderNamed(req.headers, "expect");
     if (hasBody)
     {
         http.method = HTTP.Method.post;
-        http.setPostData(payload, req.contentType.length ? req.contentType : "application/json");
-        // No `Expect: 100-continue` round trip (gateways answer it inconsistently).
-        http.addRequestHeader("Expect", "");
+        http.setPostData(payload,
+            customContentType ? "" : req.contentType.length ? req.contentType : "application/json");
+        if (req.suppressExpect && !customExpect) http.addRequestHeader("Expect", "");
         if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
     }
     else switch (req.method)
@@ -83,7 +95,7 @@ HttpResponse perform(const ref HttpRequest req) @trusted
         http.method = HTTP.Method.post;
         http.handle.set(CurlOption.postfields, "");
         http.handle.set(CurlOption.postfieldsize, 0L);
-        http.addRequestHeader("Content-Type", "");
+        if (!customContentType) http.addRequestHeader("Content-Type", "");
         if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
         break;
     default:
@@ -248,4 +260,99 @@ unittest
         assert(!raw.toLower.canFind("content-type"), raw);
         if (m == "POST" || m == "PUT") assert(hasHeader(raw, "content-length: 0"), raw);
     }
+}
+
+// camunda/orchestration-cluster-api-dlang#11: custom headers on the wire.
+unittest
+{
+    import std.algorithm.searching : canFind, count, startsWith;
+    import std.uni : toLower;
+
+    // JSON body: custom headers ride along; an Authorization entry under a
+    // different case replaces the SDK one (no duplicate line).
+    HttpRequest json;
+    json.method = "POST";
+    json.body_ = `{"name":"n"}`;
+    json.contentType = "application/json";
+    json.headers["Authorization"] = "Bearer sdk-token";
+    json.headers["Accept"] = "application/json, */*";
+    json.headers = mergeHeadersCaseInsensitive(json.headers,
+        ["X-Api-Key": "secret-key", "authorization": "Bearer gateway-token"]);
+    auto rawJson = captureRequest(json);
+    assert(hasHeader(rawJson, "x-api-key: secret-key"), rawJson);
+    assert(hasHeader(rawJson, "authorization: Bearer gateway-token"), rawJson);
+    assert(!rawJson.toLower.canFind("sdk-token"), rawJson);
+    assert(rawJson.toLower.count("authorization:") == 1, rawJson);
+    assert(hasHeader(rawJson, "content-type: application/json"), rawJson);
+    assert(bodyOf(rawJson) == `{"name":"n"}`, rawJson);
+
+    // Multipart: the boundary Content-Type survives and custom headers are sent.
+    HttpRequest mp;
+    mp.method = "POST";
+    mp.contentType = "multipart/form-data; boundary=XyZ";
+    mp.rawBody = cast(const(ubyte)[]) "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n";
+    mp.headers = mergeHeadersCaseInsensitive(mp.headers, ["X-Api-Key": "secret-key"]);
+    auto rawMp = captureRequest(mp);
+    assert(hasHeader(rawMp, "x-api-key: secret-key"), rawMp);
+    assert(hasHeader(rawMp, "content-type: multipart/form-data; boundary=XyZ"), rawMp);
+    assert(bodyOf(rawMp) == "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n", rawMp);
+
+    // Bodiless: custom headers are sent, still no Content-Type.
+    HttpRequest get;
+    get.method = "GET";
+    get.headers = mergeHeadersCaseInsensitive(get.headers, ["X-Api-Key": "secret-key"]);
+    auto rawGet = captureRequest(get);
+    assert(rawGet.startsWith("GET /v2/things HTTP/1.1\r\n"), rawGet);
+    assert(hasHeader(rawGet, "x-api-key: secret-key"), rawGet);
+    assert(!rawGet.toLower.canFind("content-type"), rawGet);
+}
+
+// camunda/orchestration-cluster-api-dlang#12: a custom Content-Type or Expect
+// wins over the body-related defaults perform() would otherwise add later.
+unittest
+{
+    import std.algorithm.searching : canFind, count, startsWith;
+    import std.uni : toLower;
+
+    // JSON body: the custom Content-Type is the only one on the wire.
+    HttpRequest json;
+    json.method = "POST";
+    json.body_ = `{"name":"n"}`;
+    json.contentType = "application/json";
+    json.headers["content-type"] = "application/vnd.custom+json";
+    auto rawJson = captureRequest(json);
+    assert(hasHeader(rawJson, "content-type: application/vnd.custom+json"), rawJson);
+    assert(rawJson.toLower.count("content-type:") == 1, rawJson);
+    assert(!rawJson.canFind("application/json"), rawJson);
+    assert(bodyOf(rawJson) == `{"name":"n"}`, rawJson);
+
+    // Multipart: same, with a raw body.
+    HttpRequest mp;
+    mp.method = "POST";
+    mp.contentType = "multipart/form-data; boundary=XyZ";
+    mp.rawBody = cast(const(ubyte)[]) "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n";
+    mp.headers["Content-Type"] = "multipart/related; boundary=XyZ";
+    auto rawMp = captureRequest(mp);
+    assert(hasHeader(rawMp, "content-type: multipart/related; boundary=XyZ"), rawMp);
+    assert(rawMp.toLower.count("content-type:") == 1, rawMp);
+    assert(bodyOf(rawMp) == "--XyZ\r\n\r\nhi\r\n--XyZ--\r\n", rawMp);
+
+    // Bodiless write: the custom Content-Type replaces the empty suppression
+    // header, it is not overwritten by it.
+    HttpRequest put;
+    put.method = "PUT";
+    put.headers["Content-Type"] = "application/vnd.empty";
+    auto rawPut = captureRequest(put);
+    assert(rawPut.startsWith("PUT /v2/things HTTP/1.1\r\n"), rawPut);
+    assert(hasHeader(rawPut, "content-type: application/vnd.empty"), rawPut);
+    assert(rawPut.toLower.count("content-type:") == 1, rawPut);
+
+    // A custom Expect replaces the 100-continue suppression default.
+    HttpRequest exp;
+    exp.method = "POST";
+    exp.body_ = "{}";
+    exp.headers["Expect"] = "100-continue";
+    auto rawExp = captureRequest(exp);
+    assert(hasHeader(rawExp, "expect: 100-continue"), rawExp);
+    assert(rawExp.toLower.count("expect:") == 1, rawExp);
 }
