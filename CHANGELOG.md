@@ -1,3 +1,10 @@
+# [11.0.0-alpha.2](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.1...v11.0.0-alpha.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **release:** drop the version field from dub.json ([a6cef14](https://github.com/camunda/orchestration-cluster-api-dlang/commit/a6cef14d524f4909a9a3258b697bf23d5a0a4544))
+
 # [11.0.0-alpha.1](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.0...v11.0.0-alpha.1) (2026-11-13)
 
 
