@@ -165,6 +165,30 @@ OAuth uses the client-credentials grant. Tokens are cached in memory and
 refreshed 30 seconds before expiry. Set `CAMUNDA_OAUTH_CACHE_DIR` to persist
 them across process restarts.
 
+## Custom HTTP headers
+
+Attach custom headers to every API request — for example an API-gateway key
+or a correlation ID — either from the environment
+(`CAMUNDA_DEFAULT_HEADERS='{"X-Api-Key":"…"}'`) or programmatically:
+
+<!-- snippet-source: examples/readme.d | regions: CustomHeaders -->
+
+```d
+import camunda;
+
+// Env: CAMUNDA_DEFAULT_HEADERS='{"X-Api-Key":"…"}' — or programmatically:
+auto client = CamundaClient.create(
+    CamundaOptions.create
+        .withHeader("X-Api-Key", "my-gateway-key")
+        .withHeader("X-Correlation-Id", "req-42"),
+);
+```
+
+Custom headers are applied **last** and merged case-insensitively (no
+duplicate header lines), so they may replace the SDK's own `Authorization`
+header — matching c8ctl. They are **not** sent to the OAuth token endpoint.
+Header values may be secrets: the SDK never logs them.
+
 ## Semantic keys
 
 Identifiers are distinct types. `tryNew` validates the spec constraints;
@@ -238,6 +262,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_BASIC_AUTH_USERNAME` | — | Basic-auth username. |
 | `CAMUNDA_BASIC_AUTH_PASSWORD` | — | Basic-auth password. |
 | `CAMUNDA_DEFAULT_TENANT_ID` | — | Default tenant id applied to tenant-aware operations (alias `CAMUNDA_TENANT_ID`). |
+| `CAMUNDA_DEFAULT_HEADERS` | — | Custom headers sent with every API request, as a JSON object of header name to value (`{"X-Api-Key":"…"}`). Applied last, merged case-insensitively (may replace `Authorization`); never sent to the OAuth token endpoint. Values may be secrets. |
 | `CAMUNDA_TENANT_ID` | — | Alias for `CAMUNDA_DEFAULT_TENANT_ID`. |
 | `CAMUNDA_TENANT_IDS` | — | Comma-separated default tenant ids (e.g. for job activation). |
 | `CAMUNDA_SDK_BACKPRESSURE_PROFILE` | `BALANCED` | `BALANCED`, `CONSERVATIVE`, `AGGRESSIVE`, or `LEGACY` (observe-only). |

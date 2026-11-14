@@ -46,6 +46,10 @@ CONFIG_REFERENCE: list[tuple[str, str, str]] = [
     ("CAMUNDA_BASIC_AUTH_PASSWORD", "", "Basic-auth password."),
     ("CAMUNDA_DEFAULT_TENANT_ID", "",
      "Default tenant id applied to tenant-aware operations (alias `CAMUNDA_TENANT_ID`)."),
+    ("CAMUNDA_DEFAULT_HEADERS", "",
+     "Custom headers sent with every API request, as a JSON object of header name to value "
+     "(`{\"X-Api-Key\":\"…\"}`). Applied last, merged case-insensitively (may replace "
+     "`Authorization`); never sent to the OAuth token endpoint. Values may be secrets."),
     ("CAMUNDA_TENANT_ID", "", "Alias for `CAMUNDA_DEFAULT_TENANT_ID`."),
     ("CAMUNDA_TENANT_IDS", "",
      "Comma-separated default tenant ids (e.g. for job activation)."),
