@@ -53,9 +53,16 @@ struct HttpResponse
 /// sent with CURLOPT_CUSTOMREQUEST. (camunda/orchestration-cluster-api-dlang#5)
 HttpResponse perform(const ref HttpRequest req) @trusted
 {
-    import etc.c.curl : CurlOption;
+    import etc.c.curl : CurlOption, curl_slist, curl_slist_append, curl_slist_free_all;
+    import std.string : toStringz;
     auto http = HTTP(req.url);
-    foreach (k, v; req.headers) http.addRequestHeader(k, v);
+    // Header lines are built here and handed to curl as one list, instead of
+    // via std.net.curl's addRequestHeader, which always writes "Name: value":
+    // for an empty value curl reads that as "remove this header". An empty
+    // caller value is sent with curl's "Name;" form; "Name:" is used only for
+    // the SDK's own suppression of curl defaults (Expect, Content-Type).
+    string[] lines;
+    foreach (k, v; req.headers) lines ~= v.length ? k ~ ": " ~ v : k ~ ";";
     import core.time : msecs;
     http.connectTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
     http.operationTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
@@ -80,9 +87,12 @@ HttpResponse perform(const ref HttpRequest req) @trusted
     if (hasBody)
     {
         http.method = HTTP.Method.post;
-        http.setPostData(payload,
-            customContentType ? "" : req.contentType.length ? req.contentType : "application/json");
-        if (req.suppressExpect && !customExpect) http.addRequestHeader("Expect", "");
+        http.handle.clear(CurlOption.readfunction);
+        http.handle.set(CurlOption.postfields, cast(void*) payload.ptr);
+        http.handle.set(CurlOption.postfieldsize, payload.length);
+        if (!customContentType)
+            lines ~= "Content-Type: " ~ (req.contentType.length ? req.contentType : "application/json");
+        if (req.suppressExpect && !customExpect) lines ~= "Expect:";
         if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
     }
     else switch (req.method)
@@ -95,12 +105,22 @@ HttpResponse perform(const ref HttpRequest req) @trusted
         http.method = HTTP.Method.post;
         http.handle.set(CurlOption.postfields, "");
         http.handle.set(CurlOption.postfieldsize, 0L);
-        if (!customContentType) http.addRequestHeader("Content-Type", "");
+        if (!customContentType) lines ~= "Content-Type:";
         if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
         break;
     default:
         throw new CamundaException("unsupported HTTP method: " ~ req.method);
     }
+
+    curl_slist* slist;
+    scope (exit) if (slist !is null) curl_slist_free_all(slist);
+    foreach (line; lines)
+    {
+        auto next = curl_slist_append(slist, line.toStringz);
+        if (next is null) throw new CamundaException("out of memory building request headers");
+        slist = next;
+    }
+    if (slist !is null) http.handle.set(CurlOption.httpheader, slist);
 
     ubyte[] buf;
     string contentType;
@@ -355,4 +375,27 @@ unittest
     auto rawExp = captureRequest(exp);
     assert(hasHeader(rawExp, "expect: 100-continue"), rawExp);
     assert(rawExp.toLower.count("expect:") == 1, rawExp);
+}
+
+// An explicitly empty caller header is sent as "Name:" on the wire, not
+// dropped by curl's empty-value removal; SDK suppression headers still remove.
+unittest
+{
+    import std.algorithm.searching : canFind;
+    import std.uni : toLower;
+    foreach (m; ["GET", "POST", "PUT"])
+    {
+        foreach (withBody; [false, true])
+        {
+            HttpRequest req;
+            req.method = m;
+            if (withBody) req.body_ = "{}";
+            req.suppressExpect = true;
+            req.headers = ["X-Flag": "", "X-Api-Key": "k"];
+            auto raw = captureRequest(req);
+            assert(raw.toLower.canFind("\r\nx-flag:"), raw);
+            assert(hasHeader(raw, "x-api-key: k"), raw);
+            assert(!raw.toLower.canFind("expect:"), raw);
+        }
+    }
 }
