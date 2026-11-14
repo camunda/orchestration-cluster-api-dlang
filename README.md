@@ -47,34 +47,47 @@ support.
 
 ## Install
 
-Once published to [code.dlang.org](https://code.dlang.org/packages/camunda-orchestration-sdk):
+The SDK is published on the D package registry as
+[`camunda-orchestration-sdk`](https://code.dlang.org/packages/camunda-orchestration-sdk).
+Add it to your project with dub:
+
+```sh
+dub add camunda-orchestration-sdk
+```
+
+This adds the latest stable release (for example `"camunda-orchestration-sdk": "~>10.1.1"`)
+to your `dub.json`. dub picks stable releases over prereleases, so the 11.x
+alphas are not selected unless you ask for them.
+
+Pick the release line that matches your Camunda version (SDK major = Camunda minor):
+
+| Camunda | SDK line | Branch | Spec source (camunda/camunda) | `dub.json` constraint |
+| --- | --- | --- | --- | --- |
+| 8.10 | `10.x` (stable) | `stable/10` | `stable/8.10` | `"~>10.1"` |
+| 8.11 (in development) | `11.0.0-alpha.N` (prerelease) | `main` | `main` | `"~>11.0.0-alpha.2"` |
 
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk": "~>11.0.0-alpha"
+    "camunda-orchestration-sdk": "~>10.1"
   }
 }
 ```
 
-Release lines (SDK major = Camunda minor):
+To try the 8.11 prerelease line: `dub add 'camunda-orchestration-sdk@~>11.0.0-alpha.2'`.
+Alphas can change between releases; pin an exact version (`"==11.0.0-alpha.2"`)
+if you need repeatable builds, and commit `dub.selections.json`.
 
-| Branch | Spec source (camunda/camunda) | Publishes | dub constraint |
-| --- | --- | --- | --- |
-| `main` | `main` (8.11 prerelease) | `11.0.0-alpha.N` | `~>11.0.0-alpha` |
-| `stable/10` | `stable/8.10` | `10.x.y` (latest) | `~>10.0` |
+Every release is a git tag (`vX.Y.Z`) with a
+[GitHub Release](https://github.com/camunda/orchestration-cluster-api-dlang/releases);
+the registry picks new tags up automatically.
 
-To vendor the repo instead:
+To build against an unreleased commit, check the repo out and register it
+locally (it then overrides the registry version for matching constraints):
 
-```json
-{
-  "dependencies": {
-    "camunda-orchestration-sdk": {
-      "repository": "git+https://github.com/camunda/orchestration-cluster-api-dlang.git",
-      "version": "~main"
-    }
-  }
-}
+```sh
+git clone https://github.com/camunda/orchestration-cluster-api-dlang.git
+dub add-local orchestration-cluster-api-dlang   # undo: dub remove-local …
 ```
 
 ### Transport only: `camunda-orchestration-sdk:runtime`
@@ -87,7 +100,7 @@ backpressure and TLS as the full SDK, without compiling the generated models.
 ```json
 {
   "dependencies": {
-    "camunda-orchestration-sdk:runtime": "~>11.0.0-alpha"
+    "camunda-orchestration-sdk:runtime": "~>10.1"
   }
 }
 ```
