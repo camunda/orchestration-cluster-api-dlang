@@ -13,7 +13,10 @@ module.exports = {
       '@semantic-release/exec',
       {
         prepareCmd: 'bash scripts/prepare-release.sh "${nextRelease.version}"',
-        successCmd: 'bash scripts/notify-dub.sh "${nextRelease.version}"',
+        // notify-dub syncs code.dlang.org; mark-latest makes a stable/N release
+        // GitHub "Latest" (semantic-release never does for maintenance branches).
+        successCmd:
+          'bash scripts/notify-dub.sh "${nextRelease.version}" && bash scripts/mark-latest.sh "${nextRelease.version}"',
       },
     ],
     [
