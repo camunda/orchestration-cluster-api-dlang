@@ -280,6 +280,8 @@ struct Parser
             const c = s[i++];
             if (c == '"')
                 return buf[];
+            if (c < 0x20)
+                fail("unescaped control character in string");
             if (c != '\\')
             {
                 buf.put(c);
@@ -300,10 +302,16 @@ struct Parser
             case 't': buf.put('\t'); break;
             case 'u':
                 dchar cp = hex4();
-                if (cp >= 0xD800 && cp < 0xDC00 && i + 6 <= s.length && s[i] == '\\' && s[i + 1] == 'u')
+                if (cp >= 0xDC00 && cp < 0xE000)
+                    fail("unpaired low surrogate");
+                if (cp >= 0xD800 && cp < 0xDC00)
                 {
+                    if (!(i + 6 <= s.length && s[i] == '\\' && s[i + 1] == 'u'))
+                        fail("unpaired high surrogate");
                     i += 2;
                     const lo = hex4();
+                    if (lo < 0xDC00 || lo >= 0xE000)
+                        fail("high surrogate not followed by low surrogate");
                     cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                 }
                 buf.put(cp);
@@ -318,13 +326,16 @@ unittest
 {
     import std.exception : assertThrown;
     foreach (bad; ["truX", "tru", "fals", "nul", "nulx", "01", "+1", "-", "1.", ".5", "1e", "1e+",
-            "--1", "1.2.3", "[1,", "{\"a\":1", "[", "{", "\"\\u12\"", "\"\\uZZZZ\"", "\"\\", "x"])
+            "--1", "1.2.3", "[1,", "{\"a\":1", "[", "{", "\"\\u12\"", "\"\\uZZZZ\"", "\"\\", "x",
+            "\"a\nb\"", "\"a\tb\"", "\"a\x00b\"", `"\uD800\u0041"`, `"\uD800"`, `"\uDC00"`])
         assertThrown(parseJson(bad), bad);
     assert(parseJson("true").boolean && !parseJson("false").boolean);
     assert(parseJson("null").kind == Kind.null_);
     foreach (ok; ["0", "-0", "10", "-1.5e+3", "2E-2", "0.25"])
         assert(parseJson(ok).text == ok, ok);
     assert(parseJson(`{"a":[1,true,null]}`).isObj);
+    assert(parseJson(`"a\nb\t"`).text == "a\nb\t");
+    assert(parseJson(`"\uD83D\uDE00"`).text == "\U0001F600");
 }
 
 J parseJson(string text)

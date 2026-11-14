@@ -34,6 +34,7 @@ generate-local:
 test:
 	dub test
 	dub test :runtime
+	dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
 
 lint:
 	./scripts/check-safe.sh

@@ -47,6 +47,8 @@ jobs:
       - uses: dlang-community/setup-dlang@v2
         with:
           compiler: ldc-1.43.0
+      - name: Generator parser unittests
+        run: dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
       - run: dub run -q --single scripts/generate.d
       - name: Fail if generated sources, docs or examples drifted
         run: git diff --exit-code -- source/camunda/generated docs examples
