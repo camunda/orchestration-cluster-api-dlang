@@ -32,8 +32,9 @@ around them here:
 | `runtime/source/camunda/safeio.d` | The `@trusted` C-boundary. Review like Rust `unsafe`. |
 | `source/camunda/` | Typed SDK on top of `:runtime`: `client.d` (`CamundaClient` wraps `Transport` + generated facade), `worker.d`, `package.d`. |
 | `source/camunda/generated/` | **Generated.** Produced by `make generate`. Never hand-edit. |
-| `scripts/generate.py` | Numbered generation hooks (01 keys … 06 markdown docs). **Primary edit surface** for generated output. |
-| `scripts/sync-readme-snippets.py` | Injects `examples/*.d` region snippets into `README.md`. `--check` is the CI gate. |
+| `scripts/generate.d` | Numbered generation hooks (01 keys … 07 examples). **Primary edit surface** for generated output. |
+| `scripts/*.d` | Repo tooling as dub single-file programs (`dub run -q --single scripts/<name>.d`; the Makefile wraps them). No Python; Node.js is only needed for `npm run bundle:spec` and releases. |
+| `scripts/sync-readme-snippets.d` | Injects `examples/*.d` region snippets into `README.md`. `--check` is the CI gate. |
 | `docs/` | **Generated.** `api-reference.md` and `semantic-types.md`. Never hand-edit. |
 | `scripts/check-safe.sh` | `@safe` / `@trusted` / isolation ratchet. Runs as a dub `preBuildCommands` hook. |
 | `external-spec/bundled/` | Bundled OpenAPI spec + `spec-metadata.json`, written by `npm run bundle:spec`. Committed generator inputs. |
@@ -46,7 +47,7 @@ make generate        # npm run bundle:spec (camunda/camunda @ SPEC_REF, default 
 make generate-local  # regenerate from the committed external-spec/bundled/ (CI drift gate)
 ```
 
-`scripts/generate.py` reads `external-spec/bundled/rest-api.bundle.json` and
+`scripts/generate.d` reads `external-spec/bundled/rest-api.bundle.json` and
 `spec-metadata.json` and emits:
 
 1. `keys.d` — Camunda Domain Type System (nominal newtypes with `tryNew` / `assumeExists`).
@@ -99,7 +100,7 @@ treat any failure as pre-existing or unrelated without explicit confirmation.
 
 ### Separate generator changes from regenerated output
 
-When a change modifies `scripts/generate.py` **and** that change alters
+When a change modifies `scripts/generate.d` **and** that change alters
 `source/camunda/generated/` or `docs/`, split into two commits:
 
 1. Generator change only. No `source/camunda/generated/` changes.

@@ -22,7 +22,5 @@ node_modules/
 package-lock.json
 .openapi-generator/
 .env
-__pycache__/
-*.pyc
 docs-md/
 /camunda-orchestration-sdk-runtime*
