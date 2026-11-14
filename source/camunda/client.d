@@ -73,23 +73,49 @@ final class CamundaClient
     {
         if (!paths.length)
             throw new ConfigException("deployResources() requires at least one file path.");
-        auto tenant = tenantId.length ? tenantId
-            : (config.defaultTenantId.length ? config.defaultTenantId : null);
-        return createDeploymentMultipart(paths, tenant);
+        return createDeploymentMultipart(paths, tenantId.length ? tenantId : effectiveDefaultTenant);
     }
 
-    /// `body_` with the configured default tenant (`CAMUNDA_DEFAULT_TENANT_ID`)
-    /// as `tenantId`, unless it is already set. Applied by the generated
-    /// operations whose request has an optional `tenantId`.
+    /// Tenant identifier the Camunda Java client uses when none is configured.
+    enum string defaultTenantIdentifier = "<default>";
+
+    /// The configured default tenant (`CAMUNDA_DEFAULT_TENANT_ID`), or
+    /// `<default>` when none is configured.
+    string effectiveDefaultTenant() const
+    {
+        return config.defaultTenantId.length ? config.defaultTenantId : defaultTenantIdentifier;
+    }
+
+    /// `body_` with the effective default tenant as `tenantId`, unless it is
+    /// already set. Applied by the generated tenant-scoped commands
+    /// (createProcessInstance, publishMessage, correlateMessage,
+    /// broadcastSignal, evaluateDecision, evaluateExpression,
+    /// evaluateConditionals).
     JSONValue withDefaultTenant(JSONValue body_)
     {
-        const tenant = config.defaultTenantId;
-        if (!tenant.length || body_.type != JSONType.object) return body_;
+        const tenant = effectiveDefaultTenant;
+        if (body_.type != JSONType.object) return body_;
         if (auto t = "tenantId" in body_.objectNoRef)
             if (t.type != JSONType.null_) return body_;
         JSONValue copy = emptyObject();
         foreach (k, v; body_.objectNoRef) copy[k] = v;
         copy["tenantId"] = tenant;
+        return copy;
+    }
+
+    /// `activateJobs` body with `tenantIds: [<effective default tenant>]` when
+    /// `tenantFilter` is `PROVIDED` or unset and no tenant ids are given
+    /// (absent, null or empty). With `ASSIGNED` the body is left alone.
+    JSONValue withDefaultJobTenants(JSONValue body_)
+    {
+        if (body_.type != JSONType.object) return body_;
+        if (auto f = "tenantFilter" in body_.objectNoRef)
+            if (f.type == JSONType.string && f.str != "PROVIDED") return body_;
+        if (auto t = "tenantIds" in body_.objectNoRef)
+            if (t.type == JSONType.array && t.arrayNoRef.length) return body_;
+        JSONValue copy = emptyObject();
+        foreach (k, v; body_.objectNoRef) copy[k] = v;
+        copy["tenantIds"] = JSONValue([effectiveDefaultTenant]);
         return copy;
     }
 
@@ -273,6 +299,27 @@ unittest
     assert("tenantId" !in b.objectNoRef); // caller's value untouched
     assert(c.withDefaultTenant(parseJSON(`{"tenantId":"mine"}`))["tenantId"].str == "mine");
     assert(c.withDefaultTenant(parseJSON(`{"tenantId":null}`))["tenantId"].str == "t1");
+    // #14: with nothing configured, `<default>` is sent (Java client rule).
     auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
-    assert("tenantId" !in none.withDefaultTenant(parseJSON(`{"a":1}`)).objectNoRef);
+    assert(none.withDefaultTenant(parseJSON(`{"a":1}`))["tenantId"].str == "<default>");
+    assert(none.withDefaultTenant(parseJSON(`{"tenantId":"mine"}`))["tenantId"].str == "mine");
+}
+
+unittest
+{
+    // #14: activateJobs gets [effective default] for PROVIDED/unset filter
+    // with no ids; explicit ids and ASSIGNED are left alone.
+    auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    auto t1 = CamundaClient.create(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_DEFAULT_TENANT_ID", "t1"));
+    auto ids(JSONValue v) { string[] r; foreach (e; v["tenantIds"].arrayNoRef) r ~= e.str; return r; }
+    assert(ids(none.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["<default>"]);
+    assert(ids(none.withDefaultJobTenants(parseJSON(`{"type":"x","tenantIds":[]}`))) == ["<default>"]);
+    assert(ids(none.withDefaultJobTenants(parseJSON(`{"tenantFilter":"PROVIDED"}`))) == ["<default>"]);
+    assert(ids(t1.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["t1"]);
+    assert(ids(t1.withDefaultJobTenants(parseJSON(`{"tenantIds":["a","b"]}`))) == ["a", "b"]);
+    assert("tenantIds" !in none.withDefaultJobTenants(parseJSON(`{"tenantFilter":"ASSIGNED"}`)).objectNoRef);
+    assert(t1.effectiveDefaultTenant == "t1");
+    assert(none.effectiveDefaultTenant == "<default>");
 }

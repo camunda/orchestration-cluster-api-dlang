@@ -897,9 +897,21 @@ def _tenant_kind(spec: Spec, schema: dict, depth: int = 0) -> str | None:
     return "req" if "tenantId" in required else "opt"
 
 
+# Tenant-scoped commands that get the effective default tenant (configured,
+# else `<default>`) when the caller passes none -- the Camunda Java client's
+# rule (#14). Searches and every other operation never get a tenant added.
+DEFAULT_TENANT_OPS = frozenset({
+    "createProcessInstance", "publishMessage", "correlateMessage",
+    "broadcastSignal", "evaluateDecision", "evaluateExpression",
+    "evaluateConditionals",
+})
+
+
 def injects_default_tenant(spec: Spec, op: dict) -> bool:
-    """JSON request body with an optional tenantId: the configured default
-    tenant is filled in when the caller leaves it unset (#8)."""
+    """JSON request body with an optional tenantId on a tenant-scoped command:
+    the effective default tenant is filled in when the caller leaves it unset."""
+    if op.get("operationId") not in DEFAULT_TENANT_OPS:
+        return False
     item = (spec.spec.get("paths") or {}).get(op.get("path")) or {}
     operation = item.get((op.get("method") or "get").lower()) or {}
     content = ((operation.get("requestBody") or {}).get("content") or {}).get("application/json")
@@ -1009,6 +1021,8 @@ def render_operation(spec: Spec, op: dict) -> str:
     body_e = body_arg if body_arg else "JSONValue.init"
     if body_arg and injects_default_tenant(spec, op):
         body_e = f"this.withDefaultTenant({body_e})"
+    elif body_arg and op.get("operationId") == "activateJobs":
+        body_e = f"this.withDefaultJobTenants({body_e})"
     server_e = op_server_arg(spec, op)
 
     if rkind == "void":

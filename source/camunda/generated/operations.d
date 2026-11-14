@@ -877,7 +877,7 @@ mixin template GeneratedOperations()
     JobActivationResult activateJobs(JobActivationRequest body_ = JobActivationRequest.init)
     {
         const path_ = "/jobs/activation";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultJobTenants(body_.toJson()), null);
         return JobActivationResult.fromJson(payload);
     }
 
