@@ -16,13 +16,13 @@ module camunda.openapi.spec;
 @safe:
 
 import std.array : split;
-import std.conv : to;
+import std.conv : ConvException, to;
 import std.string : startsWith;
 
 import camunda.openapi.errors
     : OpenApiCycleException, OpenApiException, OpenApiLimitException;
 import camunda.openapi.json
-    : J, Kind, Limits, get, has, itemsOf, keysOf, pointerUnescape, pyStrOrNull, truthy;
+    : J, Kind, Limits, get, has, itemsOf, keysOf, pointerEscape, pointerUnescape, pyStrOrNull, truthy;
 
 /// Component path prefix for local schema `$ref`s.
 enum COMPONENT_PREFIX = "#/components/schemas/";
@@ -53,11 +53,12 @@ final class Spec
         schemas = this.spec.get("components").get("schemas");
         if (schemas is null)
             schemas = J.obj();
-        foreach (k; itemsOf(this.meta.get("semanticKeys")))
-            semantic[k.get("name").text] = k;
-        operations = itemsOf(this.meta.get("operations")).dup;
-        foreach (u; itemsOf(this.meta.get("unions")))
-            unions[u.get("name").text] = u;
+        foreach (i, k; itemsOf(this.meta.get("semanticKeys")))
+            semantic[metaName(k, "#/semanticKeys/" ~ i.to!string)] = k;
+        auto metaOps = this.meta.get("operations");
+        operations = metaOps !is null ? itemsOf(metaOps).dup : operationsFromPaths();
+        foreach (i, u; itemsOf(this.meta.get("unions")))
+            unions[metaName(u, "#/unions/" ~ i.to!string)] = u;
         foreach (n; schemas.keys)
         {
             auto s = schemas.fields[n];
@@ -77,6 +78,65 @@ final class Spec
             if (n == "ResourceKey" || n == "ScopeKey" || n == "LongKey")
                 keyNames[n] = true;
         }
+    }
+
+    /// The `name` of a metadata entry; a typed error when it is missing.
+    private static string metaName(J entry, string path)
+    {
+        auto n = entry.get("name");
+        if (n is null || !n.isStr)
+            throw new OpenApiException("metadata entry has no string \"name\"", path);
+        return n.text;
+    }
+
+    /**
+    Operations derived from `paths` (document order) when no metadata sidecar
+    supplies them. Each entry carries `operationId`, `path`, `method`, `tags`,
+    `summary`, `description`, `parameters` (path-level merged with
+    operation-level), `requestBody`, `hasRequestBody`, `servers`
+    (operation-level, else path-level) and `vendorExtensions` (`x-*` keys).
+    */
+    private J[] operationsFromPaths()
+    {
+        static immutable methods = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
+        J[] ops;
+        auto paths = spec.get("paths");
+        foreach (p; keysOf(paths))
+        {
+            auto item = paths.fields[p];
+            if (item is null || !item.isObj)
+                continue;
+            foreach (m; item.keys)
+            {
+                import std.algorithm.searching : canFind;
+                if (!methods.canFind(m))
+                    continue;
+                auto op = item.fields[m];
+                const where = "#/paths/" ~ pointerEscape(p) ~ "/" ~ m;
+                if (op is null || !op.isObj)
+                    throw new OpenApiException("operation is not an object", where);
+                auto o = J.obj();
+                foreach (k; ["operationId", "tags", "summary", "description", "requestBody"])
+                    if (auto v = op.get(k))
+                        o.set(k, v);
+                o.set("path", J.str(p));
+                o.set("method", J.str(m));
+                J[] params = itemsOf(item.get("parameters")).dup ~ itemsOf(op.get("parameters"));
+                o.set("parameters", J.arr(params));
+                auto hasBody = new J(Kind.bool_);
+                hasBody.boolean = op.has("requestBody");
+                o.set("hasRequestBody", hasBody);
+                if (auto sv = op.get("servers") !is null ? op.get("servers") : item.get("servers"))
+                    o.set("servers", sv);
+                auto ext = J.obj();
+                foreach (k; op.keys)
+                    if (k.startsWith("x-"))
+                        ext.set(k, op.fields[k]);
+                o.set("vendorExtensions", ext);
+                ops ~= o;
+            }
+        }
+        return ops;
     }
 
     J schema(string name)
@@ -116,7 +176,7 @@ final class Spec
                 return r.split("/")[$ - 1];
             auto parts = r[COMPONENT_PREFIX.length .. $].split("/");
             if (parts.length == 1)
-                return parts[0];
+                return pointerUnescape(parts[0]);
             J target = spec.get("components").get("schemas");
             foreach (part; parts)
             {
@@ -125,7 +185,11 @@ final class Spec
                     throw new OpenApiException("unresolvable $ref: " ~ r, r);
                 if (target.isArr)
                 {
-                    const idx = part.to!size_t;
+                    size_t idx;
+                    try
+                        idx = part.to!size_t;
+                    catch (ConvException)
+                        throw new OpenApiException("$ref array index is not a number: " ~ r, r);
                     if (idx >= target.items.length)
                         throw new OpenApiException("$ref array index out of range: " ~ r, r);
                     target = target.items[idx];
@@ -163,42 +227,53 @@ final class Spec
         return null;
     }
 
-    /// Merge own properties with allOf parents (depth-first, own props win).
+    /**
+    Merge own properties with allOf parents (depth-first, own props win).
+
+    Follows a `$ref` on the schema itself, `$ref` members of `allOf` and
+    inline `allOf` members at any nesting. `required` names are unioned from
+    every contributor. Traversal depth is bounded by `limits.maxDepth`.
+    */
     Props collectProperties(string name, J schema, ref bool[string] seen)
     {
+        return collect(name, schema, seen, 0, name is null ? "#" : COMPONENT_PREFIX ~ pointerEscape(name));
+    }
+
+    private Props collect(string name, J schema, ref bool[string] seen, size_t depth, string where)
+    {
         Props props;
-        if (name in seen)
+        if (depth > limits.maxDepth)
+            throw new OpenApiLimitException(
+                "allOf/$ref flattening deeper than " ~ limits.maxDepth.to!string, where);
+        if (name !is null)
+        {
+            if (name in seen)
+                return props;
+            seen[name] = true;
+        }
+        if (schema is null || !schema.isObj)
             return props;
-        seen[name] = true;
-        foreach (part; itemsOf(schema.get("allOf")))
+        Props sub(string r)
+        {
+            return collect(r, this.schema(r), seen, depth + 1, COMPONENT_PREFIX ~ pointerEscape(r));
+        }
+        auto self = refName(schema);
+        if (self !is null)
+            props.mergeParent(sub(self));
+        foreach (i, part; itemsOf(schema.get("allOf")))
         {
             auto r = refName(part);
             if (r !is null)
-            {
-                auto parent = collectProperties(r, this.schema(r), seen);
-                foreach (k; parent.names)
-                    props.setDefault(k, parent.map[k]);
-            }
+                props.mergeParent(sub(r));
             else if (part.isObj)
-            {
-                auto own = part.get("properties");
-                foreach (k; keysOf(own))
-                    props.setDefault(k, own.fields[k]);
-                foreach (sub; itemsOf(part.get("allOf")))
-                {
-                    auto r2 = refName(sub);
-                    if (r2 !is null)
-                    {
-                        auto inner = collectProperties(r2, this.schema(r2), seen);
-                        foreach (k; inner.names)
-                            props.setDefault(k, inner.map[k]);
-                    }
-                }
-            }
+                props.mergeParent(collect(null, part, seen, depth + 1, where ~ "/allOf/" ~ i.to!string));
         }
         auto own = schema.get("properties");
         foreach (k; keysOf(own))
             props.put(k, own.fields[k]);
+        foreach (req; itemsOf(schema.get("required")))
+            if (req.isStr)
+                props.required[req.text] = true;
         return props;
     }
 }
@@ -208,6 +283,19 @@ struct Props
 {
     string[] names;
     J[string] map;
+    /// Names listed in `required` by the schema or any flattened contributor.
+    bool[string] required;
+
+    bool isRequired(string k) const { return (k in required) !is null; }
+
+    /// Add a parent's properties (existing ones win) and its required names.
+    void mergeParent(Props parent)
+    {
+        foreach (k; parent.names)
+            setDefault(k, parent.map[k]);
+        foreach (k; parent.required.byKey)
+            required[k] = true;
+    }
 
     void setDefault(string k, J v)
     {

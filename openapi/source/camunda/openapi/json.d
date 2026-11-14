@@ -17,7 +17,7 @@ module camunda.openapi.json;
 import std.array : appender;
 import std.conv : to;
 import std.format : format;
-import std.utf : decode;
+import std.utf : decode, UTFException;
 
 import camunda.openapi.errors : OpenApiException, OpenApiLimitException;
 
@@ -309,6 +309,18 @@ struct Parser
                 return buf[];
             if (c < 0x20)
                 fail("unescaped control character in string");
+            if (c >= 0x80)
+            {
+                // Validate the multibyte sequence; reject invalid UTF-8.
+                size_t at = i - 1;
+                try
+                    decode(s, at);
+                catch (UTFException)
+                    fail("invalid UTF-8 in string");
+                buf.put(s[i - 1 .. at]);
+                i = at;
+                continue;
+            }
             if (c != '\\')
             {
                 buf.put(c);

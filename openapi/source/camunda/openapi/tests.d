@@ -174,17 +174,10 @@ unittest
     enum doc = `{"openapi":"3.0.0","info":{"title":"t","version":"1"},"paths":{"/x":{"get":{"operationId":"op"}}},"components":{"schemas":{"A":{"type":"object"}}}}`;
     foreach (len; 0 .. doc.length)
     {
-        auto piece = doc[0 .. len];
-        try
-        {
-            auto v = parseJson(piece);
-            // Only a complete-prefix that is itself valid JSON may succeed;
-            // anything else must have thrown.
-        }
-        catch (OpenApiException)
-        {
-        }
+        // The document is one object, so no proper prefix is valid JSON.
+        assertThrown!OpenApiException(parseJson(doc[0 .. len]), doc[0 .. len]);
     }
+    assertNotThrown(parseJson(doc));
 }
 
 unittest
@@ -213,4 +206,111 @@ unittest
     assert(v.get("z").kind == Kind.null_);
     assert(v.get("a").items.length == 2);
     assert(v.get("o").get("k").text == "v");
+}
+
+// --- review regressions -----------------------------------------------------
+
+// Invalid UTF-8 inside strings is a typed error (lone byte, truncated
+// sequence, overlong, encoded surrogate); valid multibyte text survives.
+unittest
+{
+    foreach (bad; ["\"a\xffb\"", "\"\xc3\"", "\"\xe2\x82\"", "\"\xc0\xaf\"", "\"\xed\xa0\x80\""])
+        assertThrown!OpenApiException(parseJson(bad), bad);
+    assert(parseJson("\"caf\u00e9 \u20ac \U0001F600\"").text == "caf\u00e9 \u20ac \U0001F600");
+}
+
+// Without metadata, operations come from `paths` in document order.
+unittest
+{
+    auto spec = new Spec(parseJson(`{"openapi":"3.0.0","paths":{
+        "/b":{"servers":[{"url":"http://p"}],"parameters":[{"name":"pp","in":"query"}],
+              "post":{"operationId":"postB","requestBody":{"content":{}},"x-flag":true,
+                      "parameters":[{"name":"q","in":"query"}]},
+              "summary":"not an op"},
+        "/a/{k}":{"get":{"operationId":"getA","servers":[{"url":"http://o"}]}}}}`));
+    assert(spec.operations.length == 2);
+    auto b = spec.operations[0];
+    assert(b.get("operationId").text == "postB" && b.get("method").text == "post" && b.get("path").text == "/b");
+    assert(b.get("hasRequestBody").boolean && b.get("requestBody") !is null);
+    assert(b.get("parameters").items.length == 2);
+    assert(b.get("servers").items[0].get("url").text == "http://p");
+    assert(b.get("vendorExtensions").get("x-flag").boolean);
+    auto a = spec.operations[1];
+    assert(a.get("operationId").text == "getA" && !a.get("hasRequestBody").boolean);
+    assert(a.get("servers").items[0].get("url").text == "http://o");
+    // Metadata, when present, still wins (even if empty).
+    auto withMeta = new Spec(spec.spec, parseJson(`{"operations":[]}`));
+    assert(withMeta.operations.length == 0);
+    // A non-object operation is a typed error.
+    assertThrown!OpenApiException(new Spec(parseJson(`{"paths":{"/x":{"get":1}}}`)));
+}
+
+// Metadata entries without a string name are typed errors.
+unittest
+{
+    foreach (m; [`{"semanticKeys":[{}]}`, `{"semanticKeys":[null]}`, `{"unions":[null]}`,
+            `{"unions":[{"name":1}]}`])
+        assertThrown!OpenApiException(new Spec(null, parseJson(m)), m);
+}
+
+// Single-component refs are pointer-unescaped.
+unittest
+{
+    auto spec = new Spec(specWith(`{"Foo/Bar":{"type":"object"},"A~B":{"type":"object"}}`));
+    assert(spec.refName(parseJson(`{"$ref":"#/components/schemas/Foo~1Bar"}`)) == "Foo/Bar");
+    assert(spec.refName(parseJson(`{"$ref":"#/components/schemas/A~0B"}`)) == "A~B");
+}
+
+// Malformed array indices in deep refs are typed errors.
+unittest
+{
+    auto spec = new Spec(specWith(`{"Wrap":{"allOf":[{"$ref":"#/components/schemas/W"}]},"W":{}}`));
+    foreach (r; ["nope", "-1", "1x", "99999999999999999999999"])
+        assertThrown!OpenApiException(spec.refName(parseJson(
+            `{"$ref":"#/components/schemas/Wrap/allOf/` ~ r ~ `"}`)), r);
+}
+
+// Flattening follows a $ref on the schema itself and inline nested allOf,
+// and unions required names (kept even when a property is overridden).
+unittest
+{
+    auto spec = new Spec(specWith(`{
+        "Base":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}},
+        "Alias":{"$ref":"#/components/schemas/Base"},
+        "Via":{"allOf":[{"$ref":"#/components/schemas/Alias"}],"properties":{"id":{"type":"integer"}}},
+        "Nested":{"allOf":[{"allOf":[{"required":["x"],"properties":{"x":{"type":"string"}}}]}]}
+    }`));
+    bool[string] s1;
+    auto alias_ = spec.collectProperties("Alias", spec.schema("Alias"), s1);
+    assert(alias_.names == ["id"] && alias_.isRequired("id"));
+    bool[string] s2;
+    auto via = spec.collectProperties("Via", spec.schema("Via"), s2);
+    assert(via.names == ["id"] && via.isRequired("id"));
+    assert(via.map["id"].get("type").text == "integer");
+    bool[string] s3;
+    auto nested = spec.collectProperties("Nested", spec.schema("Nested"), s3);
+    assert(nested.names == ["x"] && nested.isRequired("x"));
+}
+
+// A long acyclic allOf chain is bounded by a typed limit, not the stack.
+unittest
+{
+    auto limits = Limits.init;
+    limits.maxDepth = 50;
+    string schemas = "{";
+    foreach (i; 0 .. 200)
+        schemas ~= `"S` ~ i.to!string ~ `":{"allOf":[{"$ref":"#/components/schemas/S` ~ (i + 1).to!string ~ `"}]},`;
+    schemas ~= `"S200":{"properties":{"z":{}}}}`;
+    auto spec = new Spec(specWith(schemas), null, limits);
+    bool[string] seen;
+    assertThrown!OpenApiLimitException(spec.collectProperties("S0", spec.schema("S0"), seen));
+    // Same depth via inline nesting (document parsed with default limits).
+    string inline = `{"properties":{"z":{}}}`;
+    foreach (_; 0 .. 30)
+        inline = `{"allOf":[` ~ inline ~ `]}`;
+    auto limits2 = Limits.init;
+    limits2.maxDepth = 20;
+    auto spec2 = new Spec(specWith(`{"I":` ~ inline ~ `}`), null, limits2);
+    bool[string] seen2;
+    assertThrown!OpenApiLimitException(spec2.collectProperties("I", spec2.schema("I"), seen2));
 }
