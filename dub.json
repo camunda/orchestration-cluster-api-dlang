@@ -2,7 +2,6 @@
   "name": "camunda-orchestration-sdk",
   "description": "Camunda 8 Orchestration Cluster REST API SDK for D",
   "license": "Apache-2.0",
-  "version": "10.1.0",
   "targetType": "library",
   "targetName": "camunda-orchestration-sdk",
   "dependencies": {
