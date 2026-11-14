@@ -1,3 +1,10 @@
+# [11.0.0-alpha.4](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.3...v11.0.0-alpha.4) (2026-11-14)
+
+
+### Features
+
+* **openapi:** add :openapi subpackage, a hardened OpenAPI reader ([#19](https://github.com/camunda/orchestration-cluster-api-dlang/issues/19)) ([b2946ef](https://github.com/camunda/orchestration-cluster-api-dlang/commit/b2946ef4aeecd36b422a4c82d73827d23447e0bb)), closes [#15](https://github.com/camunda/orchestration-cluster-api-dlang/issues/15)
+
 # [11.0.0-alpha.3](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.2...v11.0.0-alpha.3) (2026-11-14)
 
 
