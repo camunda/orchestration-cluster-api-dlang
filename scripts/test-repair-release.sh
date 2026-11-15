@@ -3,9 +3,11 @@
 #
 # Each case builds a scratch fixture: a local bare "origin" plus a working
 # clone whose HEAD is a synthetic release commit, and a stubbed `gh` on PATH
-# that records its calls and simulates the GitHub Releases state. The real
-# release.config.cjs is used to derive channels, so the main/alpha and
-# stable/N cases exercise the same node lookup the workflow relies on.
+# that records its calls and simulates the GitHub Releases state. The channel
+# is derived in pure bash by repair-release.sh (mirroring the
+# release.config.cjs branch model), so this harness — and `make check` — runs
+# on the documented D-only development setup with no Node.js / npm release
+# dependencies.
 #
 # Run: bash scripts/test-repair-release.sh
 set -uo pipefail
@@ -300,6 +302,93 @@ test_local_note_pushed_when_missing_remotely() {
   teardown_fixture
 }
 
+test_head_release_preferred_over_ancestor_prerelease() {
+  local name="HEAD stable release preferred over an ancestor's higher-sorting prerelease tag"
+  # HEAD is the stable release v11.0.0, but an ancestor carries the prerelease
+  # v11.0.0-alpha.4, which sorts *above* v11.0.0 in git's descending version
+  # order. Auto mode must pick the tag pointing at HEAD, not the prerelease.
+  setup_fixture "11.0.0-alpha.4"
+  # Record the prerelease tag, then add the stable release commit on top.
+  local pre_tag="${TAG}"
+  cat > CHANGELOG.md <<'EOF'
+# [11.0.0](https://example.test/compare/v11.0.0-alpha.4...v11.0.0) (2026-11-16)
+
+
+### Features
+
+* ga ([def5678](https://example.test/commit/def5678))
+
+# [11.0.0-alpha.4](https://example.test/compare/v0.0.0...v11.0.0-alpha.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* a fix ([abc1234](https://example.test/commit/abc1234))
+EOF
+  git add CHANGELOG.md
+  git commit -q -m "chore(release): 11.0.0 [skip ci]"
+  git tag -a "v11.0.0" -m "11.0.0"
+  git push -q origin HEAD:main
+  git push -q origin v11.0.0
+  # Auto mode on the stable branch: must repair v11.0.0, not the prerelease.
+  # (note_body/remote_has_note use $TAG; point it at the stable tag.)
+  TAG="v11.0.0"
+  if CAMUNDA_SDK_CURRENT_STABLE_MAJOR=11 run_repair stable/11 \
+    && remote_has_note \
+    && gh_calls_contain "release create v11.0.0" \
+    && ! gh_calls_contain "release create ${pre_tag}"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_ga_preferred_over_prerelease_at_same_commit() {
+  local name="GA tag preferred over a prerelease tag pointing at the same commit"
+  # Both tags point at HEAD; a plain "newest" version sort ranks the prerelease
+  # above the GA, so auto mode must explicitly prefer the GA.
+  setup_fixture "11.0.0"
+  git tag -a "v11.0.0-alpha.1" -m "11.0.0-alpha.1"
+  git push -q origin v11.0.0-alpha.1
+  if CAMUNDA_SDK_CURRENT_STABLE_MAJOR=11 run_repair stable/11 \
+    && remote_has_note \
+    && gh_calls_contain "release create v11.0.0" \
+    && ! gh_calls_contain "release create v11.0.0-alpha.1"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_channel_derivation_without_node() {
+  local name="channel derived in pure bash for main / current stable / older stable"
+  # Source the script's function by extracting it; simplest is to invoke the
+  # script far enough to log the channel, but that needs a full fixture. Here we
+  # assert the branch→channel mapping directly via the script's own logic by
+  # running a no-op repair for each branch and reading the logged channel.
+  local out
+  setup_fixture "11.0.0-alpha.5"
+  git notes --ref="semantic-release-${TAG}" add -f -m '{"channels":["alpha"]}' "${TAG}"
+  git push -q origin "refs/notes/semantic-release-${TAG}"
+  echo "${TAG}" > "${FIXTURE}/gh-state" # everything present -> no-op, but channel is logged first
+
+  out="$(run_repair main 2>&1)"
+  local main_ok=0; [[ "${out}" == *"releases on channel 'alpha'"* ]] && main_ok=1
+  out="$(CAMUNDA_SDK_CURRENT_STABLE_MAJOR=10 run_repair stable/10 2>&1)"
+  local cur_ok=0; [[ "${out}" == *"releases on channel 'latest'"* ]] && cur_ok=1
+  out="$(CAMUNDA_SDK_CURRENT_STABLE_MAJOR=10 run_repair stable/9 2>&1)"
+  local old_ok=0; [[ "${out}" == *"releases on channel '9-stable'"* ]] && old_ok=1
+
+  if [[ "${main_ok}" == "1" && "${cur_ok}" == "1" && "${old_ok}" == "1" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (main=${main_ok} current=${cur_ok} older=${old_ok})"
+  fi
+  teardown_fixture
+}
+
 main() {
   test_release_created_when_only_tag_and_note_present
   test_note_and_release_created_main_alpha
@@ -311,6 +400,9 @@ main() {
   test_explicit_older_tag_repaired
   test_explicit_tag_not_reachable_fails
   test_local_note_pushed_when_missing_remotely
+  test_head_release_preferred_over_ancestor_prerelease
+  test_ga_preferred_over_prerelease_at_same_commit
+  test_channel_derivation_without_node
 
   echo
   echo "${pass} passed, ${fail} failed"

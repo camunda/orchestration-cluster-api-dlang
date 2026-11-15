@@ -50,7 +50,27 @@ TAG="${1:-${TAG:-}}"
 if [[ -n "${TAG}" ]]; then
   EXPLICIT=1
 else
-  TAG="$(git tag -l 'v*' --sort=-version:refname --merged HEAD 2>/dev/null | head -n1 || true)"
+  # Auto mode: prefer a v* tag pointing *at* HEAD. Git's descending version
+  # order ranks a prerelease (v11.0.0-alpha.4) above the GA it precedes
+  # (v11.0.0), so the newest *reachable* tag can be an ancestor's prerelease
+  # even when HEAD is the new stable release commit — and the HEAD-equality
+  # guard below would then skip repairing that stable release. Only when no tag
+  # points at HEAD do we fall back to the newest reachable tag, which exists
+  # solely to drive the no-op diagnostic ("the failure happened before
+  # tagging").
+  head_commit_for_pick="$(git rev-parse HEAD 2>/dev/null || true)"
+  # Among the tags at HEAD, prefer a GA release (no prerelease `-`) over a
+  # prerelease: every version sort ranks a prerelease above the GA it precedes,
+  # so a plain "newest" pick could still select the prerelease here.
+  TAG="$(git tag -l 'v*' --points-at "${head_commit_for_pick}" 2>/dev/null \
+    | grep -v -- '-' | sort -V | tail -n1 || true)"
+  if [[ -z "${TAG}" ]]; then
+    TAG="$(git tag -l 'v*' --points-at "${head_commit_for_pick}" 2>/dev/null \
+      | sort -V | tail -n1 || true)"
+  fi
+  if [[ -z "${TAG}" ]]; then
+    TAG="$(git tag -l 'v*' --sort=-version:refname --merged HEAD 2>/dev/null | head -n1 || true)"
+  fi
 fi
 if [[ -z "${TAG}" ]]; then
   log "no v* tag reachable from HEAD; nothing to repair."
@@ -96,29 +116,40 @@ else
 fi
 
 # --- 3. Channel for the semantic-release note --------------------------------
-# Derive what release.config.cjs's branch config implies for this branch
-# rather than hard-coding: main → "alpha" (prerelease id), the current stable
-# line → "latest", an older stable/N → "N-stable".
+# Derive the channel the release.config.cjs branch model implies for this
+# branch. This mirrors the branch rules in
+# @camunda8/sdk-infra/configs/release.config.base.cjs (read via
+# release.config.cjs), but is computed in pure bash so the repair tooling — and
+# its test harness — runs on the documented D-only development setup, with no
+# Node.js or npm-installed release dependencies (README reserves those for
+# `make generate` / spec fetching). The branch model, for reference:
+#   main                    → "alpha"  (prerelease id)
+#   stable/<current major>  → "latest"
+#   stable/<older major>    → "<major>-stable"
+# CAMUNDA_SDK_CURRENT_STABLE_MAJOR names the currently promoted stable major.
+channel_for_branch() {
+  local branch="$1"
+  local current="${CAMUNDA_SDK_CURRENT_STABLE_MAJOR:-}"
+  if [[ "${branch}" == "main" ]]; then
+    printf 'alpha'
+    return 0
+  fi
+  if [[ "${branch}" =~ ^stable/([0-9]+)$ ]]; then
+    local major="${BASH_REMATCH[1]}"
+    if [[ -n "${current}" && "${major}" == "${current}" ]]; then
+      printf 'latest'
+    else
+      printf '%s-stable' "${major}"
+    fi
+    return 0
+  fi
+  return 1
+}
 
 BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')}"
-CHANNEL="$(BRANCH="${BRANCH}" node - "${REPO_ROOT}" <<'NODE'
-const path = require('node:path');
-const repoRoot = process.argv[2];
-process.env.GITHUB_REF_NAME = process.env.BRANCH || process.env.GITHUB_REF_NAME || '';
-const cfg = require(path.join(repoRoot, 'release.config.cjs'));
-const entry = (cfg.branches || []).find(
-  (b) => (typeof b === 'string' ? b : b && b.name) === process.env.GITHUB_REF_NAME,
-);
-let channel = entry && typeof entry === 'object' ? entry.channel : undefined;
-if (!channel && entry && typeof entry === 'object' && entry.prerelease) {
-  channel = entry.prerelease; // semantic-release defaults channel to the prerelease id
-}
-if (!channel) channel = 'latest';
-process.stdout.write(channel);
-NODE
-)"
+CHANNEL="$(channel_for_branch "${BRANCH}")"
 if [[ -z "${CHANNEL}" ]]; then
-  die "could not derive the release channel for branch '${BRANCH}' from release.config.cjs"
+  die "could not derive the release channel for branch '${BRANCH}' (expected 'main' or 'stable/<major>')"
 fi
 log "branch '${BRANCH}' releases on channel '${CHANNEL}'"
 
