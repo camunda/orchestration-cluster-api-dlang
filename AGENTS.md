@@ -127,10 +127,12 @@ it by hand there, or skip it.
 After the cherry-pick, the workflow adds a `chore(gen): regenerate for backport of #N`
 commit. The derived files (`generated-paths`: `external-spec/`, `source/camunda/generated/`,
 `docs/`, and the generated `examples/*.d` plus `operation-map.json`) are restored from the
-target branch, regenerated, and built. `generated-paths` takes no globs or excludes, so the
+target branch, regenerated, and unit-tested (`dub test && dub test :runtime`). `generated-paths` takes no globs or excludes, so the
 generated examples are listed one by one, without the hand-written `readme.d` and
 `topology.d`. **When a new API tag adds an example file, add it to `generated-paths` on
-every branch that has it**; until then, a backport whose regeneration writes it is rejected.
+every branch that has it** before backporting such a change. The workflow commits only listed
+paths: from sdk-infra#112 it fails and names an unlisted file the regeneration wrote; before
+that, it silently leaves the file out.
 
 If the cherry-pick conflicts, the action opens a **draft** PR with the conflicts committed. A
 draft always means a conflict, even without conflict markers: if the source changes a file
