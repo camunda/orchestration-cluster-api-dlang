@@ -66,9 +66,13 @@ STUB
   : > "${FIXTURE}/gh-state"
   export PATH="${FIXTURE}/bin:${PATH}"
 
-  # Local bare remote + working clone.
+  # Local bare remote + working clone. Pin the initial branch to `main` so the
+  # fixture does not depend on the host's init.defaultBranch (master vs main):
+  # the harness pushes HEAD:main and later checks out `main` by name, so an
+  # ambient default of `master` would otherwise make `make check` fail for the
+  # wrong reason.
   git init -q --bare "${FIXTURE}/remote.git"
-  git init -q "${FIXTURE}/work"
+  git init -q -b main "${FIXTURE}/work"
   cd "${FIXTURE}/work" || return 1
   git config user.name test
   git config user.email test@example.com
@@ -274,7 +278,7 @@ test_explicit_tag_not_reachable_fails() {
   git checkout -q -b other
   git commit -q --allow-empty -m "unrelated work"
   git tag -a "v9.9.9" -m "9.9.9"
-  git checkout -q main 2>/dev/null || git checkout -q master
+  git checkout -q main
   local out rc
   out="$(run_repair main v9.9.9 2>&1)"; rc=$?
   if [[ "${rc}" != "0" ]] \
