@@ -9,7 +9,9 @@
 # mixes generated files with the hand-written readme.d and topology.d, so the
 # generated examples are listed one by one (every examples/*.d except those two,
 # plus operation-map.json). If a spec change adds a tag, its new example file is
-# not listed and the regeneration commit is rejected loudly: add it here.
+# not listed: add it here on every branch BEFORE backporting such a change. The
+# shared workflow stages only listed paths; from sdk-infra#112 it fails and names
+# an unlisted file the regeneration wrote, before that it silently leaves it out.
 generated-paths:
   - external-spec
   - source/camunda/generated
@@ -57,5 +59,6 @@ generated-paths:
   - examples/user_task.d
   - examples/variable.d
 
-# Regenerates from the committed spec, then checks that the SDK builds.
-regenerate: python3 scripts/generate.py && dub build
+# Regenerates from the committed spec, then builds and runs the unit tests of the
+# SDK and the runtime (as ci.yml), so test-only references are checked too.
+regenerate: python3 scripts/generate.py && dub test && dub test :runtime
