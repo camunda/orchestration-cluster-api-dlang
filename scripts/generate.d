@@ -940,10 +940,29 @@ string tenantKind(Spec spec, J schema, int depth = 0)
     return ("tenantId" in req) ? "req" : "opt";
 }
 
-/// JSON request body with an optional tenantId: the configured default
-/// tenant is filled in when the caller leaves it unset (#8).
+// Tenant-scoped commands that get the effective default tenant (configured,
+// else `<default>`) when the caller passes none -- the Camunda Java client's
+// rule (#14). Searches and every other operation never get a tenant added.
+immutable bool[string] DEFAULT_TENANT_OPS;
+
+shared static this()
+{
+    bool[string] ops;
+    foreach (o; [
+        "createProcessInstance", "publishMessage", "correlateMessage",
+        "broadcastSignal", "evaluateDecision", "evaluateExpression",
+        "evaluateConditionals",
+    ])
+        ops[o] = true;
+    DEFAULT_TENANT_OPS = cast(immutable) ops;
+}
+
+/// JSON request body with an optional tenantId on a tenant-scoped command:
+/// the effective default tenant is filled in when the caller leaves it unset.
 bool injectsDefaultTenant(Spec spec, J op)
 {
+    if ((op.get("operationId").orS("") in DEFAULT_TENANT_OPS) is null)
+        return false;
     J item;
     auto operation = specOperation(spec, op, item);
     auto content = operation.get("requestBody").get("content").get("application/json");
@@ -1091,6 +1110,8 @@ string renderOperation(Spec spec, J op)
     string bodyE = bodyArg !is null ? bodyArg : "JSONValue.init";
     if (bodyArg !is null && injectsDefaultTenant(spec, op))
         bodyE = "this.withDefaultTenant(" ~ bodyE ~ ")";
+    else if (bodyArg !is null && op.get("operationId").orS("") == "activateJobs")
+        bodyE = "this.withDefaultJobTenants(" ~ bodyE ~ ")";
     const serverE = opServerArg(spec, op);
     const tail = dString(method) ~ ", path_, " ~ bodyE ~ ", " ~ queryE ~ serverE ~ ");";
 
@@ -1448,6 +1469,44 @@ void hook07Examples(Spec spec)
     const mapPath = buildPath(examplesDir, "operation-map.json");
     write(mapPath, renderOperationMap(opMap) ~ "\n");
     log("07-examples", format("wrote %s (%s operations)", rel(mapPath), opMap.length));
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+unittest
+{
+    import camunda.openapi.json : parseJson;
+
+    // A minimal spec: one component schema with an optional tenantId, one
+    // allowlisted command and one search that both use it as their JSON body.
+    const doc = `{
+        "paths": {
+            "/process-instances": {"post": {"requestBody": {"content": {
+                "application/json": {"schema": {"$ref": "#/components/schemas/Cmd"}}}}}},
+            "/process-instances/search": {"post": {"requestBody": {"content": {
+                "application/json": {"schema": {"$ref": "#/components/schemas/Cmd"}}}}}}
+        },
+        "components": {"schemas": {"Cmd": {"type": "object",
+            "properties": {"tenantId": {"type": "string"}}}}}
+    }`;
+    auto spec = new Spec(parseJson(doc));
+    J cmdOp = J.obj();
+    cmdOp.set("operationId", J.str("createProcessInstance"));
+    cmdOp.set("path", J.str("/process-instances"));
+    cmdOp.set("method", J.str("post"));
+    J searchOp = J.obj();
+    searchOp.set("operationId", J.str("searchProcessInstances"));
+    searchOp.set("path", J.str("/process-instances/search"));
+    searchOp.set("method", J.str("post"));
+
+    // #14: only allowlisted tenant-scoped commands get the default tenant;
+    // a search with the very same optional-tenantId body never does.
+    assert(injectsDefaultTenant(spec, cmdOp));
+    assert(!injectsDefaultTenant(spec, searchOp));
+    assert(DEFAULT_TENANT_OPS.length == 7);
+    assert(("activateJobs" in DEFAULT_TENANT_OPS) is null);
 }
 
 int main()
