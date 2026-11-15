@@ -1,3 +1,10 @@
+# [11.0.0-alpha.5](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.4...v11.0.0-alpha.5) (2026-11-15)
+
+
+### Bug Fixes
+
+* send the default tenant (<default> unless configured) on tenant-scoped commands ([#16](https://github.com/camunda/orchestration-cluster-api-dlang/issues/16)) ([9f9e44f](https://github.com/camunda/orchestration-cluster-api-dlang/commit/9f9e44fa4190c044e3b6afdfdfb5e99212258ad4)), closes [#14](https://github.com/camunda/orchestration-cluster-api-dlang/issues/14) [#10](https://github.com/camunda/orchestration-cluster-api-dlang/issues/10)
+
 # [11.0.0-alpha.4](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.3...v11.0.0-alpha.4) (2026-11-14)
 
 
