@@ -269,6 +269,13 @@ One `CamundaClient` is safe to use from many threads: authentication and
 backpressure state are locked, and each thread keeps its own keep-alive
 connection. Hand it to threads you `spawn` yourself with `client.threadSafe`.
 
+Each thread that makes requests holds about three file descriptors (its
+connection plus libcurl's internal wake-up pipe). On macOS, libcurl waits
+with `select()`, which can't use descriptors numbered 1024 or above:
+requests on those fail with "A libcurl function was given a bad argument".
+Keep a process there to a few hundred request threads. Linux libcurl uses
+`poll()` and is limited only by `ulimit -n`.
+
 ## Eventual consistency
 
 Reads against secondary storage may lag a write. `eventual` polls until the
