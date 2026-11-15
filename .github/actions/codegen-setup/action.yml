@@ -1,0 +1,11 @@
+# Toolchain for the backport regeneration (sdk-backport.yml), as in ci.yml:
+# setup-sdk-toolchain has no D. Read from the backport's TARGET branch.
+# No caches: this job runs the backport branch's code.
+name: Codegen setup
+description: Install LDC and dub (the generator and the build check).
+runs:
+  using: composite
+  steps:
+    - uses: dlang-community/setup-dlang@v2
+      with:
+        compiler: ldc-1.43.0
