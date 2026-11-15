@@ -62,18 +62,42 @@ void jobWorker()
     // region JobWorker
     import camunda;
 
+    // Holds up to 20 jobs at once and handles them on 20 threads.
     auto worker = client.createJobWorker(
         JobWorkerConfig.create("payment-service")
             .maxJobs(20)
             .name("payment-worker"),
     );
 
+    // The handler runs on the worker's threads: a function, not a closure.
     worker.run((Job job) {
         import std.stdio : writeln;
         writeln("handling job ", job.key);
         return JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
     });
     // endregion JobWorker
+}
+
+void jobWorkerWithContext()
+{
+    auto client = CamundaClient.fromEnv();
+    // region JobWorkerContext
+    import camunda;
+
+    // Shared state goes in through a sendable context argument: immutable
+    // data, a `Chan`, or a `ThreadSafe` reference.
+    static immutable string[string] prices = ["basic": "10", "pro": "50"];
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("price-lookup").maxJobs(64).threads(8));
+    auto log = Chan!string.make;
+
+    worker.run((Job job, Chan!string log) {
+        const plan = job.variables["plan"].str;
+        log.put("priced " ~ job.key);
+        if (plan == "stop") job.stopWorker(); // run returns once in-flight jobs finish
+        return JobAction.completeWith(JSONValue(["price": JSONValue(prices.get(plan, "0"))]));
+    }, log);
+    // endregion JobWorkerContext
 }
 
 void eventualConsistency()

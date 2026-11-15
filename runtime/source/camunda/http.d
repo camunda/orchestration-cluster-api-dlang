@@ -5,7 +5,7 @@ module camunda.http;
 
 import camunda.errors;
 import camunda.jsonx;
-import camunda.safeio : ownText, readBytes;
+import camunda.safeio : Chan, ownText, readBytes, spawn;
 import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
 import std.net.curl : HTTP, CurlException;
@@ -51,22 +51,53 @@ struct HttpResponse
 /// dropped and sent chunked). Instead every request with a body is a curl
 /// POST with `postfields` + the real Content-Type, and PUT/PATCH/DELETE are
 /// sent with CURLOPT_CUSTOMREQUEST. (camunda/orchestration-cluster-api-dlang#5)
+///
+/// Connections: each thread keeps one curl handle per TLS setup
+/// (`tlsHandles`) and reuses it, so libcurl keeps the connection alive
+/// between requests instead of opening a TCP (and TLS) connection per call.
+/// Every request starts from a reset method state and clears what it set
+/// (headers, custom verb, body pointer) on the way out, so nothing leaks into
+/// the next request on the same handle. A handle whose transfer failed is
+/// dropped and rebuilt on next use.
 HttpResponse perform(const ref HttpRequest req) @trusted
 {
     import etc.c.curl : CurlOption;
-    auto http = HTTP(req.url);
+    const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase;
+    HTTP http;
+    if (auto h = tlsKey in tlsHandles) http = *h;
+    else
+    {
+        http = HTTP();
+        if (req.caPath.length) http.caInfo = req.caPath;
+        if (req.certPath.length)
+        {
+            http.handle.set(CurlOption.sslcert, req.certPath);
+            if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
+            if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
+        }
+        tlsHandles[tlsKey] = http;
+    }
+    http.url = req.url;
+    // Reset the method (GET clears POST/upload/nobody) and the verb override.
+    http.handle.set(CurlOption.httpget, 1L);
+    http.handle.clear(CurlOption.customrequest);
+    http.method = HTTP.Method.undefined;
+    http.clearRequestHeaders();
+    scope (exit)
+    {
+        // `setPostData` keeps a pointer to `payload` without copying it:
+        // never leave it on the handle past this call.
+        http.clearRequestHeaders();
+        http.handle.clear(CurlOption.customrequest);
+        http.handle.clear(CurlOption.postfields);
+        http.handle.set(CurlOption.httpget, 1L);
+        http.onReceive = null;
+        http.onReceiveHeader = null;
+    }
     foreach (k, v; req.headers) http.addRequestHeader(k, v);
     import core.time : msecs;
     http.connectTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
     http.operationTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
-
-    if (req.caPath.length) http.caInfo = req.caPath;
-    if (req.certPath.length)
-    {
-        http.handle.set(CurlOption.sslcert, req.certPath);
-        if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
-        if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
-    }
 
     const(void)[] payload;
     if (req.rawBody.length) payload = req.rawBody;
@@ -113,7 +144,10 @@ HttpResponse perform(const ref HttpRequest req) @trusted
     };
     try http.perform();
     catch (CurlException e)
+    {
+        tlsHandles.remove(tlsKey);
         throw new NetworkException(e.msg, __FILE__, __LINE__, e);
+    }
 
     HttpResponse res;
     res.status = http.statusLine.code;
@@ -122,6 +156,12 @@ HttpResponse perform(const ref HttpRequest req) @trusted
     res.body_ = ownText(buf);
     return res;
 }
+
+/// This thread's curl handles, one per TLS setup (module variables are
+/// thread-local in D, so no other thread ever sees them). TLS options are
+/// fixed per handle, so a request with a different CA or client certificate
+/// never inherits another's.
+private HTTP[string] tlsHandles;
 
 string encodeQuery(string[string] query)
 {
@@ -355,4 +395,123 @@ unittest
     auto rawExp = captureRequest(exp);
     assert(hasHeader(rawExp, "expect: 100-continue"), rawExp);
     assert(rawExp.toLower.count("expect:") == 1, rawExp);
+}
+
+version (unittest)
+{
+    /// A keep-alive HTTP/1.1 server on its own thread: answers `requests`
+    /// requests with `{}`, sending each raw request (head and body, framed
+    /// by Content-Length) on `seen`. The port goes out first on `out_`, the
+    /// number of TCP connections it accepted last.
+    private void countingServer(int requests, Chan!int out_, Chan!string seen)
+    {
+        import std.socket : TcpSocket, InternetAddress, Socket, SocketSet, SocketOption, SocketOptionLevel;
+        import std.conv : to;
+        import std.string : indexOf, toLower;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(16);
+        out_.put((cast(InternetAddress) listener.localAddress).port);
+        Socket[] conns;
+        string[] pending;
+        int accepted, answered;
+        auto set = new SocketSet();
+        while (answered < requests)
+        {
+            set.reset();
+            set.add(listener);
+            foreach (c; conns) set.add(c);
+            if (Socket.select(set, null, null) <= 0) continue;
+            if (set.isSet(listener))
+            {
+                conns ~= listener.accept();
+                pending ~= "";
+                accepted++;
+            }
+            foreach (i, c; conns)
+            {
+                if (!set.isSet(c)) continue;
+                ubyte[4096] chunk;
+                const n = c.receive(chunk[]);
+                if (n <= 0) continue;
+                pending[i] ~= cast(const(char)[]) chunk[0 .. n];
+                for (;;)
+                {
+                    const end = pending[i].indexOf("\r\n\r\n");
+                    if (end < 0) break;
+                    const head = pending[i][0 .. end + 4];
+                    size_t bodyLen;
+                    const cl = head.toLower.indexOf("\r\ncontent-length:");
+                    if (cl >= 0)
+                    {
+                        auto rest = head[cl + 17 .. $];
+                        import std.string : strip;
+                        bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                    }
+                    if (pending[i].length < head.length + bodyLen) break;
+                    seen.put(pending[i][0 .. head.length + bodyLen]);
+                    pending[i] = pending[i][head.length + bodyLen .. $];
+                    c.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
+                    answered++;
+                }
+            }
+        }
+        foreach (c; conns) c.close();
+        out_.put(accepted);
+        seen.close();
+    }
+}
+
+// Sequential requests on one thread reuse one connection (keep-alive)
+// instead of opening a TCP connection per request, and nothing one request
+// set on the reused handle (verb override, body, Content-Type) leaks into
+// the next.
+unittest
+{
+    import std.algorithm.searching : canFind, startsWith;
+    import std.conv : to;
+    import std.uni : toLower;
+    auto ch = Chan!int.make;
+    auto seen = Chan!string.make;
+    auto server = spawn(&countingServer, 6, ch, seen);
+    int port;
+    ch.take(port);
+    const base = "http://127.0.0.1:" ~ port.to!string;
+    void send(string method, string body_ = null)
+    {
+        HttpRequest req;
+        req.method = method;
+        req.body_ = body_;
+        req.url = base ~ "/v2/things";
+        auto res = perform(req);
+        assert(res.status == 200 && res.body_ == "{}", res.body_);
+    }
+    send("POST", `{"a":1}`);
+    send("PATCH", `{"b":2}`);
+    send("DELETE");
+    send("GET");
+    send("PUT");
+    send("GET");
+    string[] raw;
+    string r;
+    while (seen.take(r)) raw ~= r;
+    int accepted;
+    ch.take(accepted);
+    server.join();
+    assert(accepted == 1, "expected 1 connection for 6 requests, got " ~ accepted.to!string);
+    assert(raw.length == 6);
+    assert(raw[0].startsWith("POST /v2/things ") && bodyOf(raw[0]) == `{"a":1}`, raw[0]);
+    assert(raw[1].startsWith("PATCH /v2/things ") && bodyOf(raw[1]) == `{"b":2}`, raw[1]);
+    foreach (i, want; ["DELETE", "GET"])
+    {
+        auto req = raw[2 + i];
+        assert(req.startsWith(want ~ " /v2/things "), req);
+        assert(!req.toLower.canFind("content-type:"), req);
+        assert(!req.toLower.canFind("content-length:") || hasHeader(req, "content-length: 0"), req);
+        assert(bodyOf(req) == "", req);
+    }
+    assert(raw[4].startsWith("PUT /v2/things ") && hasHeader(raw[4], "content-length: 0"), raw[4]);
+    assert(raw[5].startsWith("GET /v2/things ") && bodyOf(raw[5]) == "", raw[5]);
 }

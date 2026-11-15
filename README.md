@@ -212,23 +212,69 @@ auto loose = JobKey.assumeExists("123");
 
 ## Job workers
 
+A worker polls on the thread that calls `run` and hands jobs to a pool of
+handler threads. `maxJobs` caps how many jobs it holds at once (activated and
+not yet completed); it activates more as soon as 30% of that capacity is
+free, asking only for what fits. `threads` sets the pool size (default: one
+thread per job slot). A handler that throws fails its job with one retry
+fewer; failed activations back off from 50 ms to 5 s. `stop()` (or
+`job.stopWorker()`, or `worker.control.get.stop()` from another thread) ends
+`run` after the jobs in hand finish; `worker.stats` counts what happened.
+
 <!-- snippet-source: examples/readme.d | regions: JobWorker -->
 
 ```d
 import camunda;
 
+// Holds up to 20 jobs at once and handles them on 20 threads.
 auto worker = client.createJobWorker(
     JobWorkerConfig.create("payment-service")
         .maxJobs(20)
         .name("payment-worker"),
 );
 
+// The handler runs on the worker's threads: a function, not a closure.
 worker.run((Job job) {
     import std.stdio : writeln;
     writeln("handling job ", job.key);
     return JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
 });
 ```
+
+Handlers can't capture local state (it would be shared across threads
+unchecked). Pass it as a context argument instead; the compiler only accepts
+sendable types:
+
+<!-- snippet-source: examples/readme.d | regions: JobWorkerContext -->
+
+```d
+import camunda;
+
+// Shared state goes in through a sendable context argument: immutable
+// data, a `Chan`, or a `ThreadSafe` reference.
+static immutable string[string] prices = ["basic": "10", "pro": "50"];
+auto worker = client.createJobWorker(
+    JobWorkerConfig.create("price-lookup").maxJobs(64).threads(8));
+auto log = Chan!string.make;
+
+worker.run((Job job, Chan!string log) {
+    const plan = job.variables["plan"].str;
+    log.put("priced " ~ job.key);
+    if (plan == "stop") job.stopWorker(); // run returns once in-flight jobs finish
+    return JobAction.completeWith(JSONValue(["price": JSONValue(prices.get(plan, "0"))]));
+}, log);
+```
+
+One `CamundaClient` is safe to use from many threads: authentication and
+backpressure state are locked, and each thread keeps its own keep-alive
+connection. Hand it to threads you `spawn` yourself with `client.threadSafe`.
+
+Each thread that makes requests holds about three file descriptors (its
+connection plus libcurl's internal wake-up pipe). On macOS, libcurl waits
+with `select()`, which can't use descriptors numbered 1024 or above:
+requests on those fail with "A libcurl function was given a bad argument".
+Keep a process there to a few hundred request threads. Linux libcurl uses
+`poll()` and is limited only by `ulimit -n`.
 
 ## Eventual consistency
 
@@ -277,7 +323,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_SDK_EVENTUAL_POLL_DEFAULT_MS` | `10000` | Default overall timeout for `eventual` polling, in milliseconds. |
 | `CAMUNDA_SDK_LOG_LEVEL` | `info` | `off`, `error`, `warn`, `info`, `debug`, or `trace`. |
 | `CAMUNDA_WORKER_TIMEOUT` | `60000` | Default job activation timeout, in milliseconds. |
-| `CAMUNDA_WORKER_MAX_CONCURRENT_JOBS` | `32` | Default maximum number of jobs a worker activates at once. |
+| `CAMUNDA_WORKER_MAX_CONCURRENT_JOBS` | `32` | Default most jobs a worker holds (and, unless `threads` is set, handles in parallel) at once. |
 | `CAMUNDA_WORKER_REQUEST_TIMEOUT` | `10000` | Default long-poll request timeout, in milliseconds. |
 | `CAMUNDA_WORKER_NAME` | `d-sdk-worker` | Default worker name reported when activating jobs. |
 | `CAMUNDA_WORKER_STARTUP_JITTER_MAX_SECONDS` | `0` | Maximum random startup delay before the first poll, in seconds. |
