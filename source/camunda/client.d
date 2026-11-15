@@ -105,7 +105,8 @@ final class CamundaClient
 
     /// `activateJobs` body with `tenantIds: [<effective default tenant>]` when
     /// `tenantFilter` is `PROVIDED` or unset and no tenant ids are given
-    /// (absent, null or empty). With `ASSIGNED` the body is left alone.
+    /// (absent, null, empty or not an array). With `ASSIGNED` the body is
+    /// left alone.
     JSONValue withDefaultJobTenants(JSONValue body_)
     {
         if (body_.type != JSONType.object) return body_;
@@ -114,7 +115,8 @@ final class CamundaClient
         if (auto t = "tenantIds" in body_.objectNoRef)
             if (t.type == JSONType.array && t.arrayNoRef.length) return body_;
         JSONValue copy = emptyObject();
-        foreach (k, v; body_.objectNoRef) copy[k] = v;
+        foreach (k, v; body_.objectNoRef)
+            if (k != "tenantIds") copy[k] = v;
         copy["tenantIds"] = JSONValue([effectiveDefaultTenant]);
         return copy;
     }
@@ -333,6 +335,7 @@ unittest
     auto ids(JSONValue v) { string[] r; foreach (e; v["tenantIds"].arrayNoRef) r ~= e.str; return r; }
     assert(ids(none.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["<default>"]);
     assert(ids(none.withDefaultJobTenants(parseJSON(`{"type":"x","tenantIds":[]}`))) == ["<default>"]);
+    assert(ids(none.withDefaultJobTenants(parseJSON(`{"type":"x","tenantIds":null}`))) == ["<default>"]);
     assert(ids(none.withDefaultJobTenants(parseJSON(`{"tenantFilter":"PROVIDED"}`))) == ["<default>"]);
     assert(ids(t1.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["t1"]);
     assert(ids(t1.withDefaultJobTenants(parseJSON(`{"tenantIds":["a","b"]}`))) == ["a", "b"]);
