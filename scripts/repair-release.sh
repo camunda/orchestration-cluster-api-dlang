@@ -20,14 +20,17 @@
 #      exist and its commit must be reachable from the current branch (the
 #      workflow runs at the branch tip, which may have moved past the tag);
 #   3. recreates refs/notes/semantic-release-<tag> when missing, deriving the
-#      channel from release.config.cjs's branch config (via node), and pushes
+#      channel from the release.config.cjs branch model in pure bash (no Node.js
+#      / npm dependency), and pushes
 #      it with up to 3 attempts and backoff — retried whenever the note is
 #      absent from origin, even if a local note already exists;
 #   4. creates the GitHub Release from the tag's CHANGELOG.md section with
 #      --verify-tag (--prerelease --latest=false for prereleases; --latest=false
-#      plus scripts/mark-latest.sh for stable releases, so the existing
-#      never-demote rule decides whether it becomes Latest) — skipped when the
-#      release already exists;
+#      for stable releases) — skipped when the release already exists. For a
+#      stable (GA) version it then runs scripts/mark-latest.sh *unconditionally*
+#      — even when the release already existed — so a retry whose earlier
+#      attempt created the release but died before marking it Latest still
+#      reconciles Latest; the never-demote rule there decides;
 #   5. prints a ::warning:: summary of what was repaired.
 #
 # Exit codes: 0 = nothing to repair or fully repaired; 1 = a repair was
@@ -90,8 +93,18 @@ fi
 # --- 2. Validate the tag -------------------------------------------------------
 
 VERSION="${TAG#v}"
-tag_commit="$(git rev-list -n1 "${TAG}" 2>/dev/null || true)"
+# An explicit repair target must be an exact tag ref, not just any resolvable
+# revision: `rev-list` and the reachability check below both accept `HEAD` or a
+# branch name, which would otherwise push a bogus refs/notes/semantic-release-HEAD
+# before failing CHANGELOG extraction. Resolve only refs/tags/<name> so an
+# invalid repair request dies before anything is pushed to origin. (Auto mode
+# always yields a real tag, but the check is cheap and keeps the invariant in
+# one place.)
+tag_commit="$(git rev-list -n1 "refs/tags/${TAG}" 2>/dev/null || true)"
 if [[ -z "${tag_commit}" ]]; then
+  if ((EXPLICIT)); then
+    die "no tag named ${TAG} (refs/tags/${TAG} does not resolve); refusing to repair a non-tag revision."
+  fi
   die "tag ${TAG} does not exist locally; cannot repair."
 fi
 
@@ -222,11 +235,17 @@ else
     die "failed to create GitHub Release for ${TAG}"
   fi
   repaired+=("GitHub Release ${TAG}")
+fi
 
-  # A stable release may deserve Latest; the existing never-demote rule decides.
-  if [[ "${VERSION}" != *-* ]]; then
-    bash "${SCRIPT_DIR}/mark-latest.sh" "${VERSION}" || true
-  fi
+# Reconcile Latest for a stable release *outside* the creation guard: when
+# creation succeeded on an earlier attempt but the runner stopped before the
+# release was marked Latest (or that edit failed transiently), the retry finds
+# RELEASE_EXISTS=1 and skips the block above — so the reconciliation must run
+# for an already-existing release too, or the stable release can stay absent
+# from Latest forever. The never-demote rule in mark-latest.sh makes this safe
+# to run unconditionally for GA versions.
+if [[ "${VERSION}" != *-* ]]; then
+  bash "${SCRIPT_DIR}/mark-latest.sh" "${VERSION}" || true
 fi
 
 # --- 6. Summary ----------------------------------------------------------------

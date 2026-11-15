@@ -389,6 +389,48 @@ test_channel_derivation_without_node() {
   teardown_fixture
 }
 
+test_explicit_nontag_revision_fails_without_mutating_origin() {
+  local name="explicit non-tag revision (HEAD) -> dies before pushing any note"
+  # `HEAD` resolves via rev-list and is reachable from HEAD, so without an exact
+  # refs/tags/ check the script would push refs/notes/semantic-release-HEAD
+  # before failing CHANGELOG extraction. It must die before any push.
+  setup_fixture "11.0.0-alpha.5"
+  local out rc
+  out="$(run_repair main HEAD 2>&1)"; rc=$?
+  if [[ "${rc}" != "0" ]] \
+    && [[ "${out}" == *"no tag named HEAD"* ]] \
+    && ! git ls-remote "${FIXTURE}/remote.git" 'refs/notes/*' 2>/dev/null | grep -q . \
+    && ! gh_calls_contain "release create"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_latest_reconciled_when_stable_release_already_exists() {
+  local name="stable release exists but not Latest -> mark-latest runs on retry"
+  # Creation succeeded on an earlier attempt but the runner died before marking
+  # Latest, so the release already exists (RELEASE_EXISTS=1) and creation is
+  # skipped. The Latest reconciliation must still run for the GA release.
+  # repair-release.sh invokes scripts/mark-latest.sh by absolute path, so we
+  # observe it through the stubbed gh: the real mark-latest.sh calls
+  # `gh release edit <tag> --latest` when the release should become Latest
+  # (here there is no newer Latest, so it does).
+  setup_fixture "10.2.1" "##"
+  git notes --ref="semantic-release-${TAG}" add -f -m '{"channels":["latest"]}' "${TAG}"
+  git push -q origin "refs/notes/semantic-release-${TAG}"
+  echo "${TAG}" > "${FIXTURE}/gh-state" # release already exists
+  if CAMUNDA_SDK_CURRENT_STABLE_MAJOR=10 run_repair stable/10 \
+    && gh_calls_contain "release edit ${TAG} --latest" \
+    && ! gh_calls_contain "release create"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
 main() {
   test_release_created_when_only_tag_and_note_present
   test_note_and_release_created_main_alpha
@@ -403,6 +445,8 @@ main() {
   test_head_release_preferred_over_ancestor_prerelease
   test_ga_preferred_over_prerelease_at_same_commit
   test_channel_derivation_without_node
+  test_explicit_nontag_revision_fails_without_mutating_origin
+  test_latest_reconciled_when_stable_release_already_exists
 
   echo
   echo "${pass} passed, ${fail} failed"
