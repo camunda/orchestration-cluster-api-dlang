@@ -15,6 +15,7 @@ import camunda.errors;
 import camunda.http;
 import camunda.jsonx;
 import camunda.retry;
+import camunda.safeio : ThreadSafe;
 import camunda.version_ : sdkUserAgent;
 import std.json;
 
@@ -92,6 +93,12 @@ unittest
     assert(rootAddress("https://gw.example/base") == "https://gw.example/base");
 }
 
+/// Thread-safe once configured: request methods may run on several threads
+/// at once. `Authentication` and `BackpressureManager` lock their own state,
+/// curl handles are per thread (`camunda.http`), and the configuration and
+/// headers are fixed at construction. Setters (`userAgent`) are
+/// configuration: call them before sharing. A `TestClock` is not
+/// synchronized, so don't share a transport built with one.
 final class Transport
 {
     private CamundaConfig _config;
@@ -100,6 +107,14 @@ final class Transport
     private BackpressureManager _bp;
     private string _userAgent = sdkUserAgent;
     private string[string] _headers;
+
+    /// This transport as a value other threads may hold (`spawn` arguments).
+    ThreadSafe!Transport threadSafe()
+    {
+        // Sound by the class contract above: every mutable part is locked
+        // or per thread.
+        return ThreadSafe!Transport.assumeThreadSafe(this);
+    }
 
     this(CamundaOptions options)
     {

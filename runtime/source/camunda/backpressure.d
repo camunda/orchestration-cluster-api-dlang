@@ -62,8 +62,14 @@ private enum long BACKOFF_MAX_MS = 2000;
 private enum uint BACKOFF_ESCALATE = 2;
 
 /// Adaptive backpressure manager shared by a client and its workers.
+///
+/// Thread-safe: every method takes `lock`, and `acquire` sleeps between
+/// attempts without holding it, so workers on several threads share one
+/// gate.
 final class BackpressureManager
 {
+    import camunda.safeio : Lock;
+    private Lock lock;
     private bool observeOnly;
     private Clock clock;
     private BackpressureSeverity severity = BackpressureSeverity.healthy;
@@ -81,18 +87,21 @@ final class BackpressureManager
     {
         this.observeOnly = profile == BackpressureProfile.legacy;
         this.clock = clock;
+        this.lock = new Lock;
     }
 
     BackpressureState state() const
     {
         BackpressureState s;
-        s.severity = severity;
-        s.consecutive = consecutive;
-        s.unlimited = unlimited;
-        s.permitsMax = permitsMax;
-        s.permitsCurrent = permitsCurrent;
-        s.waiters = waiters;
-        s.backoffMs = backoffMs;
+        lock.run({
+            s.severity = severity;
+            s.consecutive = consecutive;
+            s.unlimited = unlimited;
+            s.permitsMax = permitsMax;
+            s.permitsCurrent = permitsCurrent;
+            s.waiters = waiters;
+            s.backoffMs = backoffMs;
+        });
         return s;
     }
 
@@ -101,39 +110,51 @@ final class BackpressureManager
     void acquire()
     {
         if (observeOnly) return;
-        maybeRecover();
-        if (unlimited)
+        bool waiting;
+        for (;;)
         {
-            permitsCurrent += 1;
-            return;
-        }
-        if (permitsCurrent < permitsMax)
-        {
-            permitsCurrent += 1;
-            return;
-        }
-        if (waiters >= MAX_WAITERS)
-            throw new BackpressureException("waiter queue at capacity");
-        waiters += 1;
-        scope (exit) waiters -= 1;
-        while (!unlimited && permitsCurrent >= permitsMax)
-        {
-            auto delay = backoffMs > 0 ? backoffMs : 1;
+            long delay;
+            if (lock.run(() => tryAcquire(waiting, delay))) return;
             clock.sleep(delay);
-            maybeRecover();
         }
-        permitsCurrent += 1;
+    }
+
+    /// One attempt at a permit, under `lock`. On failure, joins the waiters
+    /// (once) and sets `delay` to how long to sleep before the next attempt.
+    private bool tryAcquire(ref bool waiting, ref long delay)
+    {
+        maybeRecover();
+        if (unlimited || permitsCurrent < permitsMax)
+        {
+            permitsCurrent += 1;
+            if (waiting) waiters -= 1;
+            return true;
+        }
+        if (!waiting)
+        {
+            if (waiters >= MAX_WAITERS)
+                throw new BackpressureException("waiter queue at capacity");
+            waiters += 1;
+            waiting = true;
+        }
+        delay = backoffMs > 0 ? backoffMs : 1;
+        return false;
     }
 
     void release()
     {
         if (observeOnly) return;
-        if (permitsCurrent > 0) permitsCurrent -= 1;
+        lock.run({ if (permitsCurrent > 0) permitsCurrent -= 1; });
     }
 
     void recordHealthyHint()
     {
         if (observeOnly) return;
+        lock.run(&recordHealthyHintLocked);
+    }
+
+    private void recordHealthyHintLocked()
+    {
         auto now = clock.nowMs();
         if (lastEventAt >= 0 && now - lastEventAt >= DECAY_QUIET_MS)
         {
@@ -152,6 +173,11 @@ final class BackpressureManager
     void recordBackpressure()
     {
         if (observeOnly) return;
+        lock.run(&recordBackpressureLocked);
+    }
+
+    private void recordBackpressureLocked()
+    {
         auto now = clock.nowMs();
         lastEventAt = now;
         healthySince = -1;
@@ -234,4 +260,36 @@ unittest
     bp.recordBackpressure();
     bp.recordBackpressure();
     assert(bp.state.unlimited); // observe-only never gates
+}
+
+unittest
+{
+    // Shared by several threads, the gate never hands out more permits than
+    // its cap and ends balanced.
+    import camunda.clock : liveClock;
+    import camunda.safeio : JoinHandle, ThreadSafe, spawn;
+    static void hammer(ThreadSafe!BackpressureManager g)
+    {
+        auto bp = g.get;
+        foreach (_; 0 .. 300)
+        {
+            bp.acquire();
+            const s = bp.state();
+            assert(s.permitsCurrent <= s.permitsMax, "permit cap exceeded");
+            bp.release();
+        }
+    }
+    auto bp = new BackpressureManager(BackpressureProfile.balanced, liveClock());
+    bp.recordBackpressure(); // limited mode, cap INITIAL_MAX
+    bp.recordBackpressure();
+    bp.recordBackpressure(); // severe: cap shrinks
+    bp.recordBackpressure(); // cap 2 < 4 threads: the waiting path runs
+    assert(bp.state().permitsMax == 2);
+    // BackpressureManager takes its lock in every method.
+    auto g = ThreadSafe!BackpressureManager.assumeThreadSafe(bp);
+    JoinHandle[4] hs;
+    foreach (ref h; hs) h = spawn(&hammer, g);
+    foreach (ref h; hs) h.join();
+    assert(bp.state().permitsCurrent == 0);
+    assert(bp.state().waiters == 0);
 }

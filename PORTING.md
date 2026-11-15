@@ -39,7 +39,7 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 | `camunda/clock.d` | `clock.ts` / `clock.rs` | `Clock` / `LiveClock` / `TestClock` |
 | `camunda/backpressure.d` | `backpressure.ts` | AIMD gate, BALANCED vs LEGACY |
 | `camunda/eventual.d` | `eventual.ts` | Poll until predicate / 404-retry / timeout |
-| `camunda/worker.d` | `jobWorker.ts` | Long-poll activate → handler → complete/fail/error/leave, leases |
+| `camunda/worker.d` | `jobWorker.ts` | In-flight cap (`maxJobsActive`), poller + handler thread pool, long-poll activate → handler → complete/fail/error/leave, leases |
 | `camunda/client.d` | `CamundaClient` | Facade + curated `topology` / `deployResources` / `eventual` / `createJobWorker` |
 | `camunda/errors.d` | `errors.ts` | Typed exception taxonomy |
 | `camunda/jsonx.d`, `safeio.d` | — | `@safe` JSON + C-boundary |
@@ -56,7 +56,7 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 - **Engine clock.** `Clock` is injectable; `EngineClock` (pin the broker clock)
   is not ported.
 - **Falcon / command stream.** The Rust SDK's nanobpmn upgrade is not ported.
-- **Threaded workers, telemetry, support logger, Zod validation.** JS-only
+- **Telemetry, support logger, Zod validation.** JS-only
   surfaces, not in the PHP/Rust core either (or only partially).
 - **Pagination helpers** as a first-class `.paginate` on search ops.
 - **Integration tests** against a live cluster.

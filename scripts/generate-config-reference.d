@@ -77,7 +77,7 @@ immutable Var[] CONFIG_REFERENCE = [
         "`off`, `error`, `warn`, `info`, `debug`, or `trace`."),
     Var("CAMUNDA_WORKER_TIMEOUT", "60000", "Default job activation timeout, in milliseconds."),
     Var("CAMUNDA_WORKER_MAX_CONCURRENT_JOBS", "32",
-        "Default maximum number of jobs a worker activates at once."),
+        "Default most jobs a worker holds (and, unless `threads` is set, handles in parallel) at once."),
     Var("CAMUNDA_WORKER_REQUEST_TIMEOUT", "10000",
         "Default long-poll request timeout, in milliseconds."),
     Var("CAMUNDA_WORKER_NAME", "d-sdk-worker", "Default worker name reported when activating jobs."),

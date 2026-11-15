@@ -23,8 +23,13 @@ private struct CachedToken
 }
 
 /// Resolves and applies authentication to outgoing requests.
+///
+/// Thread-safe: the token cache is read and refreshed under `lock`, so when a
+/// token expires one thread fetches it and the others wait for it.
 final class Authentication
 {
+    import camunda.safeio : Lock;
+    private Lock lock;
     private AuthStrategy strategy;
     private string oauthUrl;
     private string clientId;
@@ -50,6 +55,7 @@ final class Authentication
         this.basicPassword = config.basicAuthPassword;
         this.oauthCacheDir = config.oauthCacheDir;
         this.clock = clock;
+        this.lock = new Lock;
     }
 
     AuthStrategy authStrategy() const { return strategy; }
@@ -66,7 +72,7 @@ final class Authentication
             h["Authorization"] = "Basic " ~ basicToken(basicUsername, basicPassword);
             break;
         case AuthStrategy.oauth:
-            h["Authorization"] = "Bearer " ~ accessToken();
+            h["Authorization"] = "Bearer " ~ lock.run(&accessToken);
             break;
         }
         return h;
