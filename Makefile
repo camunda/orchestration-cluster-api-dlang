@@ -1,6 +1,6 @@
 .PHONY: help generate generate-local bundle-spec test lint fmt-check check build examples \
 	sync-readme sync-readme-check config-reference config-reference-check \
-	example-coverage docs-md
+	example-coverage docs-md repair-release test-repair-release
 
 # Repo tooling is D, run as dub single-file programs (no Python needed).
 SCRIPT = dub run -q --single
@@ -21,6 +21,8 @@ help:
 	@echo "  make config-reference-check   CI: fail if the table drifted"
 	@echo "  make example-coverage         Every spec operation has a region in examples/"
 	@echo "  make docs-md                  Generate docs-md/d-sdk/ for camunda-docs"
+	@echo "  make repair-release TAG=vX.Y.Z  Repair a half-finished release (note + GitHub Release)"
+	@echo "  make test-repair-release      Run the repair-release.sh bash test harness"
 	@echo "  make check                    Full local CI gate"
 
 bundle-spec:
@@ -71,7 +73,17 @@ example-coverage:
 docs-md:
 	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links
 
-check: test lint examples sync-readme-check config-reference-check example-coverage
+# Repair a half-finished release by hand: make repair-release TAG=vX.Y.Z
+# (the publish workflow runs the same script automatically on failure, and via
+# its `repair-tag` dispatch input).
+repair-release:
+	@test -n "$(TAG)" || (echo "usage: make repair-release TAG=vX.Y.Z" >&2; exit 2)
+	bash scripts/repair-release.sh "$(TAG)"
+
+test-repair-release:
+	bash scripts/test-repair-release.sh
+
+check: test lint examples sync-readme-check config-reference-check example-coverage test-repair-release
 	$(SCRIPT) scripts/generate.d
 	@git diff --exit-code -- source/camunda/generated docs examples ':(exclude)examples/readme.d' ':(exclude)examples/topology.d' || \
 		(echo "generated sources/docs/examples drifted; commit the output of make generate-local" && exit 1)

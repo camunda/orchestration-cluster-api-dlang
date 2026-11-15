@@ -6,6 +6,14 @@ on:
       - main
       - 'stable/**'
   workflow_dispatch:
+    inputs:
+      repair-tag:
+        description: >-
+          Repair a half-finished release for this tag (e.g. v11.0.0-alpha.4):
+          recreate the semantic-release note and/or GitHub Release. Leave
+          empty for a normal release run.
+        required: false
+        type: string
 
 concurrency:
   group: orchestration-cluster-api-dlang-release-${{ github.ref_name }}
@@ -162,11 +170,41 @@ jobs:
           git commit -m "fix(gen): regenerate artifacts"
 
       - name: Publish (semantic-release)
+        if: ${{ github.event.inputs.repair-tag == '' }}
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           DUB_REGISTRY_TOKEN: ${{ secrets.DUB_REGISTRY_TOKEN }}
           CAMUNDA_SDK_CURRENT_STABLE_MAJOR: ${{ vars.CAMUNDA_SDK_CURRENT_STABLE_MAJOR }}
         run: npx semantic-release
+
+      # A Publish run can die after semantic-release pushed the release commit
+      # and tag but before it created the git note / GitHub Release (seen on
+      # v11.0.0-alpha.4: a transient rejection of the notes push). The next run
+      # finds the tag and treats the version as released, so repair it here.
+      # The script is idempotent, only touches the newest tag reachable from
+      # HEAD, and no-ops when HEAD is not the release commit. It still fails
+      # the step after a successful repair so the incident stays visible.
+      - name: Repair half-finished release
+        if: ${{ failure() && github.event.inputs.repair-tag == '' }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          CAMUNDA_SDK_CURRENT_STABLE_MAJOR: ${{ vars.CAMUNDA_SDK_CURRENT_STABLE_MAJOR }}
+        run: |
+          bash scripts/repair-release.sh
+          exit 1
+
+      # Manual repair for a given tag (workflow_dispatch with repair-tag set).
+      # The dispatch input is passed through a quoted environment variable, not
+      # interpolated into shell source, so a crafted value cannot execute.
+      - name: Repair release (manual)
+        if: ${{ github.event.inputs.repair-tag != '' }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          CAMUNDA_SDK_CURRENT_STABLE_MAJOR: ${{ vars.CAMUNDA_SDK_CURRENT_STABLE_MAJOR }}
+          REPAIR_TAG: ${{ github.event.inputs.repair-tag }}
+        run: bash scripts/repair-release.sh "${REPAIR_TAG}"
 
   notify-release-failure:
     needs: [test, release]
