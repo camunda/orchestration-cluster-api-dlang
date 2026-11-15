@@ -9,21 +9,25 @@
 # semantic-release step, and by hand via `make repair-release TAG=vX.Y.Z`
 # (or the publish workflow's `repair-tag` dispatch input).
 #
-# The script is idempotent and only ever touches the *newest* tag reachable
-# from HEAD. It:
-#   1. finds the newest v* tag reachable from HEAD (or uses $1 / $TAG);
-#      exits 0 when a GitHub Release already exists for it;
-#   2. verifies HEAD is the release commit for that tag
-#      (`chore(release): X [skip ci]`, the commit the tag points to) — if not,
-#      the failure happened before tagging, so it logs, changes nothing and
-#      exits 0 (the job's own failure stands; a re-run is the right fix);
+# The script is idempotent. It repairs the *newest* tag reachable from HEAD
+# (auto mode), or an explicitly requested tag (manual mode, $1 / $TAG). It:
+#   1. picks the tag: $1 / $TAG when given, else the newest v* tag reachable
+#      from HEAD; tracks whether a GitHub Release already exists for it;
+#   2. validates the tag. In auto mode HEAD must be the release commit for
+#      that tag (`chore(release): X [skip ci]`) — if not, the failure happened
+#      before tagging, so it logs, changes nothing and exits 0 (the job's own
+#      failure stands; a re-run is the right fix). In manual mode the tag must
+#      exist and its commit must be reachable from the current branch (the
+#      workflow runs at the branch tip, which may have moved past the tag);
 #   3. recreates refs/notes/semantic-release-<tag> when missing, deriving the
 #      channel from release.config.cjs's branch config (via node), and pushes
-#      it with up to 3 attempts and backoff;
+#      it with up to 3 attempts and backoff — retried whenever the note is
+#      absent from origin, even if a local note already exists;
 #   4. creates the GitHub Release from the tag's CHANGELOG.md section with
 #      --verify-tag (--prerelease --latest=false for prereleases; --latest=false
 #      plus scripts/mark-latest.sh for stable releases, so the existing
-#      never-demote rule decides whether it becomes Latest);
+#      never-demote rule decides whether it becomes Latest) — skipped when the
+#      release already exists;
 #   5. prints a ::warning:: summary of what was repaired.
 #
 # Exit codes: 0 = nothing to repair or fully repaired; 1 = a repair was
@@ -41,31 +45,54 @@ die()  { echo "::error::[repair-release] $*" >&2; exit 1; }
 
 # --- 1. Pick the tag ---------------------------------------------------------
 
+EXPLICIT=0
 TAG="${1:-${TAG:-}}"
-if [[ -z "${TAG}" ]]; then
+if [[ -n "${TAG}" ]]; then
+  EXPLICIT=1
+else
   TAG="$(git tag -l 'v*' --sort=-version:refname --merged HEAD 2>/dev/null | head -n1 || true)"
 fi
 if [[ -z "${TAG}" ]]; then
   log "no v* tag reachable from HEAD; nothing to repair."
   exit 0
 fi
-log "newest tag reachable from HEAD: ${TAG}"
+log "tag to repair: ${TAG} (mode: $( ((EXPLICIT)) && echo explicit || echo auto ))"
 
+# Track release existence separately from the note: a GitHub Release existing
+# does not establish that the semantic-release note exists, so this never
+# short-circuits the note repair below.
+RELEASE_EXISTS=0
 if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
-  log "GitHub Release for ${TAG} already exists; nothing to repair."
-  exit 0
+  RELEASE_EXISTS=1
+  log "GitHub Release for ${TAG} already exists; will skip its re-creation."
 fi
 
-# --- 2. HEAD must be the release commit for the tag --------------------------
+# --- 2. Validate the tag -------------------------------------------------------
 
 VERSION="${TAG#v}"
-tag_commit="$(git rev-list -n1 "${TAG}")"
-head_commit="$(git rev-parse HEAD)"
-head_subject="$(git log -1 --format=%s HEAD)"
-if [[ "${head_commit}" != "${tag_commit}" || "${head_subject}" != "chore(release): ${VERSION} [skip ci]" ]]; then
-  log "HEAD (${head_commit:0:7}: ${head_subject}) is not the release commit for ${TAG};"
-  log "the failure happened before tagging — nothing repaired, re-run the release."
-  exit 0
+tag_commit="$(git rev-list -n1 "${TAG}" 2>/dev/null || true)"
+if [[ -z "${tag_commit}" ]]; then
+  die "tag ${TAG} does not exist locally; cannot repair."
+fi
+
+if ((EXPLICIT)); then
+  # Manual mode: the workflow runs at the selected branch tip, which may have
+  # moved past the tag (or gained a regeneration commit). HEAD need not be the
+  # release commit — instead require the tagged commit to be reachable from
+  # HEAD so we never repair a tag that is not on this branch's history.
+  if ! git merge-base --is-ancestor "${tag_commit}" HEAD 2>/dev/null; then
+    die "tag ${TAG} (${tag_commit:0:7}) is not reachable from HEAD; refusing to repair a tag outside this branch."
+  fi
+  log "explicit tag ${TAG} is reachable from HEAD; proceeding."
+else
+  # Auto mode: only repair when HEAD is the release commit for the newest tag.
+  head_commit="$(git rev-parse HEAD)"
+  head_subject="$(git log -1 --format=%s HEAD)"
+  if [[ "${head_commit}" != "${tag_commit}" || "${head_subject}" != "chore(release): ${VERSION} [skip ci]" ]]; then
+    log "HEAD (${head_commit:0:7}: ${head_subject}) is not the release commit for ${TAG};"
+    log "the failure happened before tagging — nothing repaired, re-run the release."
+    exit 0
+  fi
 fi
 
 # --- 3. Channel for the semantic-release note --------------------------------
@@ -100,15 +127,19 @@ log "branch '${BRANCH}' releases on channel '${CHANNEL}'"
 NOTE_REF="refs/notes/semantic-release-${TAG}"
 repaired=()
 
+# Check remote presence first: a note can exist locally while being absent from
+# origin (e.g. its push was rejected). Only skip when origin already has it.
 git fetch origin "${NOTE_REF}:${NOTE_REF}" >/dev/null 2>&1 || true
-if git notes --ref="semantic-release-${TAG}" show "${TAG}" >/dev/null 2>&1; then
-  log "note ${NOTE_REF} already present."
-elif git ls-remote origin "${NOTE_REF}" | grep -q .; then
-  log "note ${NOTE_REF} exists on the remote."
+if git ls-remote origin "${NOTE_REF}" 2>/dev/null | grep -q .; then
+  log "note ${NOTE_REF} already present on the remote."
 else
-  log "writing missing note ${NOTE_REF}: {\"channels\":[\"${CHANNEL}\"]}"
-  git notes --ref="semantic-release-${TAG}" add -f -m "{\"channels\":[\"${CHANNEL}\"]}" "${TAG}" \
-    || die "failed to write note for ${TAG}"
+  if git notes --ref="semantic-release-${TAG}" show "${TAG}" >/dev/null 2>&1; then
+    log "note ${NOTE_REF} exists locally but is missing on the remote; re-pushing."
+  else
+    log "writing missing note ${NOTE_REF}: {\"channels\":[\"${CHANNEL}\"]}"
+    git notes --ref="semantic-release-${TAG}" add -f -m "{\"channels\":[\"${CHANNEL}\"]}" "${TAG}" \
+      || die "failed to write note for ${TAG}"
+  fi
   pushed=0
   for attempt in 1 2 3; do
     if git push origin "${NOTE_REF}" >/dev/null 2>&1; then
@@ -126,33 +157,45 @@ fi
 
 # --- 5. Create the GitHub Release from the CHANGELOG section ------------------
 
-notes_file="$(mktemp)"
-trap 'rm -f "${notes_file}"' EXIT
-# The section for this version: from its heading to the next release heading,
-# taken from the CHANGELOG.md of the release commit itself (the tag's blob),
-# so the notes match what semantic-release wrote at release time.
-# CHANGELOG headings carry the bare version (`# [11.0.0-alpha.4](...)`), no `v`.
-git show "${TAG}:CHANGELOG.md" 2>/dev/null | awk -v ver="${VERSION}" '
-  $0 ~ "^# \\[" ver "\\]" { in_section = 1; next }
-  in_section && /^# \[/ { exit }
-  in_section { print }
-' > "${notes_file}"
-if [[ ! -s "${notes_file}" ]]; then
-  die "no CHANGELOG.md section found for ${TAG} at ${TAG}:CHANGELOG.md"
-fi
+if [[ "${RELEASE_EXISTS}" == "1" ]]; then
+  log "GitHub Release ${TAG} already exists; skipping creation."
+else
+  notes_file="$(mktemp)"
+  trap 'rm -f "${notes_file}"' EXIT
+  # The section for this version: from its heading to the next release heading,
+  # taken from the CHANGELOG.md of the release commit itself (the tag's blob),
+  # so the notes match what semantic-release wrote at release time.
+  # CHANGELOG headings carry the bare version, no `v`. Major/minor releases use
+  # `# [version]`; stable patch releases use `## [version]` — accept both at
+  # both the opening and the terminating boundary. The version is matched
+  # literally (index on the bracketed prefix), never as a regex, so its dots
+  # and prerelease dashes cannot over-match a neighbouring version.
+  git show "${TAG}:CHANGELOG.md" 2>/dev/null | awk -v ver="${VERSION}" '
+    {
+      is_open  = ($0 ~ /^#{1,2} \[/) && (index($0, "[" ver "]") == 3 || index($0, "[" ver "]") == 4)
+      is_bound = ($0 ~ /^#{1,2} \[/)
+    }
+    is_open { in_section = 1; next }
+    in_section && is_bound { exit }
+    in_section { print }
+  ' > "${notes_file}"
+  if [[ ! -s "${notes_file}" ]]; then
+    die "no CHANGELOG.md section found for ${TAG} at ${TAG}:CHANGELOG.md"
+  fi
 
-release_args=(create "${TAG}" --repo "${REPO}" --verify-tag --latest=false --notes-file "${notes_file}")
-if [[ "${VERSION}" == *-* ]]; then
-  release_args+=(--prerelease)
-fi
-if ! gh release "${release_args[@]}"; then
-  die "failed to create GitHub Release for ${TAG}"
-fi
-repaired+=("GitHub Release ${TAG}")
+  release_args=(create "${TAG}" --repo "${REPO}" --verify-tag --latest=false --notes-file "${notes_file}")
+  if [[ "${VERSION}" == *-* ]]; then
+    release_args+=(--prerelease)
+  fi
+  if ! gh release "${release_args[@]}"; then
+    die "failed to create GitHub Release for ${TAG}"
+  fi
+  repaired+=("GitHub Release ${TAG}")
 
-# A stable release may deserve Latest; the existing never-demote rule decides.
-if [[ "${VERSION}" != *-* ]]; then
-  bash "${SCRIPT_DIR}/mark-latest.sh" "${VERSION}" || true
+  # A stable release may deserve Latest; the existing never-demote rule decides.
+  if [[ "${VERSION}" != *-* ]]; then
+    bash "${SCRIPT_DIR}/mark-latest.sh" "${VERSION}" || true
+  fi
 fi
 
 # --- 6. Summary ----------------------------------------------------------------

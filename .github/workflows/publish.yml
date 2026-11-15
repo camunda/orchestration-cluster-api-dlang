@@ -195,13 +195,16 @@ jobs:
           exit 1
 
       # Manual repair for a given tag (workflow_dispatch with repair-tag set).
+      # The dispatch input is passed through a quoted environment variable, not
+      # interpolated into shell source, so a crafted value cannot execute.
       - name: Repair release (manual)
         if: ${{ github.event.inputs.repair-tag != '' }}
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           CAMUNDA_SDK_CURRENT_STABLE_MAJOR: ${{ vars.CAMUNDA_SDK_CURRENT_STABLE_MAJOR }}
-        run: bash scripts/repair-release.sh "${{ github.event.inputs.repair-tag }}"
+          REPAIR_TAG: ${{ github.event.inputs.repair-tag }}
+        run: bash scripts/repair-release.sh "${REPAIR_TAG}"
 
   notify-release-failure:
     needs: [test, release]

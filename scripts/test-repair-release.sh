@@ -34,8 +34,11 @@ not_ok() {
 
 setup_fixture() {
   # $1: version (e.g. 11.0.0-alpha.5 or 10.2.1)
+  # $2: optional heading level for the version's CHANGELOG section (default "#";
+  #     pass "##" for a stable patch release, whose notes sit one level deeper).
   FIXTURE="$(mktemp -d)"
   local version="$1"
+  local heading="${2:-#}"
   TAG="v${version}"
 
   export GH_CALLS="${FIXTURE}/gh-calls"
@@ -72,7 +75,7 @@ STUB
   # A feature commit, then the release commit the tag points to.
   git commit -q --allow-empty -m "feat: something"
   cat > CHANGELOG.md <<EOF
-# [${version}](https://example.test/compare/v0.0.0...${TAG}) (2026-11-15)
+${heading} [${version}](https://example.test/compare/v0.0.0...${TAG}) (2026-11-15)
 
 
 ### Bug Fixes
@@ -152,8 +155,9 @@ test_note_and_release_created_main_alpha() {
 }
 
 test_note_and_release_created_stable_latest() {
-  local name="tag present, note and release missing -> both created (stable/N latest channel)"
-  setup_fixture "10.2.1"
+  local name="tag present, note and release missing -> both created (stable/N latest channel, patch heading)"
+  # A stable patch release's CHANGELOG section sits one heading level deeper.
+  setup_fixture "10.2.1" "##"
   if CAMUNDA_SDK_CURRENT_STABLE_MAJOR=10 run_repair stable/10 \
     && remote_has_note \
     && [[ "$(note_body)" == '{"channels":["latest"]}' ]] \
@@ -230,6 +234,72 @@ STUB
   teardown_fixture
 }
 
+test_note_repaired_when_release_exists() {
+  local name="release exists but note missing -> note still repaired, release not recreated"
+  setup_fixture "11.0.0-alpha.5"
+  echo "${TAG}" > "${FIXTURE}/gh-state" # release exists, note does not
+  if run_repair main \
+    && remote_has_note \
+    && [[ "$(note_body)" == '{"channels":["alpha"]}' ]] \
+    && ! gh_calls_contain "release create"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_explicit_older_tag_repaired() {
+  local name="explicit older tag, HEAD moved past it -> repaired (no HEAD-equality skip)"
+  setup_fixture "11.0.0-alpha.5"
+  # Move the branch tip past the release commit, as a manual dispatch would be.
+  git commit -q --allow-empty -m "feat: work after the tag"
+  git push -q origin HEAD:main
+  if run_repair main "${TAG}" \
+    && remote_has_note \
+    && gh_calls_contain "release create ${TAG}"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_explicit_tag_not_reachable_fails() {
+  local name="explicit tag not reachable from HEAD -> refuses to repair"
+  setup_fixture "11.0.0-alpha.5"
+  # Build an unrelated tag on a detached, unpushed commit.
+  git checkout -q -b other
+  git commit -q --allow-empty -m "unrelated work"
+  git tag -a "v9.9.9" -m "9.9.9"
+  git checkout -q main 2>/dev/null || git checkout -q master
+  local out rc
+  out="$(run_repair main v9.9.9 2>&1)"; rc=$?
+  if [[ "${rc}" != "0" ]] \
+    && [[ "${out}" == *"not reachable from HEAD"* ]] \
+    && ! gh_calls_contain "release create"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
+test_local_note_pushed_when_missing_remotely() {
+  local name="note exists locally but not on origin -> re-pushed, release created"
+  setup_fixture "11.0.0-alpha.5"
+  # Create the note locally but never push it (the transient-rejection case).
+  git notes --ref="semantic-release-${TAG}" add -f -m '{"channels":["alpha"]}' "${TAG}"
+  if run_repair main \
+    && remote_has_note \
+    && gh_calls_contain "release create ${TAG}"; then
+    ok "${name}"
+  else
+    not_ok "${name}"
+  fi
+  teardown_fixture
+}
+
 main() {
   test_release_created_when_only_tag_and_note_present
   test_note_and_release_created_main_alpha
@@ -237,6 +307,10 @@ main() {
   test_noop_when_everything_present
   test_noop_when_head_is_not_release_commit
   test_note_push_retried_until_success
+  test_note_repaired_when_release_exists
+  test_explicit_older_tag_repaired
+  test_explicit_tag_not_reachable_fails
+  test_local_note_pushed_when_missing_remotely
 
   echo
   echo "${pass} passed, ${fail} failed"
