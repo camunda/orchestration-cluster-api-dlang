@@ -1,35 +1,6 @@
 # [11.0.0-alpha.5](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.4...v11.0.0-alpha.5) (2026-11-15)
 
 
-* feat!: concurrent job worker, thread-safe client, keep-alive HTTP ([#22](https://github.com/camunda/orchestration-cluster-api-dlang/issues/22)) ([8810347](https://github.com/camunda/orchestration-cluster-api-dlang/commit/88103473093a033d0793d71ca378e5c515b1fbc1))
-
-
-### Bug Fixes
-
-* send the default tenant (<default> unless configured) on tenant-scoped commands ([#16](https://github.com/camunda/orchestration-cluster-api-dlang/issues/16)) ([9f9e44f](https://github.com/camunda/orchestration-cluster-api-dlang/commit/9f9e44fa4190c044e3b6afdfdfb5e99212258ad4)), closes [#14](https://github.com/camunda/orchestration-cluster-api-dlang/issues/14) [#10](https://github.com/camunda/orchestration-cluster-api-dlang/issues/10)
-
-
-### BREAKING CHANGES
-
-* JobWorkerConfig.maxJobsToActivate is renamed
-maxJobsActive and now caps jobs in flight; JobWorker.pollOnce is removed;
-run takes a `JobAction function(Job)` (or function plus sendable context)
-instead of a delegate, and runs it on several threads at once;
-JobWorkerConfig numeric/name fields default to 0/null (unset) and are
-resolved when the worker is created.
-
-* docs: per-thread file descriptors and the macOS select() limit
-
-# [11.0.0-alpha.5](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.4...v11.0.0-alpha.5) (2026-11-15)
-
-
-### Bug Fixes
-
-* send the default tenant (<default> unless configured) on tenant-scoped commands ([#16](https://github.com/camunda/orchestration-cluster-api-dlang/issues/16)) ([9f9e44f](https://github.com/camunda/orchestration-cluster-api-dlang/commit/9f9e44fa4190c044e3b6afdfdfb5e99212258ad4)), closes [#14](https://github.com/camunda/orchestration-cluster-api-dlang/issues/14) [#10](https://github.com/camunda/orchestration-cluster-api-dlang/issues/10)
-
-# [11.0.0-alpha.5](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.4...v11.0.0-alpha.5) (2026-11-15)
-
-
 ### Bug Fixes
 
 * send the default tenant (<default> unless configured) on tenant-scoped commands ([#16](https://github.com/camunda/orchestration-cluster-api-dlang/issues/16)) ([9f9e44f](https://github.com/camunda/orchestration-cluster-api-dlang/commit/9f9e44fa4190c044e3b6afdfdfb5e99212258ad4)), closes [#14](https://github.com/camunda/orchestration-cluster-api-dlang/issues/14) [#10](https://github.com/camunda/orchestration-cluster-api-dlang/issues/10)
