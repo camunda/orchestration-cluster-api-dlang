@@ -48,7 +48,7 @@
       "importPaths": [
         "runtime/source"
       ],
-      "libs": [
+      "libs-posix": [
         "curl"
       ],
       "libs-linux": [
