@@ -88,6 +88,10 @@ struct TlsServer
         auto args = ["openssl", "s_server", "-accept", s.port.to!string, "-www",
             "-cert", pki.path("server.pem"), "-key", pki.path("server.key")];
         if (mtls) args ~= ["-Verify", "1", "-CAfile", pki.path("ca.pem")];
+        // macOS system libcurl uses LibreSSL 3.3.6, which fails to decode a
+        // TLS 1.3 CertificateRequest from current OpenSSL (`tlsv1 alert
+        // decode error`). Test-server interop quirk only: pin TLS 1.2 there.
+        version (OSX) if (mtls) args ~= "-no_tls1_3";
         version (Windows) enum devnull = "NUL"; else enum devnull = "/dev/null";
         auto nul = File(devnull, "w");
         s.pid = spawnProcess(args, File(devnull, "r"), nul, nul);

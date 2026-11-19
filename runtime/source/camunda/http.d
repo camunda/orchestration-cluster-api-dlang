@@ -96,13 +96,24 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
     import std.algorithm.searching : canFind;
     import std.string : indexOf, strip;
 
-    // MultiSSL builds append the inactive backends in parentheses, e.g.
-    // `OpenSSL/3.0.8 (GnuTLS/3.7.9)`. Only the active backend (before the
-    // first `(`) decides blob support, so drop the parenthesized list.
-    string ssl = sslVersion;
-    const paren = ssl.indexOf('(');
-    if (paren >= 0)
-        ssl = ssl[0 .. paren];
+    // MultiSSL builds list the inactive backends in parentheses, before or
+    // after the active one: `OpenSSL/3.0.8 (GnuTLS/3.7.9)` or
+    // `(SecureTransport) LibreSSL/3.3.6`. Remove every parenthesized segment
+    // wherever it occurs so only the active backend decides blob support.
+    // An unbalanced `(` drops the rest (fail closed: unknown => unsupported).
+    string ssl;
+    {
+        string rest = sslVersion;
+        for (;;)
+        {
+            const open = rest.indexOf('(');
+            if (open < 0) { ssl ~= rest; break; }
+            ssl ~= rest[0 .. open];
+            const close = rest[open .. $].indexOf(')');
+            if (close < 0) break;
+            rest = rest[open + close + 1 .. $];
+        }
+    }
     ssl = ssl.strip;
 
     const v = versionNum;
@@ -141,6 +152,7 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
 /// Must run after libcurl is initialized (`HTTP()` construction performs the
 /// synchronized `curl_global_init`); `curl_version_info` is not documented as
 /// safe to call before that.
+version (Windows) {} else
 private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
 {
     import etc.c.curl : CURLVERSION_NOW, curl_version_info;
@@ -202,6 +214,15 @@ unittest
     // Inactive rustls must not authorize the CA blob for active GnuTLS < 8.18.
     assert(missingInlinePemSupport("GnuTLS/3.7.9 (rustls/1.0)", 0x08_11_00, true, false, false)
         == ["CAMUNDA_MTLS_CA"]);
+    // Leading inactive backend (macOS: `(SecureTransport) LibreSSL/3.3.6`).
+    assert(missingInlinePemSupport("(SecureTransport) LibreSSL/3.3.6", 0x08_07_01, true, true, true)
+        .length == 0);
+    // A leading inactive supported name must not authorize the active backend.
+    assert(missingInlinePemSupport("(OpenSSL/3.0.8) GnuTLS/3.7.9", 0x08_12_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
+    // Unbalanced parenthesis: everything after `(` is ignored (fail closed).
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (OpenSSL/3.0.8", 0x08_12_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
 }
 
 version (Windows) {} else
@@ -259,6 +280,10 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
                 ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
         }
         if (req.caPath.length) http.caInfo = req.caPath;
+        // A custom CA replaces system trust: also clear libcurl's default CA
+        // directory, or a server signed by an unrelated system-trusted CA
+        // would still be accepted via CURLOPT_CAPATH.
+        if (req.caPath.length || req.caPem.length) http.handle.clear(CurlOption.capath);
         if (req.certPath.length)
         {
             http.handle.set(CurlOption.sslcert, req.certPath);
