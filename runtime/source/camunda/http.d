@@ -74,6 +74,52 @@ private struct CurlBlob
     uint flags;
 }
 
+/// The CAMUNDA_MTLS_* settings whose inline PEM the running libcurl's TLS
+/// backend cannot consume. Setting a blob option successfully is not proof
+/// of support: several backends accept the option and then silently ignore
+/// the blob (GnuTLS, mbedTLS and Schannel ignore the client certificate/key
+/// blobs; rustls ignores the CA blob — <https://curl.se/libcurl/c/tls-options.html>).
+/// Inline credentials that never reach the TLS handshake would let a server
+/// with optional client authentication accept the request without mTLS, so
+/// unsupported combinations must fail closed before any request is sent.
+/// Mirrors the support table; revisit as libcurl grows blob support.
+private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
+{
+    import etc.c.curl : CURLVERSION_NOW, curl_version_info;
+    import std.algorithm.searching : canFind;
+    import std.string : fromStringz;
+
+    // `@trusted`: `curl_version_info` returns a pointer to libcurl's own
+    // static, never-freed info struct; `ssl_version` is a static
+    // NUL-terminated string and `version_num` a plain integer. All read-only.
+    const probe = () @trusted {
+        auto i = curl_version_info(CURLVERSION_NOW);
+        static struct Probe { string ssl; uint num; }
+        return i is null ? Probe("", 0)
+            : Probe(i.ssl_version is null ? "" : fromStringz(i.ssl_version).idup, i.version_num);
+    }();
+    // libcurl < 7.77 predates the blob options entirely: every inline PEM is
+    // unsupported regardless of backend.
+    const preBlob = probe.num < 0x07_4D_00; // 7.77.0
+    const ssl = probe.ssl;
+    const opensslFamily = ssl.canFind("OpenSSL") || ssl.canFind("LibreSSL") || ssl.canFind("BoringSSL")
+        || ssl.canFind("AWS-LC") || ssl.canFind("quictls") || ssl.canFind("GnuTLS")
+        || ssl.canFind("wolfSSL") || ssl.canFind("mbedTLS") || ssl.canFind("Schannel");
+    string[] missing;
+    if (req.certPem.length || req.keyPem.length)
+    {
+        const certKeyOk = !preBlob && ((opensslFamily && !ssl.canFind("GnuTLS") && !ssl.canFind("mbedTLS")
+            && !ssl.canFind("Schannel")) || ssl.canFind("rustls"));
+        if (!certKeyOk)
+        {
+            if (req.certPem.length) missing ~= "CAMUNDA_MTLS_CERT";
+            if (req.keyPem.length) missing ~= "CAMUNDA_MTLS_KEY";
+        }
+    }
+    if (req.caPem.length && (preBlob || !opensslFamily || ssl.canFind("rustls")))
+        missing ~= "CAMUNDA_MTLS_CA";
+    return missing;
+}
 
 version (Windows) {} else
 {
@@ -111,6 +157,14 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
 
     const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
         ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem;
+    // Fail closed before touching the network when this libcurl's TLS
+    // backend would silently drop the inline PEM (curl.se support table).
+    if (const missing = curlTlsBackendMissingBlobs(req))
+    {
+        import std.array : join;
+        throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
+            ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
+    }
     HTTP http;
     if (auto h = tlsKey in tlsHandles) http = *h;
     else

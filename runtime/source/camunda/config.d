@@ -208,10 +208,12 @@ struct CamundaConfig
                 throw new ConfigException(
                     "BASIC strategy requires CAMUNDA_BASIC_AUTH_USERNAME and CAMUNDA_BASIC_AUTH_PASSWORD");
         }
-        if (tls.cert.length ^ tls.key.length)
+        // Pairing is about presence, never length: a PEM certificate and its
+        // private key are different documents, so their lengths differ.
+        if ((tls.cert.length != 0) ^ (tls.key.length != 0))
             throw new ConfigException(
                 "mutual TLS requires both CAMUNDA_MTLS_CERT and CAMUNDA_MTLS_KEY");
-        if (tls.certPath.length ^ tls.keyPath.length)
+        if ((tls.certPath.length != 0) ^ (tls.keyPath.length != 0))
             throw new ConfigException(
                 "mutual TLS requires both CAMUNDA_MTLS_CERT_PATH and CAMUNDA_MTLS_KEY_PATH");
         foreach (pair; [["CAMUNDA_MTLS_CA", tls.ca, tls.caPath], ["CAMUNDA_MTLS_CERT", tls.cert, tls.certPath],
@@ -543,4 +545,34 @@ unittest
     }
     auto ok = CamundaConfig.fromMap(["CAMUNDA_MTLS_CA": "-----BEGIN X-----"]);
     assert(ok.tls.ca.length);
+}
+
+// #31: pairing compares presence, not length — a PEM certificate and its
+// private key are different documents, so their lengths differ. Both the
+// inline and the path form must accept such a pair.
+unittest
+{
+    const cert = "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----"; // 53
+    const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n";
+    assert(cert.length != key.length);
+    auto inline = CamundaConfig.fromMap(["CAMUNDA_MTLS_CERT": cert, "CAMUNDA_MTLS_KEY": key]);
+    assert(inline.tls.cert == cert && inline.tls.key == key.strip);
+    auto byPath = CamundaConfig.fromMap(
+        ["CAMUNDA_MTLS_CERT_PATH": "/p/client-cert.pem", "CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"]);
+    assert(byPath.tls.certPath.length && byPath.tls.keyPath.length);
+    // And a genuinely missing half is still rejected, each way.
+    string[string][] unpaired;
+    unpaired ~= ["CAMUNDA_MTLS_CERT": cert];
+    unpaired ~= ["CAMUNDA_MTLS_KEY": key];
+    unpaired ~= ["CAMUNDA_MTLS_CERT_PATH": "/p/c.pem"];
+    unpaired ~= ["CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"];
+    foreach (m; unpaired)
+    {
+        try
+        {
+            CamundaConfig.fromMap(m);
+            assert(false, "expected ConfigException for an unpaired mTLS item");
+        }
+        catch (ConfigException) {}
+    }
 }
