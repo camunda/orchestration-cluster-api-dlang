@@ -233,6 +233,12 @@ bool noProxyMatches(string noProxy, string host) pure
             if (cidrContains(e[0 .. slash], e[slash + 1 .. $], h)) return true;
             continue;
         }
+        // IP literals compare as addresses, so ::1 matches 0:0:0:0:0:0:0:1.
+        if (e.indexOf(':') >= 0)
+        {
+            if (cidrContains(e, "128", h)) return true;
+            continue;
+        }
         while (e.length && e[0] == '.') e = e[1 .. $];
         while (e.length && e[$ - 1] == '.') e = e[0 .. $ - 1];
         if (!e.length) continue;
@@ -252,6 +258,11 @@ unittest
     assert(noProxyMatches("Camunda.io:443", "x.camunda.io"));
     assert(noProxyMatches("::1", "::1"));
     assert(noProxyMatches("[::1]:8080", "::1"));
+    // IPv6 compares parsed, not as text: compressed vs expanded forms.
+    assert(noProxyMatches("::1", "0:0:0:0:0:0:0:1"));
+    assert(noProxyMatches("[0:0:0:0:0:0:0:1]", "::1"));
+    assert(noProxyMatches("FD00::0001", "fd00::1"));
+    assert(!noProxyMatches("::1", "::2"));
     assert(!noProxyMatches("localhost", "example.com"));
     // CIDR exclusions, as curl supports them.
     assert(noProxyMatches("192.168.0.0/16", "192.168.1.10"));
@@ -461,8 +472,13 @@ version (Windows)
         // The session is shared by every client on this thread: no cookie
         // jar (one client's cookies must not reach another), and no
         // automatic redirects (WinHTTP would replay caller headers such as
-        // credentials to the new host). Same behaviour as the curl backend.
-        DWORD features = WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS;
+        // credentials to the new host), and no automatic authentication
+        // (WinHTTP's auto-logon would answer NTLM/Negotiate challenges with
+        // the caller's Windows identity, even under AuthStrategy.none):
+        // authentication comes only from the SDK's own headers. Same
+        // behaviour as the curl backend.
+        DWORD features = WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS
+            | WINHTTP_DISABLE_AUTHENTICATION;
         if (!WinHttpSetOption(h, WINHTTP_OPTION_DISABLE_FEATURE, &features, DWORD.sizeof))
             throw lastError("cannot configure the request to", req.url);
 
