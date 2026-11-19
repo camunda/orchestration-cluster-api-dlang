@@ -1,3 +1,10 @@
+# [11.0.0-alpha.9](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.8...v11.0.0-alpha.9) (2026-11-19)
+
+
+### Bug Fixes
+
+* **runtime:** honour inline mTLS PEM (CAMUNDA_MTLS_CA/CERT/KEY) ([#31](https://github.com/camunda/orchestration-cluster-api-dlang/issues/31)) ([ce8ba2b](https://github.com/camunda/orchestration-cluster-api-dlang/commit/ce8ba2bb9b0be16fc01d404a53f90ae6b55b905d)), closes [#28](https://github.com/camunda/orchestration-cluster-api-dlang/issues/28)
+
 # [11.0.0-alpha.8](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.7...v11.0.0-alpha.8) (2026-11-19)
 
 
