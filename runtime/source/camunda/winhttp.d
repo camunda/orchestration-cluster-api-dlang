@@ -374,6 +374,25 @@ string winHttpErrorName(uint code) pure nothrow
     }
 }
 
+/// WinHTTP takes the body length as a 32-bit DWORD. Refuse a body that does
+/// not fit instead of narrowing, which would silently truncate the upload.
+package uint bodyLengthDword(ulong n, string url)
+{
+    import std.conv : to;
+    if (n > uint.max)
+        throw new Exception("request body too large for WinHTTP (" ~ to!string(n)
+            ~ " bytes, max 4294967295): " ~ redactUserinfo(url));
+    return cast(uint) n;
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+    assert(bodyLengthDword(0, "http://h") == 0);
+    assert(bodyLengthDword(uint.max, "http://h") == uint.max);
+    assertThrown(bodyLengthDword(cast(ulong) uint.max + 1, "http://h"));
+}
+
 version (Windows)
 {
     import camunda.errors : CamundaException, ConfigException, NetworkException;
@@ -524,7 +543,7 @@ version (Windows)
             headers ~= "Content-Length: 0\r\n";
         auto wideHeaders = headers.length ? headers.toUTF16z : WINHTTP_NO_ADDITIONAL_HEADERS;
 
-        const len = cast(DWORD) payload.length;
+        const len = bodyLengthDword(payload.length, req.url);
         if (!WinHttpSendRequest(h, wideHeaders, headers.length ? cast(DWORD) -1 : 0,
                 cast(void*) payload.ptr, len, len, 0))
             throw lastError("cannot send to", req.url);
