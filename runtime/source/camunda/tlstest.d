@@ -442,3 +442,27 @@ unittest
     auto pkcs1 = parsePem(pki.read("client-pkcs1.key"))[0];
     assert(toPkcs8(pkcs1) == parsePem(pki.read("client-p8.key"))[0].der);
 }
+
+// #31: a `Transport` built from CAMUNDA_MTLS_CA/CERT/KEY forwards the inline
+// PEMs to the HTTP layer; the direct `HttpRequest` tests above cannot see a
+// break in that wiring. The server requires a client certificate signed by
+// the test CA, so it answers 200 only when the inline CA and the inline
+// client credentials all reached the TLS handshake.
+unittest
+{
+    import camunda.transport : CamundaOptions, Transport;
+    import std.json : JSONValue;
+
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.mtls);
+    scope (exit) srv.stop();
+
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_REST_ADDRESS", srv.url)
+        .withKey("CAMUNDA_MTLS_CA", pki.read("ca.pem"))
+        .withKey("CAMUNDA_MTLS_CERT", pki.read("client.pem"))
+        .withKey("CAMUNDA_MTLS_KEY", pki.read("client.key")));
+    t.requestVoid("GET", "/topology", JSONValue.init, null);
+}
