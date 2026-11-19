@@ -1,3 +1,10 @@
+# [11.0.0-alpha.8](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.7...v11.0.0-alpha.8) (2026-11-19)
+
+
+### Features
+
+* **runtime:** native WinHTTP backend on Windows ([#29](https://github.com/camunda/orchestration-cluster-api-dlang/issues/29)) ([5567097](https://github.com/camunda/orchestration-cluster-api-dlang/commit/55670970acd197b3e8494203fcc8f47a9f82ff4a))
+
 # [11.0.0-alpha.7](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.6...v11.0.0-alpha.7) (2026-11-19)
 
 
