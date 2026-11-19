@@ -216,34 +216,67 @@ unittest
 
 version (unittest)
 {
-    /// Send `req` at a listener that never answers, then read what curl wrote.
-    /// Single-threaded: the kernel completes the TCP handshake from the listen
-    /// backlog, curl writes the whole request and times out waiting for a
-    /// response, and only then is the queued connection accepted and drained.
-    private string captureRequest(HttpRequest req)
+    /// One-shot server for `captureRequest`: sends its port on `port`, reads
+    /// one whole request (head, then a Content-Length body), sends it on
+    /// `seen`, and answers `200 {}`.
+    private void captureServer(Chan!int port, Chan!string seen)
     {
-        import std.socket : TcpSocket, InternetAddress, SocketShutdown;
+        import std.socket : TcpSocket, InternetAddress;
         import std.conv : to;
+        import std.string : indexOf, strip, toLower;
         auto listener = new TcpSocket();
         scope (exit) listener.close();
         listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
         listener.listen(4);
-        const port = (cast(InternetAddress) listener.localAddress).port;
-        req.url = "http://127.0.0.1:" ~ port.to!string ~ "/v2/things";
-        req.timeoutMs = 400;
-        try { perform(req); assert(false, "expected a timeout"); }
-        catch (NetworkException) {}
+        port.put((cast(InternetAddress) listener.localAddress).port);
         auto conn = listener.accept();
         scope (exit) conn.close();
-        conn.blocking = false;
         string got;
         ubyte[4096] chunk;
         for (;;)
         {
+            const end = got.indexOf("\r\n\r\n");
+            if (end >= 0)
+            {
+                size_t bodyLen;
+                const head = got[0 .. end + 4];
+                const cl = head.toLower.indexOf("\r\ncontent-length:");
+                if (cl >= 0)
+                {
+                    auto rest = head[cl + 17 .. $];
+                    bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                }
+                // `Expect: 100-continue`: say continue, or the body waits.
+                if (got.length == head.length && bodyLen && head.toLower.indexOf("\r\nexpect: 100-continue") >= 0)
+                    conn.send("HTTP/1.1 100 Continue\r\n\r\n");
+                if (got.length >= head.length + bodyLen) break;
+            }
             const n = conn.receive(chunk[]);
             if (n <= 0) break;
             got ~= cast(const(char)[]) chunk[0 .. n];
         }
+        seen.put(got);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+    }
+
+    /// Send `req` to a one-shot local server and return the raw request it
+    /// received. Works the same for every backend (curl, WinHTTP), because
+    /// the server reads on its own thread while the client sends.
+    private string captureRequest(HttpRequest req)
+    {
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto seen = Chan!string.make;
+        auto server = spawn(&captureServer, port, seen);
+        int p;
+        port.take(p);
+        req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/things";
+        req.timeoutMs = 10_000;
+        auto res = perform(req);
+        assert(res.status == 200, "capture server answered " ~ res.status.to!string);
+        string got;
+        seen.take(got);
+        server.join();
         return got;
     }
 
