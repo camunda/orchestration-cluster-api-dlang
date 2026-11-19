@@ -1,0 +1,26 @@
+# `make check-windows` (scripts/check-windows.sh) pushes a snapshot of a
+# working tree to a ci-windows/* branch to get real Windows test results
+# before anything reaches a PR. The branch is deleted after the run.
+name: check-windows
+
+on:
+  push:
+    branches: ['ci-windows/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: dub test (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-1.43.0
+      - run: dub test :runtime && dub test :openapi && dub test
