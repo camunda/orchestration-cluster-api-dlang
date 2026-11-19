@@ -483,7 +483,7 @@ version (Windows)
     // keys; NCryptDeleteKey also frees the handle NCryptOpenKey returned.
     // Called with keys this process created (at exit, or a stale key left
     // by a crashed process that had taken this process's PID-scoped name).
-    private void deleteCngKeys(scope const(char)[][] names...) @trusted
+    private void deleteCngKeys(scope const(char[])[] names...) @trusted
     {
         import std.utf : toUTF16z;
         if (!names.length) return;
