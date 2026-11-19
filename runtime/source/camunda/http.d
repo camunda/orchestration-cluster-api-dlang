@@ -282,8 +282,12 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
         if (req.caPath.length) http.caInfo = req.caPath;
         // A custom CA replaces system trust: also clear libcurl's default CA
         // directory, or a server signed by an unrelated system-trusted CA
-        // would still be accepted via CURLOPT_CAPATH.
-        if (req.caPath.length || req.caPem.length) http.handle.clear(CurlOption.capath);
+        // would still be accepted via CURLOPT_CAPATH. Backends without a CA
+        // directory (e.g. rustls, which does take CAINFO_BLOB) answer even a
+        // null CAPATH with CURLE_NOT_BUILT_IN, so tolerate exactly the
+        // unsupported-option results while preserving other errors.
+        if (req.caPath.length || req.caPem.length)
+            http.handle.clearIfSupported(CurlOption.capath);
         if (req.certPath.length)
         {
             http.handle.set(CurlOption.sslcert, req.certPath);
