@@ -785,11 +785,13 @@ version (Windows)
                 throw new CamundaException(keyFrom ~ ": unsupported key type " ~ key.label);
             }
 
-            // Same name, same key: a hash of the key, scoped to this
-            // process (another process may use the same key and delete its
-            // own copy at exit).
+            // Same name, same key: a hash of the key and its passphrase,
+            // scoped to this process (another process may use the same key
+            // and delete its own copy at exit). The passphrase is part of the
+            // name so that a wrong one can't reuse a key that the right one
+            // already imported: it gets its own name, and its import fails.
             const name = format("camunda-sdk-%s-%s", thisProcessID,
-                toHexString!(LetterCase.lower)(sha256Of(key.der))[0 .. 16]);
+                toHexString!(LetterCase.lower)(sha256Of(key.der ~ cast(const(ubyte)[]) ("\0" ~ req.keyPassphrase)))[0 .. 16]);
             const wname = toUTF16(name) ~ "\0"w;
             persistKey(name, wname, key.der, encrypted ? toUTF16(req.keyPassphrase) ~ "\0"w : null,
                 "cannot import the client key from " ~ keyFrom
