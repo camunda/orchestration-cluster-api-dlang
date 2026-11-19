@@ -369,7 +369,7 @@ string winHttpErrorName(uint code) pure nothrow
     case 12_029: return "could not connect";
     case 12_030: return "connection aborted";
     case 12_152: return "invalid server response";
-    case 12_175: return "TLS failure (is the server certificate trusted in the Windows certificate store?)";
+    case 12_175: return "TLS failure (is the server certificate trusted in the Windows certificate store, or by CAMUNDA_MTLS_CA_PATH?)";
     default: return "error";
     }
 }
@@ -385,12 +385,46 @@ package uint bodyLengthDword(ulong n, string url)
     return cast(uint) n;
 }
 
+/// Why a server certificate was rejected, from the CertVerifyCertificateChainPolicy
+/// error and the chain's TrustStatus.dwErrorStatus. `trust` names what the
+/// chain was checked against ("the CA in CAMUNDA_MTLS_CA_PATH", ...).
+string trustFailure(uint policyError, uint chainStatus, string host, string trust) pure
+{
+    // Chain status bits first: they are the most specific.
+    if (chainStatus & 0x4) return "the server certificate has been revoked";
+    if (chainStatus & 0x1) return "the server certificate has expired or is not yet valid";
+    if (chainStatus & 0x8) return "the server certificate signature is invalid";
+    if (chainStatus & 0x10) return "the server certificate is not valid for TLS server authentication";
+    switch (policyError)
+    {
+    case 0x800B010F: return "the server certificate is not issued for " ~ host;
+    case 0x800B0101: return "the server certificate has expired or is not yet valid";
+    case 0x80092010: return "the server certificate has been revoked";
+    case 0x800B0110: return "the server certificate is not valid for TLS server authentication";
+    case 0x800B0109, 0x800B010A: return "the server certificate is not signed by " ~ trust;
+    default:
+        if (chainStatus & (0x20 | 0x10000)) return "the server certificate is not signed by " ~ trust;
+        import std.format : format;
+        return format("the server certificate is not trusted (policy 0x%08X, chain 0x%08X)", policyError, chainStatus);
+    }
+}
+
 unittest
 {
     import std.exception : assertThrown;
     assert(bodyLengthDword(0, "http://h") == 0);
     assert(bodyLengthDword(uint.max, "http://h") == uint.max);
     assertThrown(bodyLengthDword(cast(ulong) uint.max + 1, "http://h"));
+}
+
+unittest
+{
+    const ca = "the CA in CAMUNDA_MTLS_CA_PATH";
+    assert(trustFailure(0x800B0109, 0x10000, "h", ca) == "the server certificate is not signed by " ~ ca);
+    assert(trustFailure(0x800B010F, 0, "zeebe.local", ca) == "the server certificate is not issued for zeebe.local");
+    assert(trustFailure(0x80092010, 0x4, "h", ca) == "the server certificate has been revoked");
+    assert(trustFailure(0, 0x1, "h", ca) == "the server certificate has expired or is not yet valid");
+    assert(trustFailure(0x1234, 0x0, "h", ca) == "the server certificate is not trusted (policy 0x00001234, chain 0x00000000)");
 }
 
 version (Windows)
@@ -401,17 +435,169 @@ version (Windows)
     import camunda.transport : hasHeaderNamed;
     import core.sys.windows.winhttp;
     import core.sys.windows.windef : DWORD;
+    import core.sys.windows.wincrypt;
+    import camunda.wincrypt;
 
-    /// This thread's WinHTTP session. WinHTTP pools connections per session,
-    /// so sequential requests on one thread reuse one keep-alive connection.
-    /// Module variables are thread-local in D, so no other thread sees it.
-    private HINTERNET session;
+    /// This thread's WinHTTP sessions, one per TLS configuration. WinHTTP
+    /// pools keep-alive connections per session, so sequential requests
+    /// reuse a connection, but never one authenticated with another client
+    /// certificate (as curl keeps one handle per TLS configuration). Module
+    /// variables are thread-local in D, so no other thread sees them.
+    private HINTERNET[string] sessions;
 
-    // `@trusted`: closes the handle this thread opened (thread-local, so
-    // nothing else can be using it once the thread ends).
+    /// This thread's chain engines, by trust source: "" is the Windows
+    /// certificate store, "pem:<text>" / "path:<file>" a custom CA (which
+    /// replaces the store, as curl's CAINFO does). `caStores` keeps each
+    /// custom engine's exclusive-root store open for the engine's lifetime.
+    private HCERTCHAINENGINE[string] engines;
+    private HCERTSTORE[string] caStores;
+
+    /// This thread's client certificates (each carrying a CERT_KEY_PROV_INFO
+    /// that names its CNG key), by certificate + key material.
+    private PCCERT_CONTEXT[string] clientCerts;
+
+    // `@trusted`: frees the handles this thread created (thread-local, so
+    // nothing else can be using them once the thread ends).
     static ~this() @trusted
     {
-        if (session !is null) WinHttpCloseHandle(session);
+        foreach (s; sessions) WinHttpCloseHandle(s);
+        foreach (e; engines) CertFreeCertificateChainEngine(e);
+        foreach (st; caStores) CertCloseStore(st, 0);
+        foreach (c; clientCerts) CertFreeCertificateContext(c);
+    }
+
+    import camunda.safeio : Locked;
+
+    /// Names of the CNG keys this process created; deleted at exit. Schannel
+    /// only uses a persisted (named) key, so a client key has to be stored
+    /// for as long as the process runs (spike in #28).
+    private shared Locked!(immutable(string)[]) importedKeys;
+
+    /// Serialises creating a persisted key across threads (see persistKey).
+    import core.sync.mutex : Mutex;
+    private shared Mutex keyLock;
+
+    shared static this()
+    {
+        import core.atomic : atomicStore;
+        atomicStore(importedKeys, new shared Locked!(immutable(string)[]));
+        atomicStore(keyLock, new shared Mutex);
+    }
+
+    // `@trusted`: opens the CNG software provider and deletes the named
+    // keys; NCryptDeleteKey also frees the handle NCryptOpenKey returned.
+    // Called with keys this process created (at exit, or a stale key left
+    // by a crashed process that had taken this process's PID-scoped name).
+    private void deleteCngKeys(scope const(char[])[] names...) @trusted
+    {
+        import std.utf : toUTF16z;
+        if (!names.length) return;
+        NCRYPT_HANDLE provider;
+        if (NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER.ptr, 0) != 0) return;
+        scope (exit) NCryptFreeObject(provider);
+        foreach (name; names)
+        {
+            NCRYPT_HANDLE key;
+            if (NCryptOpenKey(provider, &key, name.toUTF16z, 0, 0) == 0) NCryptDeleteKey(key, 0);
+        }
+    }
+
+    // `@trusted`: runs once, after every thread has ended (so no handshake
+    // can still be using a key), and deletes only the keys this process
+    // created.
+    shared static ~this() @trusted
+    {
+        import core.atomic : atomicLoad;
+        deleteCngKeys(atomicLoad(importedKeys).get);
+    }
+
+    /// What the send callback checks one HTTPS request against. Its address
+    /// is the request's WinHTTP context value; winHttpPerform keeps it alive.
+    private final class TlsCheck
+    {
+        HCERTCHAINENGINE engine;
+        const(wchar)* host; // NUL-terminated, for the SSL policy
+        string hostName;
+        string trust;       // what the chain must end in, for messages
+        string failure;     // set when the callback rejected the server
+        bool closed;        // the callback closed the request handle
+        long remainingMs;   // request budget left when the send began; bounds
+                            // the revocation check's CRL/OCSP retrieval
+    }
+
+    // `@trusted`: WinHTTP calls this synchronously from inside
+    // WinHttpSendRequest on the sending thread, after the TLS handshake and
+    // before any request byte is written, with `context` set to the TlsCheck
+    // that winHttpPerform holds on its stack for the whole send. It frees the
+    // certificate and chain it is handed, and on a failed check closes the
+    // request handle (once; winHttpPerform then skips its own close).
+    private extern (Windows) int tlsCheckCallback(HINTERNET h, size_t context, DWORD status, void* info,
+        DWORD infoLength) nothrow @trusted
+    {
+        import core.sys.windows.wincrypt;
+        import camunda.wincrypt;
+
+        if (status != 0x10 /* WINHTTP_CALLBACK_STATUS_SENDING_REQUEST */ || context == 0) return 0;
+        auto check = cast(TlsCheck) cast(void*) context;
+        if (check.closed) return 0;
+
+        string verify()
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.format : format;
+
+            PCCERT_CONTEXT cert;
+            DWORD size = cert.sizeof;
+            if (!WinHttpQueryOption(h, 78 /* WINHTTP_OPTION_SERVER_CERT_CONTEXT */, &cert, &size) || cert is null)
+                return "WinHTTP did not provide the server certificate";
+            scope (exit) CertFreeCertificateContext(cert);
+
+            static immutable char[] serverAuth = "1.3.6.1.5.5.7.3.1\0";
+            char*[1] usage = [cast(char*) serverAuth.ptr];
+            CERT_CHAIN_PARA para;
+            para.cbSize = CERT_CHAIN_PARA.sizeof;
+            para.RequestedUsage.dwType = 0; // USAGE_MATCH_TYPE_AND
+            para.RequestedUsage.Usage.cUsageIdentifier = 1;
+            para.RequestedUsage.Usage.rgpszUsageIdentifier = usage.ptr;
+            PCCERT_CHAIN_CONTEXT chain;
+            // Bound the revocation check's CRL/OCSP retrieval to the
+            // request's remaining budget: the engine's default accumulative
+            // timeout is 20 s, which can outlive the caller's deadline.
+            para.dwUrlRetrievalTimeout = cast(DWORD)(check.remainingMs > 0
+                ? (check.remainingMs > DWORD.max ? DWORD.max : check.remainingMs) : 1);
+            if (!CertGetCertificateChain(check.engine, cert, null, cast(HCERTSTORE) cert.hCertStore, &para,
+                    CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT,
+                    null, &chain))
+                return format("cannot build the server certificate chain (Windows error %s)", GetLastError());
+            scope (exit) CertFreeCertificateChain(chain);
+
+            SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl;
+            ssl.cbStruct = SSL_EXTRA_CERT_CHAIN_POLICY_PARA.sizeof;
+            ssl.dwAuthType = 2; // AUTHTYPE_SERVER
+            ssl.pwszServerName = cast(wchar*) check.host;
+            CERT_CHAIN_POLICY_PARA policy;
+            policy.cbSize = CERT_CHAIN_POLICY_PARA.sizeof;
+            // Revocation soft-fail: "unknown" / "offline" pass, revoked fails.
+            policy.dwFlags = CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS;
+            policy.pvExtraPolicyPara = &ssl;
+            CERT_CHAIN_POLICY_STATUS result;
+            result.cbSize = CERT_CHAIN_POLICY_STATUS.sizeof;
+            if (!CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, chain, &policy, &result))
+                return format("cannot check the server certificate (Windows error %s)", GetLastError());
+            // Unknown and offline revocation status are tolerated.
+            const chainStatus = chain.TrustStatus.dwErrorStatus & ~(0x40u | 0x1000000u);
+            if (result.dwError == 0 && !(chainStatus & 0x4)) return null;
+            return trustFailure(result.dwError, chainStatus, check.hostName, check.trust);
+        }
+
+        try check.failure = verify();
+        catch (Exception e) check.failure = e.msg;
+        if (check.failure.length)
+        {
+            check.closed = true;
+            WinHttpCloseHandle(h);
+        }
+        return 0;
     }
 
     /// `@trusted`: WinHTTP is a C API. This hands it NUL-terminated UTF-16
@@ -460,17 +646,292 @@ version (Windows)
             return s;
         }
 
-        if (req.caPath.length || req.certPath.length || req.keyPath.length
-            || req.caPem.length || req.certPem.length || req.keyPem.length)
-            throw new CamundaException("a custom CA file and client certificates (mTLS) are not supported"
-                ~ " on Windows yet (camunda/orchestration-cluster-api-dlang#28); trust the CA through the"
-                ~ " Windows certificate store and unset the CA path");
+        string readFileFor(string path, string what)
+        {
+            import std.file : readText;
+            try return readText(path);
+            catch (Exception e) throw new CamundaException("cannot read the " ~ what ~ " " ~ path ~ ": " ~ e.msg);
+        }
+
+        // Persists a PKCS#8 key (encrypted when `wsecret` is given) as the
+        // named CNG key Schannel needs, once per process. The name is
+        // process-scoped and derived from the key, so every thread that
+        // wants it wants the same key: under `keyLock`, a name this process
+        // already recorded is reused as is (another thread made it — never
+        // deleted under a live handshake), and a name that exists without
+        // being recorded was left by a crashed process that had this PID,
+        // so that stale copy is reclaimed (#28: at most one copy per key).
+        void persistKey(string name, const(wchar)[] wname, const(ubyte)[] der, const(wchar)[] wsecret,
+            lazy string failure)
+        {
+            import core.atomic : atomicLoad;
+            import std.algorithm : canFind;
+            import std.format : format;
+
+            auto lock = cast() atomicLoad(keyLock);
+            lock.lock();
+            scope (exit) lock.unlock();
+            if (atomicLoad(importedKeys).get.canFind(name)) return;
+
+            NCryptBuffer[2] params;
+            params[0] = NCryptBuffer(cast(uint)(wname.length * wchar.sizeof), NCRYPTBUFFER_PKCS_KEY_NAME, wname.ptr);
+            if (wsecret.length)
+                params[1] = NCryptBuffer(cast(uint)(wsecret.length * wchar.sizeof), NCRYPTBUFFER_PKCS_SECRET, wsecret.ptr);
+            auto desc = NCryptBufferDesc(0, wsecret.length ? 2 : 1, params.ptr);
+
+            NCRYPT_HANDLE provider;
+            int status = NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER.ptr, 0);
+            if (status != 0) throw new CamundaException(format("cannot open the CNG key storage provider (0x%08X)", status));
+            scope (exit) NCryptFreeObject(provider);
+            enum NTE_EXISTS = 0x8009000F;
+            NCRYPT_HANDLE handle;
+            status = NCryptImportKey(provider, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, &handle, der.ptr,
+                cast(DWORD) der.length, NCRYPT_DO_NOT_FINALIZE_FLAG);
+            if (cast(uint) status == NTE_EXISTS)
+            {
+                deleteCngKeys(name);
+                status = NCryptImportKey(provider, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, &handle, der.ptr,
+                    cast(DWORD) der.length, NCRYPT_DO_NOT_FINALIZE_FLAG);
+            }
+            if (status == 0)
+            {
+                status = NCryptFinalizeKey(handle, 0);
+                NCryptFreeObject(handle);
+            }
+            if (status != 0) throw new CamundaException(format("%s (NCrypt 0x%08X)", failure, status));
+            atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= name; });
+        }
+
+        // A leaf certificate (certs[0], with any intermediates in the same
+        // store so the chain can be sent) whose CERT_KEY_PROV_INFO names
+        // the persisted CNG key `wname`. The leaf keeps the store alive.
+        PCCERT_CONTEXT leafWithKey(const(ubyte[])[] certs, const(wchar)[] wname, string certFrom)
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.format : format;
+
+            auto store = CertOpenStore(cast(const(char)*) 2 /* CERT_STORE_PROV_MEMORY */, 0, 0, 0, null);
+            if (store is null) throw new CamundaException(format("cannot create a certificate store (Windows error %s)", GetLastError()));
+            scope (exit) CertCloseStore(store, 0);
+            PCCERT_CONTEXT leaf;
+            foreach (i, der; certs)
+            {
+                auto ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, der.ptr, cast(DWORD) der.length);
+                if (ctx is null) throw new CamundaException(format("%s: a certificate is not valid (Windows error %s)", certFrom, GetLastError()));
+                scope (exit) CertFreeCertificateContext(ctx);
+                if (!CertAddCertificateContextToStore(store, ctx, CERT_STORE_ADD_REPLACE_EXISTING, i == 0 ? &leaf : null))
+                    throw new CamundaException(format("cannot store the client certificate (Windows error %s)", GetLastError()));
+            }
+            CryptKeyProvInfo info;
+            info.pwszContainerName = wname.ptr;
+            info.pwszProvName = MS_KEY_STORAGE_PROVIDER.ptr;
+            if (!CertSetCertificateContextProperty(leaf, CERT_KEY_PROV_INFO_PROP_ID, 0, &info))
+            {
+                CertFreeCertificateContext(leaf);
+                throw new CamundaException(format("cannot attach the client key (Windows error %s)", GetLastError()));
+            }
+            return leaf;
+        }
+
+        // The client certificate, made once per thread: its key imported
+        // into a named CNG key (Schannel refuses ephemeral keys; spike in
+        // #28) that the certificate's CERT_KEY_PROV_INFO points at.
+        PCCERT_CONTEXT clientCertFor()
+        {
+            import camunda.pem : parsePem, pemBlocks, PemBlock;
+            import std.digest : toHexString, LetterCase;
+            import std.digest.sha : sha256Of;
+            import std.format : format;
+            import std.process : thisProcessID;
+            import std.utf : toUTF16;
+
+            const certFrom = req.certPem.length ? "CAMUNDA_MTLS_CERT" : req.certPath;
+            const keyFrom = req.keyPem.length ? "CAMUNDA_MTLS_KEY" : req.keyPath;
+            const certText = req.certPem.length ? req.certPem : readFileFor(req.certPath, "client certificate");
+            const keyText = req.keyPem.length ? req.keyPem : readFileFor(req.keyPath, "client key");
+            const cacheKey = certText ~ "\0" ~ keyText ~ "\0" ~ req.keyPassphrase;
+            if (auto c = cacheKey in clientCerts) return *c;
+
+            immutable(ubyte)[][] certs;
+            PemBlock[] keys;
+            try
+            {
+                certs = pemBlocks(certText, "CERTIFICATE");
+                keys = parsePem(keyText);
+            }
+            catch (Exception e) throw new CamundaException("client certificate or key: " ~ e.msg);
+            if (!certs.length) throw new CamundaException(certFrom ~ " contains no PEM certificate");
+            PemBlock key;
+            foreach (k; keys)
+                if (k.label.length >= 11 && k.label[$ - 11 .. $] == "PRIVATE KEY") { key = k; break; }
+            bool encrypted;
+            switch (key.label)
+            {
+            case "PRIVATE KEY": break;
+            case "ENCRYPTED PRIVATE KEY":
+                if (!req.keyPassphrase.length)
+                    throw new CamundaException(keyFrom ~ " is encrypted; set CAMUNDA_MTLS_KEY_PASSPHRASE");
+                encrypted = true;
+                break;
+            case "RSA PRIVATE KEY", "EC PRIVATE KEY":
+                // CNG imports PKCS#8 only: wrap PKCS#1 / SEC1 (lossless).
+                import camunda.pem : toPkcs8;
+                try key.der = toPkcs8(key);
+                catch (Exception e) throw new CamundaException(keyFrom ~ ": " ~ e.msg);
+                break;
+            case null:
+                throw new CamundaException(keyFrom ~ " contains no PEM private key");
+            default:
+                throw new CamundaException(keyFrom ~ ": unsupported key type " ~ key.label);
+            }
+
+            // Same name, same key: a hash of the key and its passphrase,
+            // scoped to this process (another process may use the same key
+            // and delete its own copy at exit). The passphrase is part of the
+            // name so that a wrong one can't reuse a key that the right one
+            // already imported: it gets its own name, and its import fails.
+            const name = format("camunda-sdk-%s-%s", thisProcessID,
+                toHexString!(LetterCase.lower)(sha256Of(key.der ~ cast(const(ubyte)[]) ("\0" ~ req.keyPassphrase)))[0 .. 16]);
+            const wname = toUTF16(name) ~ "\0"w;
+            persistKey(name, wname, key.der, encrypted ? toUTF16(req.keyPassphrase) ~ "\0"w : null,
+                "cannot import the client key from " ~ keyFrom
+                ~ (encrypted ? " (is CAMUNDA_MTLS_KEY_PASSPHRASE right?)" : ""));
+            auto leaf = leafWithKey(certs, wname, certFrom);
+            clientCerts[cacheKey] = leaf;
+            return leaf;
+        }
+
+        // The client certificate from a PKCS#12 keystore, made once per
+        // thread. The PFX is opened without persisting anything
+        // (PKCS12_NO_PERSIST_KEY), so a container name it carries can
+        // neither collide with nor name a key the user already has. Its
+        // key is exported (PKCS#8, encrypted under a one-off secret) and
+        // persisted under an SDK-owned, process-scoped name exactly like a
+        // PEM key, and the certificates are rebuilt to point at it.
+        PCCERT_CONTEXT keystoreCertFor()
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import core.atomic : atomicLoad;
+            import std.file : read;
+            import std.format : format;
+            import std.string : fromStringz;
+            import std.utf : toUTF16, toUTF8;
+
+            const cacheKey = "p12:" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
+            if (auto c = cacheKey in clientCerts) return *c;
+            const(ubyte)[] pfx;
+            try pfx = cast(const(ubyte)[]) read(req.keystorePath);
+            catch (Exception e) throw new CamundaException("cannot read the keystore " ~ req.keystorePath ~ ": " ~ e.msg);
+            CRYPT_DATA_BLOB blob;
+            blob.cbData = cast(DWORD) pfx.length;
+            blob.pbData = cast(ubyte*) pfx.ptr;
+            const wpass = toUTF16(req.keystorePassword) ~ "\0"w;
+            // PFXImportCertStore persists the key itself (Schannel needs a
+            // persisted key) under a generated container name, recorded so it
+            // is deleted at exit like the PEM keys. Re-exporting an
+            // unpersisted key to import it under our own name fails on
+            // Windows (NCrypt 0x80090027), so this takes the import as is.
+            // Imports are serialised with the PEM ones under keyLock.
+            auto lock = cast() atomicLoad(keyLock);
+            lock.lock();
+            scope (exit) lock.unlock();
+            auto store = PFXImportCertStore(&blob, wpass.ptr, CRYPT_USER_KEYSET | PKCS12_ALWAYS_CNG_KSP);
+            if (store is null)
+            {
+                const code = GetLastError();
+                throw new CamundaException(code == 86 /* ERROR_INVALID_PASSWORD */
+                    ? "cannot open the keystore " ~ req.keystorePath ~ ": wrong CAMUNDA_TLS_KEYSTORE_PASSWORD"
+                    : format("cannot open the keystore %s (Windows error %s)", req.keystorePath, code));
+            }
+            scope (exit) CertCloseStore(store, 0);
+
+            // The leaf is the certificate with a private key; the others
+            // travel with it as the chain.
+            const(ubyte)[] leafDer;
+            const(ubyte)[][] others;
+            string container;
+            for (PCCERT_CONTEXT c = CertEnumCertificatesInStore(store, null); c !is null;
+                    c = CertEnumCertificatesInStore(store, c))
+            {
+                const der = c.pbCertEncoded[0 .. c.cbCertEncoded].idup;
+                DWORD size;
+                if (leafDer is null && CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, null, &size))
+                {
+                    auto buf = new ubyte[size];
+                    if (CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, buf.ptr, &size))
+                    {
+                        auto info = cast(CryptKeyProvInfo*) buf.ptr;
+                        if (info.pwszContainerName !is null)
+                        {
+                            container = toUTF8(fromStringz(info.pwszContainerName));
+                            leafDer = der;
+                            continue;
+                        }
+                    }
+                }
+                others ~= der;
+            }
+            if (container.length)
+                atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= container; });
+            if (leafDer is null)
+                throw new CamundaException(format("the keystore %s holds no certificate with a private key (Windows error %s)",
+                    req.keystorePath, GetLastError()));
+            const wname = toUTF16(container) ~ "\0"w;
+            auto leaf = leafWithKey([leafDer] ~ others, wname, req.keystorePath);
+            clientCerts[cacheKey] = leaf;
+            return leaf;
+        }
+
+        // The chain engine for this request's trust source, made once per
+        // thread. A custom CA is an exclusive root: only it is trusted.
+        HCERTCHAINENGINE engineFor(string key, lazy string caText, string trust)
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.format : format;
+            import camunda.pem : pemBlocks;
+
+            if (auto e = key in engines) return *e;
+            CertChainEngineConfig config;
+            config.cbSize = CertChainEngineConfig.sizeof;
+            config.dwUrlRetrievalTimeout = 5_000; // CRL/OCSP fetches, per chain
+            if (key.length)
+            {
+                immutable(ubyte)[][] ders;
+                try ders = pemBlocks(caText, "CERTIFICATE");
+                catch (Exception e) throw new CamundaException(trust ~ ": " ~ e.msg);
+                if (!ders.length) throw new CamundaException(trust ~ " contains no PEM certificate");
+                auto store = CertOpenStore(cast(const(char)*) 2 /* CERT_STORE_PROV_MEMORY */, 0, 0, 0, null);
+                if (store is null) throw new CamundaException(format("cannot create a certificate store (Windows error %s)", GetLastError()));
+                caStores[key] = store;
+                foreach (der; ders)
+                {
+                    auto ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, der.ptr, cast(DWORD) der.length);
+                    if (ctx is null) throw new CamundaException(format("%s: a certificate is not valid (Windows error %s)", trust, GetLastError()));
+                    CertAddCertificateContextToStore(store, ctx, CERT_STORE_ADD_REPLACE_EXISTING, null);
+                    CertFreeCertificateContext(ctx);
+                }
+                config.hExclusiveRoot = store;
+                // An intermediate CA in the file is a trust anchor too, as
+                // curl (OpenSSL's partial-chain mode) treats it.
+                config.dwExclusiveFlags = CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG;
+            }
+            HCERTCHAINENGINE engine;
+            if (!CertCreateCertificateChainEngine(&config, &engine))
+                throw new CamundaException(format("cannot create a certificate chain engine (Windows error %s)", GetLastError()));
+            engines[key] = engine;
+            return engine;
+        }
 
         UrlParts u;
         try u = splitUrl(req.url);
         catch (Exception e) throw new CamundaException(e.msg);
 
-        if (session is null) session = openSession();
+        const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
+            ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem
+            ~ "\0" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
+        HINTERNET session;
+        if (auto found = tlsKey in sessions) session = *found;
+        else sessions[tlsKey] = session = openSession();
 
         auto conn = WinHttpConnect(session, u.host.toUTF16z, u.port, 0);
         if (conn is null) throw lastError("cannot connect to", req.url);
@@ -483,11 +944,64 @@ version (Windows)
         }
         // ESCAPE_DISABLE: send the target exactly as built (joinUrl already
         // percent-encodes), as curl does.
+        TlsCheck check;
         auto h = WinHttpOpenRequest(conn, req.method.toUTF16z, u.target.toUTF16z, null,
             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
             (u.secure ? WINHTTP_FLAG_SECURE : 0) | WINHTTP_FLAG_ESCAPE_DISABLE);
         if (h is null) throw lastError("cannot open a request to", req.url);
-        scope (exit) WinHttpCloseHandle(h);
+        scope (exit) if (check is null || !check.closed) WinHttpCloseHandle(h);
+
+        if (u.secure)
+        {
+            // Every HTTPS request is checked in the send callback, before any
+            // byte goes out: against the custom CA if one is set, else
+            // against the Windows store, with revocation soft-fail either
+            // way (#28).
+            check = new TlsCheck;
+            check.host = u.host.toUTF16z;
+            check.hostName = u.host;
+            string key;
+            if (req.caPem.length)
+            {
+                key = "pem:" ~ req.caPem;
+                check.trust = "the CA in CAMUNDA_MTLS_CA";
+                check.engine = engineFor(key, req.caPem, check.trust);
+            }
+            else if (req.caPath.length)
+            {
+                key = "path:" ~ req.caPath;
+                check.trust = "the CA in " ~ req.caPath;
+                check.engine = engineFor(key, readFileFor(req.caPath, "CA file"), check.trust);
+            }
+            else
+            {
+                check.trust = "a CA in the Windows certificate store";
+                check.engine = engineFor("", null, check.trust);
+            }
+            // The callback checks trust, host name and dates on every HTTPS
+            // request (setup fails if it can't be registered), so WinHTTP's
+            // own copies of those checks are off: they would reject first,
+            // with a generic 12175 instead of the reason.
+            DWORD flags;
+            DWORD flagsSize = flags.sizeof;
+            WinHttpQueryOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, &flagsSize);
+            flags |= SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
+                | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+            if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
+                throw lastError("cannot set the TLS options for", req.url);
+            if (req.certPath.length || req.certPem.length || req.keystorePath.length)
+            {
+                auto cert = req.keystorePath.length ? keystoreCertFor() : clientCertFor();
+                if (!WinHttpSetOption(h, WINHTTP_OPTION_CLIENT_CERT_CONTEXT, cast(void*) cert, CERT_CONTEXT.sizeof))
+                    throw lastError("cannot set the client certificate for", req.url);
+            }
+            size_t contextValue = cast(size_t) cast(void*) check;
+            if (!WinHttpSetOption(h, WINHTTP_OPTION_CONTEXT_VALUE, &contextValue, contextValue.sizeof))
+                throw lastError("cannot set the TLS check for", req.url);
+            if (WinHttpSetStatusCallback(h, &tlsCheckCallback, 0x30 /* WINHTTP_CALLBACK_FLAG_SEND_REQUEST */, 0)
+                    == WINHTTP_INVALID_STATUS_CALLBACK)
+                throw lastError("cannot set the TLS check for", req.url);
+        }
 
         // The session is shared by every client on this thread: no cookie
         // jar (one client's cookies must not reach another), and no
@@ -513,9 +1027,15 @@ version (Windows)
         }
 
         // One deadline for the whole request: every blocking step gets only
-        // the time that is left.
+        // the time that is left. The TLS check's revocation retrieval is
+        // bounded by the same budget (its callback runs inside the send).
         const timeout = cast(long)(req.timeoutMs > 0 ? req.timeoutMs : 30_000);
         const deadline = MonoTime.currTime + timeout.msecs;
+        if (check !is null)
+        {
+            const left = (deadline - MonoTime.currTime).total!"msecs";
+            check.remainingMs = left > 0 ? left : 1;
+        }
         void armTimeouts(string stage)
         {
             const left = (deadline - MonoTime.currTime).total!"msecs";
@@ -547,7 +1067,11 @@ version (Windows)
         const len = bodyLengthDword(payload.length, req.url);
         if (!WinHttpSendRequest(h, wideHeaders, headers.length ? cast(DWORD) -1 : 0,
                 cast(void*) payload.ptr, len, len, 0))
+        {
+            if (check !is null && check.failure.length)
+                throw new NetworkException("TLS: " ~ check.failure ~ " (" ~ redactUserinfo(req.url) ~ ")");
             throw lastError("cannot send to", req.url);
+        }
         armTimeouts("waiting for a response from");
         if (!WinHttpReceiveResponse(h, null))
             throw lastError("no response from", req.url);
@@ -589,12 +1113,21 @@ version (Windows) unittest
     import std.algorithm.searching : canFind;
     import std.exception : collectException;
 
-    // A CA file or client certificate is refused, not silently ignored.
+    // A client certificate that can't be read fails before connecting.
     HttpRequest tls;
     tls.url = "https://127.0.0.1:9/v2/topology";
-    tls.caPath = "ca.pem";
+    tls.certPath = "no-such-client.pem";
+    tls.keyPath = "no-such-client.key";
     auto e = collectException!CamundaException(winHttpPerform(tls));
-    assert(e !is null && e.msg.canFind("not supported on Windows"), e is null ? "no exception" : e.msg);
+    assert(e !is null && e.msg.canFind("cannot read the client certificate"), e is null ? "no exception" : e.msg);
+
+    // A legacy encrypted PEM key gets a conversion hint, not an NCrypt code.
+    HttpRequest pkcs1;
+    pkcs1.url = "https://127.0.0.1:9/v2/topology";
+    pkcs1.certPem = "-----BEGIN CERTIFICATE-----\nAQ==\n-----END CERTIFICATE-----\n";
+    pkcs1.keyPem = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00\n\nAQ==\n-----END RSA PRIVATE KEY-----\n";
+    e = collectException!CamundaException(winHttpPerform(pkcs1));
+    assert(e !is null && e.msg.canFind("openssl pkcs8 -topk8"), e is null ? "no exception" : e.msg);
 
     // A refused connection is a NetworkException that says so.
     HttpRequest closed;

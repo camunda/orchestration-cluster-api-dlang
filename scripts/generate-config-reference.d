@@ -88,8 +88,10 @@ immutable Var[] CONFIG_REFERENCE = [
     Var("CAMUNDA_MTLS_CA", "", "Inline PEM CA bundle."),
     Var("CAMUNDA_MTLS_CERT_PATH", "", "Path to the client certificate for mutual TLS."),
     Var("CAMUNDA_MTLS_KEY_PATH", "", "Path to the client private key for mutual TLS."),
-    Var("CAMUNDA_MTLS_CA_PATH", "", "Path to the CA bundle used to verify the server certificate."),
-    Var("CAMUNDA_MTLS_KEY_PASSPHRASE", "", "Passphrase protecting the mTLS client key, if any."),
+    Var("CAMUNDA_MTLS_CA_PATH", "", "Path to the CA bundle used to verify the server certificate. It replaces the system trust store (as curl's CA file does)."),
+    Var("CAMUNDA_MTLS_KEY_PASSPHRASE", "", "Passphrase protecting the mTLS client key, if any (encrypted PKCS#8)."),
+    Var("CAMUNDA_TLS_KEYSTORE_PATH", "", "PKCS#12 (.p12/.pfx) file holding the client certificate and key; instead of CAMUNDA_MTLS_CERT/KEY."),
+    Var("CAMUNDA_TLS_KEYSTORE_PASSWORD", "", "Password of CAMUNDA_TLS_KEYSTORE_PATH."),
 ];
 
 string buildTable()

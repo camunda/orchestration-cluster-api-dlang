@@ -42,11 +42,18 @@ helps close that gap.
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
 - libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
 - Windows: nothing extra. HTTP goes through WinHTTP, the HTTP stack built into
-  Windows, so binaries need no libcurl. TLS trust is the Windows certificate store,
-  and the proxy is the system's (or `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when
-  set). A custom CA file and client certificates (mTLS) are not supported on
-  Windows yet ([#28](https://github.com/camunda/orchestration-cluster-api-dlang/issues/28)):
-  import the CA into the certificate store instead.
+  Windows, so binaries need no libcurl. The proxy is the system's (or `HTTPS_PROXY` /
+  `HTTP_PROXY` / `NO_PROXY` when set). TLS settings behave as with curl:
+  - trust is the Windows certificate store, unless `CAMUNDA_MTLS_CA[_PATH]` is set,
+    which replaces it;
+  - revocation is checked, but soft-fails when the CRL/OCSP server can't be reached;
+  - client certificates take PKCS#8, PKCS#1 or SEC1 PEM keys, or a PKCS#12 keystore
+    (`CAMUNDA_TLS_KEYSTORE_PATH`). Schannel needs a persisted key, so the key is
+    imported into a CNG key named `camunda-sdk-<pid>-…` for the life of the
+    process. Two limitations to weigh (#28): the persisted copy is protected by
+    the Windows user's login (DPAPI), not by the original PEM/PFX passphrase;
+    and deletion at exit is best effort — a crash can leave the copy on disk
+    (a later run with the same PID reclaims it).
 
 On macOS: `brew install ldc dub`. Elsewhere, see the
 [LDC releases](https://github.com/ldc-developers/ldc/releases).
@@ -338,8 +345,10 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_MTLS_CA` | — | Inline PEM CA bundle. |
 | `CAMUNDA_MTLS_CERT_PATH` | — | Path to the client certificate for mutual TLS. |
 | `CAMUNDA_MTLS_KEY_PATH` | — | Path to the client private key for mutual TLS. |
-| `CAMUNDA_MTLS_CA_PATH` | — | Path to the CA bundle used to verify the server certificate. |
-| `CAMUNDA_MTLS_KEY_PASSPHRASE` | — | Passphrase protecting the mTLS client key, if any. |
+| `CAMUNDA_MTLS_CA_PATH` | — | Path to the CA bundle used to verify the server certificate. It replaces the system trust store (as curl's CA file does). |
+| `CAMUNDA_MTLS_KEY_PASSPHRASE` | — | Passphrase protecting the mTLS client key, if any (encrypted PKCS#8). |
+| `CAMUNDA_TLS_KEYSTORE_PATH` | — | PKCS#12 (.p12/.pfx) file holding the client certificate and key; instead of CAMUNDA_MTLS_CERT/KEY. |
+| `CAMUNDA_TLS_KEYSTORE_PASSWORD` | — | Password of CAMUNDA_TLS_KEYSTORE_PATH. |
 
 <!-- END_CONFIG_REFERENCE -->
 

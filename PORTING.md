@@ -35,7 +35,7 @@ LDC ≥ 1.43 is required. HTTP is libcurl on POSIX and WinHTTP on Windows.
 | `camunda/config.d` | `unifiedConfiguration` / `config.rs` | `CAMUNDA_*` resolution, aliases, auth inference, `/v2` suffix, mTLS, worker defaults, retry, backpressure profile |
 | `camunda/auth.d` | `auth.ts` / `auth.rs` | NONE / BASIC / OAUTH (client-credentials, 30s lead, optional disk cache) |
 | `camunda/http.d` | libcurl | GET/POST/PUT/PATCH/DELETE, mTLS paths, query encoding |
-| `camunda/winhttp.d` | WinHTTP (Windows) | same `perform` contract; system cert store and proxy; no CA file / mTLS yet (#28) |
+| `camunda/winhttp.d` | WinHTTP (Windows) | same `perform` contract; system proxy; trust, host, date and revocation checked in a send callback before any request byte (custom CA = exclusive root engine); mTLS via SDK-owned, PID-scoped CNG keys, deleted at exit (a crash can strand one; a later run on the same PID reclaims it); one session per TLS config (#28) |
 | `camunda/retry.d` | `retry.ts` / `retry.rs` | 429/502/503/504 + network, full jitter, injected clock |
 | `camunda/clock.d` | `clock.ts` / `clock.rs` | `Clock` / `LiveClock` / `TestClock` |
 | `camunda/backpressure.d` | `backpressure.ts` | AIMD gate, BALANCED vs LEGACY |
