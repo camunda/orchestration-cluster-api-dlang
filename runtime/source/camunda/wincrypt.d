@@ -10,8 +10,8 @@ version (Windows):
 import core.sys.windows.windef : BOOL, BYTE, DWORD;
 import core.sys.windows.wincrypt : HCERTCHAINENGINE, HCERTSTORE, PCCERT_CONTEXT;
 
-pragma(lib, "crypt32");
-pragma(lib, "ncrypt");
+// Linked through "libs-windows" in dub.json (crypt32, ncrypt): a
+// pragma(lib) here would sit in an object nothing pulls from the library.
 
 /// CERT_CHAIN_ENGINE_CONFIG (Windows 8+ layout, with the exclusive root).
 struct CertChainEngineConfig
