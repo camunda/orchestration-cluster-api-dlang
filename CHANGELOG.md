@@ -1,3 +1,11 @@
+# [11.0.0-alpha.7](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.6...v11.0.0-alpha.7) (2026-11-19)
+
+
+### Bug Fixes
+
+* **gen:** regenerate artifacts ([4f156e5](https://github.com/camunda/orchestration-cluster-api-dlang/commit/4f156e5b12379614706c276c455bfcf5f9e618a5))
+* **runtime:** link libcurl on POSIX only; test on Windows ([#27](https://github.com/camunda/orchestration-cluster-api-dlang/issues/27)) ([cc9e087](https://github.com/camunda/orchestration-cluster-api-dlang/commit/cc9e0873fb564f1af6ef66be0c7e4e8cebd98413))
+
 # [11.0.0-alpha.6](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.5...v11.0.0-alpha.6) (2026-11-16)
 
 
