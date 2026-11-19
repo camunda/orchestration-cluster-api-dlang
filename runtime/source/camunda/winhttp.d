@@ -811,13 +811,11 @@ version (Windows)
         PCCERT_CONTEXT keystoreCertFor()
         {
             import core.sys.windows.winbase : GetLastError;
-            import std.digest : toHexString, LetterCase;
-            import std.digest.sha : sha256Of;
+            import core.atomic : atomicLoad;
             import std.file : read;
             import std.format : format;
-            import std.process : thisProcessID;
-            import std.random : Mt19937_64, unpredictableSeed;
-            import std.utf : toUTF16;
+            import std.string : fromStringz;
+            import std.utf : toUTF16, toUTF8;
 
             const cacheKey = "p12:" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
             if (auto c = cacheKey in clientCerts) return *c;
@@ -828,7 +826,16 @@ version (Windows)
             blob.cbData = cast(DWORD) pfx.length;
             blob.pbData = cast(ubyte*) pfx.ptr;
             const wpass = toUTF16(req.keystorePassword) ~ "\0"w;
-            auto store = PFXImportCertStore(&blob, wpass.ptr, CRYPT_EXPORTABLE | PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP);
+            // PFXImportCertStore persists the key itself (Schannel needs a
+            // persisted key) under a generated container name, recorded so it
+            // is deleted at exit like the PEM keys. Re-exporting an
+            // unpersisted key to import it under our own name fails on
+            // Windows (NCrypt 0x80090027), so this takes the import as is.
+            // Imports are serialised with the PEM ones under keyLock.
+            auto lock = cast() atomicLoad(keyLock);
+            lock.lock();
+            scope (exit) lock.unlock();
+            auto store = PFXImportCertStore(&blob, wpass.ptr, CRYPT_USER_KEYSET | PKCS12_ALWAYS_CNG_KSP);
             if (store is null)
             {
                 const code = GetLastError();
@@ -842,74 +849,34 @@ version (Windows)
             // travel with it as the chain.
             const(ubyte)[] leafDer;
             const(ubyte)[][] others;
-            NCRYPT_HANDLE key;
-            bool freeKey;
-            scope (exit) if (freeKey) NCryptFreeObject(key);
+            string container;
             for (PCCERT_CONTEXT c = CertEnumCertificatesInStore(store, null); c !is null;
                     c = CertEnumCertificatesInStore(store, c))
             {
                 const der = c.pbCertEncoded[0 .. c.cbCertEncoded].idup;
-                NCRYPT_HANDLE k;
-                DWORD spec;
-                int callerFrees;
-                // An unpersisted PFX key hangs off the certificate as
-                // CERT_NCRYPT_KEY_HANDLE_PROP_ID (78), owned by the context;
-                // CryptAcquireCertificatePrivateKey does not always find it.
-                enum CERT_NCRYPT_KEY_HANDLE_PROP_ID = 78;
-                DWORD hsize = NCRYPT_HANDLE.sizeof;
-                if (leafDer is null && CryptAcquireCertificatePrivateKey(c,
-                        CRYPT_ACQUIRE_SILENT_FLAG | CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, null, &k, &spec, &callerFrees))
+                DWORD size;
+                if (leafDer is null && CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, null, &size))
                 {
-                    leafDer = der;
-                    key = k;
-                    freeKey = !!callerFrees;
+                    auto buf = new ubyte[size];
+                    if (CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, buf.ptr, &size))
+                    {
+                        auto info = cast(CryptKeyProvInfo*) buf.ptr;
+                        if (info.pwszContainerName !is null)
+                        {
+                            container = toUTF8(fromStringz(info.pwszContainerName));
+                            leafDer = der;
+                            continue;
+                        }
+                    }
                 }
-                else if (leafDer is null && CertGetCertificateContextProperty(c, CERT_NCRYPT_KEY_HANDLE_PROP_ID, &k, &hsize))
-                {
-                    leafDer = der;
-                    key = k;
-                    freeKey = false;
-                }
-                else
-                    others ~= der;
+                others ~= der;
             }
+            if (container.length)
+                atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= container; });
             if (leafDer is null)
                 throw new CamundaException(format("the keystore %s holds no certificate with a private key (Windows error %s)",
                     req.keystorePath, GetLastError()));
-
-            // Export under a one-off secret (CNG exports a PFX key
-            // encrypted only), PBE-SHA1-3DES with an 8-byte salt.
-            auto rng = Mt19937_64(unpredictableSeed);
-            ubyte[] pbe = [0x30, 0x0E, 0x04, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x02, 0x07, 0xD0];
-            foreach (ref b; pbe[4 .. 12]) { b = cast(ubyte) rng.front; rng.popFront(); }
-            const hi = rng.front;
-            rng.popFront();
-            const wsecret = toUTF16(format("%016x%016x", hi, rng.front)) ~ "\0"w;
-            static immutable char[] oid = "1.2.840.113549.1.12.1.3\0";
-            NCryptBuffer[3] params;
-            params[0] = NCryptBuffer(cast(uint)(wsecret.length * wchar.sizeof), NCRYPTBUFFER_PKCS_SECRET, wsecret.ptr);
-            params[1] = NCryptBuffer(cast(uint) oid.length, NCRYPTBUFFER_PKCS_ALG_OID, oid.ptr);
-            params[2] = NCryptBuffer(cast(uint) pbe.length, NCRYPTBUFFER_PKCS_ALG_PARAM, pbe.ptr);
-            auto desc = NCryptBufferDesc(0, 3, params.ptr);
-            DWORD size;
-            int status = NCryptExportKey(key, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, null, 0, &size, 0);
-            ubyte[] exported;
-            if (status == 0)
-            {
-                exported = new ubyte[size];
-                status = NCryptExportKey(key, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, exported.ptr, size, &size, 0);
-            }
-            if (status != 0)
-                throw new CamundaException(format("cannot read the key from the keystore %s (NCrypt 0x%08X)",
-                    req.keystorePath, status));
-
-            // Same keystore, same key: a hash of the PFX, scoped to this
-            // process like the PEM key names.
-            const name = format("camunda-sdk-%s-p12-%s", thisProcessID,
-                toHexString!(LetterCase.lower)(sha256Of(pfx))[0 .. 16]);
-            const wname = toUTF16(name) ~ "\0"w;
-            persistKey(name, wname, exported[0 .. size], wsecret,
-                "cannot store the key from the keystore " ~ req.keystorePath);
+            const wname = toUTF16(container) ~ "\0"w;
             auto leaf = leafWithKey([leafDer] ~ others, wname, req.keystorePath);
             clientCerts[cacheKey] = leaf;
             return leaf;
