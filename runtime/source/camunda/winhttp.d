@@ -675,8 +675,11 @@ version (Windows)
                 encrypted = true;
                 break;
             case "RSA PRIVATE KEY", "EC PRIVATE KEY":
-                throw new CamundaException(keyFrom ~ " is a " ~ key.label ~ "; Windows needs PKCS#8 for now"
-                    ~ " (convert: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-pkcs8.pem)");
+                // CNG imports PKCS#8 only: wrap PKCS#1 / SEC1 (lossless).
+                import camunda.pem : toPkcs8;
+                try key.der = toPkcs8(key);
+                catch (Exception e) throw new CamundaException(keyFrom ~ ": " ~ e.msg);
+                break;
             case null:
                 throw new CamundaException(keyFrom ~ " contains no PEM private key");
             default:
@@ -1033,11 +1036,11 @@ version (Windows) unittest
     auto e = collectException!CamundaException(winHttpPerform(tls));
     assert(e !is null && e.msg.canFind("cannot read the client certificate"), e is null ? "no exception" : e.msg);
 
-    // A PKCS#1 key gets a conversion hint, not an NCrypt code.
+    // A legacy encrypted PEM key gets a conversion hint, not an NCrypt code.
     HttpRequest pkcs1;
     pkcs1.url = "https://127.0.0.1:9/v2/topology";
     pkcs1.certPem = "-----BEGIN CERTIFICATE-----\nAQ==\n-----END CERTIFICATE-----\n";
-    pkcs1.keyPem = "-----BEGIN RSA PRIVATE KEY-----\nAQ==\n-----END RSA PRIVATE KEY-----\n";
+    pkcs1.keyPem = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00\n\nAQ==\n-----END RSA PRIVATE KEY-----\n";
     e = collectException!CamundaException(winHttpPerform(pkcs1));
     assert(e !is null && e.msg.canFind("openssl pkcs8 -topk8"), e is null ? "no exception" : e.msg);
 

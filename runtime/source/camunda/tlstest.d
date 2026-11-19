@@ -43,6 +43,16 @@ struct Pki
         // The client key again, as encrypted PKCS#8 (passphrase "s3cret").
         p.openssl(["pkcs8", "-topk8", "-in", p.path("client.key"), "-out", p.path("client-enc.key"),
             "-v2", "aes-256-cbc", "-passout", "pass:s3cret"]);
+        // The client key as PKCS#1 (OpenSSL 3 needs -traditional; LibreSSL
+        // writes PKCS#1 by default and has no such flag).
+        if (!p.tryOpenssl(["rsa", "-in", p.path("client.key"), "-out", p.path("client-pkcs1.key"), "-traditional"]))
+            p.openssl(["rsa", "-in", p.path("client.key"), "-out", p.path("client-pkcs1.key")]);
+        // An EC (P-256) client with a SEC1 key.
+        p.openssl(["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", p.path("client-ec.key")]);
+        p.openssl(["req", "-new", "-key", p.path("client-ec.key"), "-out", p.path("client-ec.csr"),
+            "-subj", "/CN=camunda test ec client"]);
+        p.openssl(["x509", "-req", "-in", p.path("client-ec.csr"), "-CA", p.path("ca.pem"), "-CAkey", p.path("ca.key"),
+            "-CAcreateserial", "-out", p.path("client-ec.pem"), "-days", "2", "-extfile", p.path("client.ext")]);
         // And both as a PKCS#12 keystore (password "s3cret").
         p.openssl(["pkcs12", "-export", "-in", p.path("client.pem"), "-inkey", p.path("client.key"),
             "-out", p.path("client.p12"), "-passout", "pass:s3cret", "-name", "camunda test client"]);
@@ -82,6 +92,12 @@ struct Pki
         openssl(["x509", "-req", "-in", path(name ~ ".csr"), "-CA", path("ca.pem"),
             "-CAkey", path("ca.key"), "-CAcreateserial", "-out", path(name ~ ".pem"), "-days", "2",
             "-extfile", path(name ~ ".ext")]);
+    }
+
+    bool tryOpenssl(string[] args) const
+    {
+        import std.process : execute;
+        return execute(["openssl"] ~ args).status == 0;
     }
 
     void openssl(string[] args) const
@@ -386,6 +402,19 @@ unittest
     wrongPass.keyPassphrase = "wrong";
     assert(collectException(perform(wrongPass)) !is null, "a wrong passphrase must fail");
 
+    // PKCS#1 (RSA) and SEC1 (EC) keys; Windows wraps them as PKCS#8.
+    auto pkcs1 = get(srv);
+    pkcs1.caPem = pki.read("ca.pem");
+    pkcs1.certPem = pki.read("client.pem");
+    pkcs1.keyPem = pki.read("client-pkcs1.key");
+    assert(perform(pkcs1).status == 200);
+
+    auto ec = get(srv);
+    ec.caPem = pki.read("ca.pem");
+    ec.certPath = pki.path("client-ec.pem");
+    ec.keyPath = pki.path("client-ec.key");
+    assert(perform(ec).status == 200);
+
     auto keystore = get(srv);
     keystore.caPath = pki.path("ca.pem");
     keystore.keystorePath = pki.path("client.p12");
@@ -399,4 +428,17 @@ unittest
     auto none = get(srv);
     none.caPem = pki.read("ca.pem");
     assert(failure(none) !is null, "the server requires a client certificate");
+}
+
+// camunda.pem.toPkcs8 wraps a PKCS#1 key exactly as OpenSSL does.
+unittest
+{
+    import camunda.pem : parsePem, toPkcs8;
+
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    assert(parsePem(pki.read("client-pkcs1.key"))[0].label == "RSA PRIVATE KEY");
+    pki.openssl(["pkcs8", "-topk8", "-nocrypt", "-in", pki.path("client-pkcs1.key"), "-out", pki.path("client-p8.key")]);
+    auto pkcs1 = parsePem(pki.read("client-pkcs1.key"))[0];
+    assert(toPkcs8(pkcs1) == parsePem(pki.read("client-p8.key"))[0].der);
 }
