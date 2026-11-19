@@ -302,7 +302,10 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
         {
             http.handle.set(CurlOption.sslcert, req.keystorePath);
             http.handle.set(CurlOption.sslcerttype, "P12");
-            if (req.keystorePassword.length) http.handle.set(CurlOption.keypasswd, req.keystorePassword);
+            // The keystore password always wins, even when empty: a PKCS#12
+            // with an empty password must not be opened with the unrelated
+            // CAMUNDA_MTLS_KEY_PASSPHRASE (which is for the PEM key).
+            http.handle.set(CurlOption.keypasswd, req.keystorePassword);
         }
         setBlob(http, curlOptCaInfoBlob, req.caPem, "CAMUNDA_MTLS_CA");
         setBlob(http, curlOptSslCertBlob, req.certPem, "CAMUNDA_MTLS_CERT");

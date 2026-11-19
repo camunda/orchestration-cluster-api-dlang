@@ -48,9 +48,12 @@ helps close that gap.
     which replaces it;
   - revocation is checked, but soft-fails when the CRL/OCSP server can't be reached;
   - client certificates take PKCS#8, PKCS#1 or SEC1 PEM keys, or a PKCS#12 keystore
-    (`CAMUNDA_TLS_KEYSTORE_PATH`). The key is imported into a CNG key named
-    `camunda-sdk-<pid>-…` for the life of the process, because Schannel needs a
-    persisted key.
+    (`CAMUNDA_TLS_KEYSTORE_PATH`). Schannel needs a persisted key, so the key is
+    imported into a CNG key named `camunda-sdk-<pid>-…` for the life of the
+    process. Two limitations to weigh (#28): the persisted copy is protected by
+    the Windows user's login (DPAPI), not by the original PEM/PFX passphrase;
+    and deletion at exit is best effort — a crash can leave the copy on disk
+    (a later run with the same PID reclaims it).
 
 On macOS: `brew install ldc dub`. Elsewhere, see the
 [LDC releases](https://github.com/ldc-developers/ldc/releases).

@@ -479,23 +479,31 @@ version (Windows)
         atomicStore(importedKeys, new shared Locked!(immutable(string)[]));
     }
 
-    // `@trusted`: runs once, after every thread has ended (so no handshake
-    // can still be using a key), and deletes only the keys this process
-    // created; NCryptDeleteKey also frees the handle NCryptOpenKey returned.
-    shared static ~this() @trusted
+    // `@trusted`: opens the CNG software provider and deletes the named
+    // keys; NCryptDeleteKey also frees the handle NCryptOpenKey returned.
+    // Called with keys this process created (at exit, or a stale key left
+    // by a crashed process that had taken this process's PID-scoped name).
+    private void deleteCngKeys(scope const(char)[][] names...) @trusted
     {
-        import core.atomic : atomicLoad;
-        auto names = atomicLoad(importedKeys).get;
+        import std.utf : toUTF16z;
         if (!names.length) return;
         NCRYPT_HANDLE provider;
         if (NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER.ptr, 0) != 0) return;
         scope (exit) NCryptFreeObject(provider);
         foreach (name; names)
         {
-            import std.utf : toUTF16z;
             NCRYPT_HANDLE key;
             if (NCryptOpenKey(provider, &key, name.toUTF16z, 0, 0) == 0) NCryptDeleteKey(key, 0);
         }
+    }
+
+    // `@trusted`: runs once, after every thread has ended (so no handshake
+    // can still be using a key), and deletes only the keys this process
+    // created.
+    shared static ~this() @trusted
+    {
+        import core.atomic : atomicLoad;
+        deleteCngKeys(atomicLoad(importedKeys).get);
     }
 
     /// What the send callback checks one HTTPS request against. Its address
@@ -508,6 +516,8 @@ version (Windows)
         string trust;       // what the chain must end in, for messages
         string failure;     // set when the callback rejected the server
         bool closed;        // the callback closed the request handle
+        long remainingMs;   // request budget left when the send began; bounds
+                            // the revocation check's CRL/OCSP retrieval
     }
 
     // `@trusted`: WinHTTP calls this synchronously from inside
@@ -545,6 +555,11 @@ version (Windows)
             para.RequestedUsage.Usage.cUsageIdentifier = 1;
             para.RequestedUsage.Usage.rgpszUsageIdentifier = usage.ptr;
             PCCERT_CHAIN_CONTEXT chain;
+            // Bound the revocation check's CRL/OCSP retrieval to the
+            // request's remaining budget: the engine's default accumulative
+            // timeout is 20 s, which can outlive the caller's deadline.
+            para.dwUrlRetrievalTimeout = cast(DWORD)(check.remainingMs > 0
+                ? (check.remainingMs > DWORD.max ? DWORD.max : check.remainingMs) : 1);
             if (!CertGetCertificateChain(check.engine, cert, null, cast(HCERTSTORE) cert.hCertStore, &para,
                     CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT,
                     null, &chain))
@@ -688,7 +703,11 @@ version (Windows)
 
             // Same name, same key: the name is a hash of the key, scoped to
             // this process (another process may use the same key and delete
-            // its own copy at exit).
+            // its own copy at exit). The PID scopes the name to this
+            // process; a live process never collides with itself (the cache
+            // above answers first), so a name that already exists was left
+            // by a crashed process that had this PID. Reclaim it instead of
+            // piling a second copy on top (#28: at most one copy per key).
             const name = format("camunda-sdk-%s-%s", thisProcessID,
                 toHexString!(LetterCase.lower)(sha256Of(key.der))[0 .. 16]);
             const wname = toUTF16(name) ~ "\0"w;
@@ -707,6 +726,14 @@ version (Windows)
             enum NTE_EXISTS = 0x8009000F;
             status = NCryptImportKey(provider, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, &handle, key.der.ptr,
                 cast(DWORD) key.der.length, NCRYPT_DO_NOT_FINALIZE_FLAG);
+            if (cast(uint) status == NTE_EXISTS)
+            {
+                // The stale copy holds the same key (the name is its hash),
+                // so deleting it cannot remove a key anyone else uses.
+                deleteCngKeys(name);
+                status = NCryptImportKey(provider, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, &handle, key.der.ptr,
+                    cast(DWORD) key.der.length, NCRYPT_DO_NOT_FINALIZE_FLAG);
+            }
             if (status == 0)
             {
                 status = NCryptFinalizeKey(handle, 0);
@@ -717,7 +744,7 @@ version (Windows)
                 import core.atomic : atomicLoad;
                 atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= name; });
             }
-            else if (cast(uint) status != NTE_EXISTS)
+            else
                 throw new CamundaException(format("cannot import the client key from %s%s (NCrypt 0x%08X)", keyFrom,
                     encrypted ? " (is CAMUNDA_MTLS_KEY_PASSPHRASE right?)" : "", status));
 
@@ -748,14 +775,22 @@ version (Windows)
         }
 
         // The client certificate from a PKCS#12 keystore, made once per
-        // thread. PFXImportCertStore persists the key under a generated
-        // name (Schannel needs a persisted key); that name is recorded so
-        // the key is deleted at exit like the PEM ones.
+        // thread. PFXImportCertStore persists the key (Schannel needs a
+        // persisted key). A Windows-exported PFX can carry a container name
+        // the import then reuses — failing when that container exists, or
+        // worse, naming a key the user already has, which this process's
+        // exit cleanup must never delete. So the key is renamed to an
+        // SDK-owned, process-scoped container right after the import
+        // (overwriting only a stale copy of our own), and that name is
+        // recorded so the key is deleted at exit like the PEM ones.
         PCCERT_CONTEXT keystoreCertFor()
         {
             import core.sys.windows.winbase : GetLastError;
+            import std.digest : toHexString, LetterCase;
+            import std.digest.sha : sha256Of;
             import std.file : read;
             import std.format : format;
+            import std.process : thisProcessID;
             import std.string : fromStringz;
             import std.utf : toUTF16, toUTF8;
 
@@ -778,8 +813,17 @@ version (Windows)
             }
             scope (exit) CertCloseStore(store, 0);
 
+            // SDK-owned and process-scoped, like the PEM key names: the PFX
+            // content hashes the key, the PID scopes it to this process. A
+            // name that already exists is a stale copy of this same import
+            // (a live process never collides with itself: the cache above
+            // answers first), so only that is ever overwritten or deleted.
+            const name = format("camunda-sdk-%s-p12-%s", thisProcessID,
+                toHexString!(LetterCase.lower)(sha256Of(pfx))[0 .. 16]);
+            const wname = toUTF16(name) ~ "\0"w;
+
             PCCERT_CONTEXT leaf;
-            string[] containers;
+            string oldName;
             for (PCCERT_CONTEXT c = CertEnumCertificatesInStore(store, null); c !is null;
                     c = CertEnumCertificatesInStore(store, c))
             {
@@ -788,17 +832,42 @@ version (Windows)
                 auto buf = new ubyte[size];
                 if (!CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, buf.ptr, &size)) continue;
                 auto info = cast(CryptKeyProvInfo*) buf.ptr;
-                if (info.pwszContainerName !is null) containers ~= toUTF8(fromStringz(info.pwszContainerName));
-                if (leaf is null) leaf = CertDuplicateCertificateContext(c);
-            }
-            if (containers.length)
-            {
-                import core.atomic : atomicLoad;
-                const names = containers.idup;
-                atomicLoad(importedKeys).update((ref immutable(string)[] all) { all ~= names; });
+                if (leaf is null)
+                {
+                    leaf = CertDuplicateCertificateContext(c);
+                    if (info.pwszContainerName !is null) oldName = toUTF8(fromStringz(info.pwszContainerName));
+                }
             }
             if (leaf is null)
                 throw new CamundaException("the keystore " ~ req.keystorePath ~ " holds no certificate with a private key");
+            scope (failure) CertFreeCertificateContext(leaf);
+
+            // Repoint the leaf at the SDK-owned container. With
+            // CRYPT_SET_KEY_PROV_FLAG the property setter moves the key:
+            // the named key is deleted and re-created under the new name.
+            CryptKeyProvInfo rename;
+            rename.pwszContainerName = wname.ptr;
+            rename.pwszProvName = MS_KEY_STORAGE_PROVIDER.ptr;
+            rename.dwFlags = CRYPT_SET_KEY_PROV_FLAG;
+            enum NTE_EXISTS = 0x8009000F;
+            bool moved = !!CertSetCertificateContextProperty(leaf, CERT_KEY_PROV_INFO_PROP_ID, 0, &rename);
+            if (!moved)
+            {
+                const code = GetLastError();
+                // The move fails when the SDK container already exists (a
+                // stale copy of this same import): reclaim it, then move.
+                if (cast(uint) code != NTE_EXISTS)
+                    throw new CamundaException(format("cannot take ownership of the keystore key (Windows error %s)", code));
+                deleteCngKeys(name);
+                moved = !!CertSetCertificateContextProperty(leaf, CERT_KEY_PROV_INFO_PROP_ID, 0, &rename);
+                if (!moved)
+                    throw new CamundaException(format("cannot take ownership of the keystore key (Windows error %s)", GetLastError()));
+            }
+            // The PFX's embedded container (if any) no longer holds the key.
+            if (oldName.length) deleteCngKeys(oldName);
+
+            import core.atomic : atomicLoad;
+            atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= name; });
             clientCerts[cacheKey] = leaf;
             return leaf;
         }
@@ -948,9 +1017,15 @@ version (Windows)
         }
 
         // One deadline for the whole request: every blocking step gets only
-        // the time that is left.
+        // the time that is left. The TLS check's revocation retrieval is
+        // bounded by the same budget (its callback runs inside the send).
         const timeout = cast(long)(req.timeoutMs > 0 ? req.timeoutMs : 30_000);
         const deadline = MonoTime.currTime + timeout.msecs;
+        if (check !is null)
+        {
+            const left = (deadline - MonoTime.currTime).total!"msecs";
+            check.remainingMs = left > 0 ? left : 1;
+        }
         void armTimeouts(string stage)
         {
             const left = (deadline - MonoTime.currTime).total!"msecs";

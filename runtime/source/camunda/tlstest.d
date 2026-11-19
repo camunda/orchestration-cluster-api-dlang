@@ -56,6 +56,9 @@ struct Pki
         // And both as a PKCS#12 keystore (password "s3cret").
         p.openssl(["pkcs12", "-export", "-in", p.path("client.pem"), "-inkey", p.path("client.key"),
             "-out", p.path("client.p12"), "-passout", "pass:s3cret", "-name", "camunda test client"]);
+        // The same keystore with an empty password.
+        p.openssl(["pkcs12", "-export", "-in", p.path("client.pem"), "-inkey", p.path("client.key"),
+            "-out", p.path("client-nopass.p12"), "-passout", "pass:", "-name", "camunda test client"]);
         return p;
     }
 
@@ -212,13 +215,17 @@ private string failure(HttpRequest r)
 
 /// Plain-HTTP CRL server for the revocation test: sends its port on `port`,
 /// takes the CRL file path from `crlFile`, then answers every request with
-/// that file until one asks for `/stop`.
+/// that file until one asks for `/stop`. Waits at most 30 s for the path:
+/// when the test's PKI setup fails before `crlFile.put`, the server must
+/// still answer `/stop` so the test's `join` cannot hang.
 private void crlServer(Chan!int port, Chan!string crlFile)
 {
     import std.socket : TcpSocket, InternetAddress;
     import std.file : read;
     import std.conv : to;
     import std.algorithm.searching : canFind;
+    import core.thread : Thread;
+    import core.time : MonoTime, msecs;
 
     auto listener = new TcpSocket();
     scope (exit) listener.close();
@@ -226,7 +233,13 @@ private void crlServer(Chan!int port, Chan!string crlFile)
     listener.listen(8);
     port.put((cast(InternetAddress) listener.localAddress).port);
     string file;
-    crlFile.take(file);
+    const giveUp = MonoTime.currTime + 30_000.msecs;
+    for (;;)
+    {
+        if (crlFile.tryTake(file)) break;
+        if (MonoTime.currTime >= giveUp) return;
+        Thread.sleep(10.msecs);
+    }
     for (;;)
     {
         auto conn = listener.accept();
@@ -351,6 +364,9 @@ version (Windows) unittest
         auto c = new TcpSocket(new InternetAddress("127.0.0.1", cast(ushort) p));
         c.send("GET /stop HTTP/1.1\r\n\r\n");
         c.close();
+        // Unblock the server if PKI setup failed before `crlFile.put`: it
+        // is still waiting for the path and would never see `/stop`.
+        crlFile.close();
         crl.join();
     }
 
@@ -424,6 +440,17 @@ unittest
     auto wrongKeystorePass = keystore;
     wrongKeystorePass.keystorePassword = "wrong";
     assert(collectException(perform(wrongKeystorePass)) !is null, "a wrong keystore password must fail");
+
+    // A keystore with an empty password opens even when the PEM key
+    // passphrase is also set: the keystore password wins, so curl is not
+    // handed the unrelated PEM passphrase (review finding: the empty
+    // password left the earlier keypasswd active and the open failed).
+    auto emptyPass = get(srv);
+    emptyPass.caPath = pki.path("ca.pem");
+    emptyPass.keystorePath = pki.path("client-nopass.p12");
+    emptyPass.keystorePassword = "";
+    emptyPass.keyPassphrase = "s3cret";
+    assert(perform(emptyPass).status == 200);
 
     auto none = get(srv);
     none.caPem = pki.read("ca.pem");
