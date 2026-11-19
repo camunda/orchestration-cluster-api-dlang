@@ -1,4 +1,5 @@
-/// HTTP over libcurl. Auth headers, mTLS, retries and backpressure sit above this.
+/// HTTP: libcurl on POSIX, WinHTTP on Windows (`camunda.winhttp`). Auth
+/// headers, mTLS, retries and backpressure sit above this.
 module camunda.http;
 
 @safe:
@@ -8,7 +9,7 @@ import camunda.jsonx;
 import camunda.safeio : Chan, ownText, readBytes, spawn;
 import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
-import std.net.curl : HTTP, CurlException;
+version (Windows) {} else import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
 
 struct HttpRequest
@@ -43,6 +44,21 @@ struct HttpResponse
     string contentType;
 }
 
+/// Send `req` and return the response. Connection failures throw
+/// `NetworkException`; HTTP error statuses are returned, not thrown.
+HttpResponse perform(const ref HttpRequest req)
+{
+    version (Windows)
+    {
+        import camunda.winhttp : winHttpPerform;
+        return winHttpPerform(req);
+    }
+    else
+        return curlPerform(req);
+}
+
+version (Windows) {} else
+{
 /// `@trusted`: std.net.curl is `@system` throughout. This only hands it values
 /// it reads or copies, and copies every buffer it hands back before keeping it.
 ///
@@ -59,7 +75,7 @@ struct HttpResponse
 /// (headers, custom verb, body pointer) on the way out, so nothing leaks into
 /// the next request on the same handle. A handle whose transfer failed is
 /// dropped and rebuilt on next use.
-HttpResponse perform(const ref HttpRequest req) @trusted
+private HttpResponse curlPerform(const ref HttpRequest req) @trusted
 {
     import etc.c.curl : CurlOption;
     const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase;
@@ -162,6 +178,7 @@ HttpResponse perform(const ref HttpRequest req) @trusted
 /// fixed per handle, so a request with a different CA or client certificate
 /// never inherits another's.
 private HTTP[string] tlsHandles;
+}
 
 string encodeQuery(string[string] query)
 {

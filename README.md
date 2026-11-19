@@ -18,7 +18,7 @@ This SDK follows the same architecture as the official
 - The **Camunda Domain Type System**: semantic keys such as `JobKey` and
   `ProcessInstanceKey` are distinct types with validation, not bare strings.
 
-The public API is **synchronous** (libcurl), like the PHP SDK.
+The public API is **synchronous** (libcurl on Linux and macOS, WinHTTP on Windows), like the PHP SDK.
 
 Target API version: **8.11**.
 
@@ -41,6 +41,12 @@ helps close that gap.
 
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
 - libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
+- Windows: nothing extra. HTTP goes through WinHTTP, the HTTP stack built into
+  Windows, so binaries need no libcurl. TLS trust is the Windows certificate store,
+  and the proxy is the system's (or `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when
+  set). A custom CA file and client certificates (mTLS) are not supported on
+  Windows yet ([#28](https://github.com/camunda/orchestration-cluster-api-dlang/issues/28)):
+  import the CA into the certificate store instead.
 
 On macOS: `brew install ldc dub`. Elsewhere, see the
 [LDC releases](https://github.com/ldc-developers/ldc/releases).

@@ -11,7 +11,7 @@ make test       # dub test
 make check      # test + D-Scanner + examples
 ```
 
-LDC ≥ 1.43 is required. libcurl is used for HTTP.
+LDC ≥ 1.43 is required. HTTP is libcurl on POSIX and WinHTTP on Windows.
 
 ## What is generated (do not hand-edit)
 
@@ -35,6 +35,7 @@ LDC ≥ 1.43 is required. libcurl is used for HTTP.
 | `camunda/config.d` | `unifiedConfiguration` / `config.rs` | `CAMUNDA_*` resolution, aliases, auth inference, `/v2` suffix, mTLS, worker defaults, retry, backpressure profile |
 | `camunda/auth.d` | `auth.ts` / `auth.rs` | NONE / BASIC / OAUTH (client-credentials, 30s lead, optional disk cache) |
 | `camunda/http.d` | libcurl | GET/POST/PUT/PATCH/DELETE, mTLS paths, query encoding |
+| `camunda/winhttp.d` | WinHTTP (Windows) | same `perform` contract; system cert store and proxy; no CA file / mTLS yet (#28) |
 | `camunda/retry.d` | `retry.ts` / `retry.rs` | 429/502/503/504 + network, full jitter, injected clock |
 | `camunda/clock.d` | `clock.ts` / `clock.rs` | `Clock` / `LiveClock` / `TestClock` |
 | `camunda/backpressure.d` | `backpressure.ts` | AIMD gate, BALANCED vs LEGACY |
