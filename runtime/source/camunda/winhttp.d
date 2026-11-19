@@ -33,12 +33,16 @@ UrlParts splitUrl(string url) pure
 {
     import std.conv : to, ConvException;
 
+    // A fragment is client-side only; drop it before the authority is split so
+    // `https://h#f` resolves `h`, as curl does.
+    const hash = url.indexOf('#');
+    if (hash >= 0) url = url[0 .. hash];
     UrlParts u;
     const sep = url.indexOf("://");
-    if (sep <= 0) throw new Exception("not an absolute URL: " ~ url);
+    if (sep <= 0) throw new Exception("not an absolute URL: " ~ redactUserinfo(url));
     const scheme = url[0 .. sep].toLower;
     if (scheme == "https") u.secure = true;
-    else if (scheme != "http") throw new Exception("unsupported URL scheme '" ~ scheme ~ "': " ~ url);
+    else if (scheme != "http") throw new Exception("unsupported URL scheme '" ~ scheme ~ "': " ~ redactUserinfo(url));
     auto rest = url[sep + 3 .. $];
     auto slash = rest.indexOf('/');
     auto qmark = rest.indexOf('?');
@@ -46,20 +50,18 @@ UrlParts splitUrl(string url) pure
     auto authority = slash < 0 ? rest : rest[0 .. slash];
     u.target = slash < 0 ? "/" : rest[slash .. $];
     if (u.target[0] == '?') u.target = "/" ~ u.target;
-    const fragment = u.target.indexOf('#');
-    if (fragment >= 0) u.target = u.target[0 .. fragment];
     const at = authority.indexOf('@');
-    if (at >= 0) throw new Exception("credentials in the URL are not supported: " ~ url);
+    if (at >= 0) throw new Exception("credentials in the URL are not supported: " ~ redactUserinfo(url));
     string portText;
     if (authority.length && authority[0] == '[')
     {
         const close = authority.indexOf(']');
-        if (close < 0) throw new Exception("unterminated IPv6 address: " ~ url);
+        if (close < 0) throw new Exception("unterminated IPv6 address: " ~ redactUserinfo(url));
         u.host = authority[1 .. close];
         const after = authority[close + 1 .. $];
         if (after.length)
         {
-            if (after[0] != ':') throw new Exception("bad authority: " ~ url);
+            if (after[0] != ':') throw new Exception("bad authority: " ~ redactUserinfo(url));
             portText = after[1 .. $];
         }
     }
@@ -69,11 +71,11 @@ UrlParts splitUrl(string url) pure
         u.host = colon < 0 ? authority : authority[0 .. colon];
         if (colon >= 0) portText = authority[colon + 1 .. $];
     }
-    if (!u.host.length) throw new Exception("URL has no host: " ~ url);
+    if (!u.host.length) throw new Exception("URL has no host: " ~ redactUserinfo(url));
     if (portText.length)
     {
         try u.port = portText.to!ushort;
-        catch (ConvException) throw new Exception("bad port '" ~ portText ~ "': " ~ url);
+        catch (ConvException) throw new Exception("bad port '" ~ portText ~ "': " ~ redactUserinfo(url));
     }
     else u.port = u.secure ? 443 : 80;
     return u;
@@ -95,6 +97,35 @@ unittest
     assertThrown(splitUrl("http://:80/"));
     assertThrown(splitUrl("http://h:99999/"));
     assertThrown(splitUrl("http://user:pw@h/"));
+    auto e = splitUrl("https://cluster.camunda.io#fragment");
+    assert(e.host == "cluster.camunda.io" && e.port == 443 && e.target == "/", e.host);
+    auto f = splitUrl("http://h:81?q#f");
+    assert(f.host == "h" && f.port == 81 && f.target == "/?q", f.target);
+    import std.algorithm : canFind;
+    try { splitUrl("http://user:s3cret@h/"); assert(0); }
+    catch (Exception x) assert(!x.msg.canFind("s3cret"), x.msg);
+}
+
+/// `url` with any `user:password@` userinfo replaced by `***@`, so URLs can
+/// go into error messages without leaking credentials.
+string redactUserinfo(string url) pure
+{
+    const sep = url.indexOf("://");
+    const start = sep >= 0 ? sep + 3 : 0;
+    auto rest = url[start .. $];
+    size_t end = rest.length;
+    foreach (i, c; rest)
+        if (c == '/' || c == '?' || c == '#') { end = i; break; }
+    const at = rest[0 .. end].lastIndexOf('@');
+    if (at < 0) return url;
+    return url[0 .. start] ~ "***" ~ rest[at .. $];
+}
+
+unittest
+{
+    assert(redactUserinfo("http://u:p@h:1/x@y") == "http://***@h:1/x@y");
+    assert(redactUserinfo("u:p@h:1") == "***@h:1");
+    assert(redactUserinfo("http://h/a@b") == "http://h/a@b");
 }
 
 /// The proxy WinHTTP should use, from the POSIX-style `HTTPS_PROXY` /
@@ -125,13 +156,13 @@ ProxyChoice proxyFromEnv(string httpsProxy, string httpProxy) pure
         {
             const scheme = s[0 .. sep].toLower;
             if (scheme != "http")
-                throw new Exception("unsupported proxy scheme '" ~ scheme ~ "' in " ~ v
+                throw new Exception("unsupported proxy scheme '" ~ scheme ~ "' in " ~ redactUserinfo(v)
                     ~ ": WinHTTP supports only http:// proxies");
             s = s[sep + 3 .. $];
         }
         while (s.length && s[$ - 1] == '/') s = s[0 .. $ - 1];
         if (!s.length || s.indexOf('/') >= 0 || s.indexOf('@') >= 0)
-            throw new Exception("unsupported proxy '" ~ v ~ "': expected [http://]host[:port]");
+            throw new Exception("unsupported proxy '" ~ redactUserinfo(v) ~ "': expected [http://]host[:port]");
         return s;
     }
 
@@ -156,6 +187,13 @@ unittest
     assertThrown(proxyFromEnv("", "socks5://proxy.corp:1080"));
     assertThrown(proxyFromEnv("http://user:pw@proxy:1", ""));
     assertThrown(proxyFromEnv("http://proxy:1/path", ""));
+    // Credentials never reach the error message.
+    import std.algorithm : canFind;
+    foreach (bad; ["http://user:s3cret@proxy:1", "https://user:s3cret@proxy:1"])
+    {
+        try { proxyFromEnv(bad, ""); assert(0); }
+        catch (Exception x) assert(!x.msg.canFind("s3cret"), x.msg);
+    }
 }
 
 /// Whether `host` is excluded from proxying by `noProxy` (the `NO_PROXY`
@@ -163,6 +201,8 @@ unittest
 /// alone matches everything; an entry matches the host itself and every
 /// subdomain, with or without a leading dot (`.internal` and `internal` both
 /// match `cluster.internal` and `internal`). An entry's `:port` is ignored.
+/// An IP entry with a `/bits` suffix (`10.0.0.0/8`, `fd00::/8`) matches every
+/// IP-literal host in that subnet; hostnames are not resolved.
 bool noProxyMatches(string noProxy, string host) pure
 {
     import std.algorithm : endsWith;
@@ -179,10 +219,20 @@ bool noProxyMatches(string noProxy, string host) pure
         if (e.length && e[0] == '[')
         {
             const close = e.indexOf(']');
-            e = close > 0 ? e[1 .. close] : e;
+            if (close > 0)
+            {
+                const after = e[close + 1 .. $];
+                e = e[1 .. close] ~ (after.length && after[0] == '/' ? after : "");
+            }
         }
         else if (e.indexOf(':') >= 0 && e.indexOf(':') == e.lastIndexOf(':'))
             e = e[0 .. e.indexOf(':')]; // host:port; bare IPv6 has several ':'
+        const slash = e.indexOf('/');
+        if (slash >= 0)
+        {
+            if (cidrContains(e[0 .. slash], e[slash + 1 .. $], h)) return true;
+            continue;
+        }
         while (e.length && e[0] == '.') e = e[1 .. $];
         while (e.length && e[$ - 1] == '.') e = e[0 .. $ - 1];
         if (!e.length) continue;
@@ -203,6 +253,99 @@ unittest
     assert(noProxyMatches("::1", "::1"));
     assert(noProxyMatches("[::1]:8080", "::1"));
     assert(!noProxyMatches("localhost", "example.com"));
+    // CIDR exclusions, as curl supports them.
+    assert(noProxyMatches("192.168.0.0/16", "192.168.1.10"));
+    assert(!noProxyMatches("192.168.0.0/16", "192.169.1.10"));
+    assert(noProxyMatches("x, 10.0.0.0/8", "10.255.0.1"));
+    assert(noProxyMatches("0.0.0.0/0", "8.8.8.8"));
+    assert(noProxyMatches("10.1.2.3/32", "10.1.2.3"));
+    assert(!noProxyMatches("10.1.2.3/32", "10.1.2.4"));
+    assert(!noProxyMatches("10.0.0.0/8", "10.example.com"));
+    assert(!noProxyMatches("10.0.0.0/33", "10.0.0.1"));
+    assert(noProxyMatches("fd00::/8", "[fd12::1]"));
+    assert(!noProxyMatches("fd00::/8", "fe80::1"));
+    assert(noProxyMatches("[2001:db8::]/32", "2001:db8:1::5"));
+    assert(!noProxyMatches("10.0.0.0/8", "::1"));
+}
+
+/// Parse an IPv4 (4 bytes) or IPv6 (16 bytes) literal; empty on failure.
+private ubyte[] parseIp(string s) pure
+{
+    import std.array : split;
+    import std.conv : to;
+
+    if (s.indexOf(':') < 0)
+    {
+        auto parts = s.split(".");
+        if (parts.length != 4) return null;
+        ubyte[] r;
+        foreach (p; parts)
+        {
+            if (!p.length || p.length > 3) return null;
+            uint v;
+            foreach (c; p) { if (c < '0' || c > '9') return null; v = v * 10 + (c - '0'); }
+            if (v > 255) return null;
+            r ~= cast(ubyte) v;
+        }
+        return r;
+    }
+    static bool groups(string t, ref ushort[] outp)
+    {
+        if (!t.length) return true;
+        foreach (g; t.split(":"))
+        {
+            if (!g.length || g.length > 4) return false;
+            uint v;
+            foreach (c; g)
+            {
+                uint d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else return false;
+                v = v * 16 + d;
+            }
+            outp ~= cast(ushort) v;
+        }
+        return true;
+    }
+    ushort[] head, tail;
+    const dbl = s.indexOf("::");
+    if (dbl >= 0)
+    {
+        if (s[dbl + 2 .. $].indexOf("::") >= 0) return null;
+        if (!groups(s[0 .. dbl], head) || !groups(s[dbl + 2 .. $], tail)) return null;
+        if (head.length + tail.length > 7) return null;
+    }
+    else
+    {
+        if (!groups(s, head) || head.length != 8) return null;
+    }
+    ushort[] all = head;
+    foreach (_; 0 .. 8 - head.length - tail.length) all ~= 0;
+    all ~= tail;
+    ubyte[] r;
+    foreach (g; all) { r ~= cast(ubyte)(g >> 8); r ~= cast(ubyte)(g & 0xff); }
+    return r;
+}
+
+/// Whether IP literal `host` lies in subnet `net`/`bitsText`.
+private bool cidrContains(string net, string bitsText, string host) pure
+{
+    if (net.length > 1 && net[0] == '[' && net[$ - 1] == ']') net = net[1 .. $ - 1];
+    auto n = parseIp(net);
+    auto h = parseIp(host);
+    if (!n.length || n.length != h.length || !bitsText.length || bitsText.length > 3) return false;
+    uint bits;
+    foreach (c; bitsText) { if (c < '0' || c > '9') return false; bits = bits * 10 + (c - '0'); }
+    if (bits > n.length * 8) return false;
+    foreach (i; 0 .. bits / 8) if (n[i] != h[i]) return false;
+    const rem = bits % 8;
+    if (rem)
+    {
+        const mask = cast(ubyte)(0xff << (8 - rem));
+        if ((n[bits / 8] & mask) != (h[bits / 8] & mask)) return false;
+    }
+    return true;
 }
 
 /// A readable name for the WinHTTP errors a caller can act on.
