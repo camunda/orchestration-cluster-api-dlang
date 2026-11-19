@@ -658,9 +658,9 @@ version (Windows)
         if (u.secure)
         {
             // Every HTTPS request is checked in the send callback, before any
-            // byte goes out: against the custom CA if one is set (WinHTTP's
-            // own unknown-CA check is then off), else against the Windows
-            // store, with revocation soft-fail either way (#28).
+            // byte goes out: against the custom CA if one is set, else
+            // against the Windows store, with revocation soft-fail either
+            // way (#28).
             check = new TlsCheck;
             check.host = u.host.toUTF16z;
             check.hostName = u.host;
@@ -688,15 +688,17 @@ version (Windows)
                 check.trust = "a CA in the Windows certificate store";
                 check.engine = engineFor("", null, check.trust);
             }
-            if (key.length)
-            {
-                DWORD flags;
-                DWORD flagsSize = flags.sizeof;
-                WinHttpQueryOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, &flagsSize);
-                flags |= SECURITY_FLAG_IGNORE_UNKNOWN_CA;
-                if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
-                    throw lastError("cannot set the TLS options for", req.url);
-            }
+            // The callback checks trust, host name and dates on every HTTPS
+            // request (setup fails if it can't be registered), so WinHTTP's
+            // own copies of those checks are off: they would reject first,
+            // with a generic 12175 instead of the reason.
+            DWORD flags;
+            DWORD flagsSize = flags.sizeof;
+            WinHttpQueryOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, &flagsSize);
+            flags |= SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
+                | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+            if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
+                throw lastError("cannot set the TLS options for", req.url);
             size_t contextValue = cast(size_t) cast(void*) check;
             if (!WinHttpSetOption(h, WINHTTP_OPTION_CONTEXT_VALUE, &contextValue, contextValue.sizeof))
                 throw lastError("cannot set the TLS check for", req.url);
