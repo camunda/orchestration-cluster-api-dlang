@@ -8,7 +8,7 @@ version (Windows):
 @safe:
 
 import core.sys.windows.windef : BOOL, BYTE, DWORD;
-import core.sys.windows.wincrypt : HCERTCHAINENGINE, HCERTSTORE, PCCERT_CONTEXT;
+import core.sys.windows.wincrypt : CRYPT_DATA_BLOB, HCERTCHAINENGINE, HCERTSTORE, PCCERT_CONTEXT;
 
 // Linked through "libs-windows" in dub.json (crypt32, ncrypt): a
 // pragma(lib) here would sit in an object nothing pulls from the library.
@@ -73,6 +73,8 @@ enum : DWORD
     NCRYPTBUFFER_PKCS_SECRET = 46,
     NCRYPT_OVERWRITE_KEY_FLAG = 0x80,
     NCRYPT_DO_NOT_FINALIZE_FLAG = 0x400,
+    CRYPT_USER_KEYSET = 0x1000,
+    PKCS12_ALWAYS_CNG_KSP = 0x200,
 }
 
 /// The per-user CNG software key storage provider.
@@ -85,6 +87,10 @@ extern (Windows) @system nothrow @nogc
     BOOL CertSetCertificateContextProperty(PCCERT_CONTEXT pCertContext, DWORD dwPropId, DWORD dwFlags, const(void)* pvData);
     BOOL CertCreateCertificateChainEngine(CertChainEngineConfig* pConfig, HCERTCHAINENGINE* phChainEngine);
     void CertFreeCertificateChainEngine(HCERTCHAINENGINE hChainEngine);
+    HCERTSTORE PFXImportCertStore(CRYPT_DATA_BLOB* pPFX, const(wchar)* szPassword, DWORD dwFlags);
+    PCCERT_CONTEXT CertEnumCertificatesInStore(HCERTSTORE hCertStore, PCCERT_CONTEXT pPrevCertContext);
+    BOOL CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext, DWORD dwPropId, void* pvData, DWORD* pcbData);
+    PCCERT_CONTEXT CertDuplicateCertificateContext(PCCERT_CONTEXT pCertContext);
 
     int NCryptOpenStorageProvider(NCRYPT_HANDLE* phProvider, const(wchar)* pszProviderName, DWORD dwFlags);
     int NCryptImportKey(NCRYPT_HANDLE hProvider, NCRYPT_HANDLE hImportKey, const(wchar)* pszBlobType, NCryptBufferDesc* pParameterList, NCRYPT_HANDLE* phKey, const(BYTE)* pbData, DWORD cbData, DWORD dwFlags);

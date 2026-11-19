@@ -43,6 +43,9 @@ struct Pki
         // The client key again, as encrypted PKCS#8 (passphrase "s3cret").
         p.openssl(["pkcs8", "-topk8", "-in", p.path("client.key"), "-out", p.path("client-enc.key"),
             "-v2", "aes-256-cbc", "-passout", "pass:s3cret"]);
+        // And both as a PKCS#12 keystore (password "s3cret").
+        p.openssl(["pkcs12", "-export", "-in", p.path("client.pem"), "-inkey", p.path("client.key"),
+            "-out", p.path("client.p12"), "-passout", "pass:s3cret", "-name", "camunda test client"]);
         return p;
     }
 
@@ -350,7 +353,7 @@ version (Windows) unittest
 }
 
 // #30 / #28: client certificates, as files or inline, plain or encrypted
-// PKCS#8.
+// PKCS#8, or a PKCS#12 keystore.
 unittest
 {
     import std.exception : collectException;
@@ -382,6 +385,16 @@ unittest
     auto wrongPass = encrypted;
     wrongPass.keyPassphrase = "wrong";
     assert(collectException(perform(wrongPass)) !is null, "a wrong passphrase must fail");
+
+    auto keystore = get(srv);
+    keystore.caPath = pki.path("ca.pem");
+    keystore.keystorePath = pki.path("client.p12");
+    keystore.keystorePassword = "s3cret";
+    assert(perform(keystore).status == 200);
+
+    auto wrongKeystorePass = keystore;
+    wrongKeystorePass.keystorePassword = "wrong";
+    assert(collectException(perform(wrongKeystorePass)) !is null, "a wrong keystore password must fail");
 
     auto none = get(srv);
     none.caPem = pki.read("ca.pem");

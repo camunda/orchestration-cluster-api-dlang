@@ -50,11 +50,15 @@ struct TlsConfig
     string keyPath;
     string caPath;
     string keyPassphrase;
+    /// PKCS#12 file with the client certificate and key (Java's
+    /// CAMUNDA_TLS_KEYSTORE_PATH); excludes the CERT/KEY settings.
+    string keystorePath;
+    string keystorePassword;
 
     bool isConfigured() const
     {
         return cert.length || key.length || ca.length
-            || certPath.length || keyPath.length || caPath.length;
+            || certPath.length || keyPath.length || caPath.length || keystorePath.length;
     }
 }
 
@@ -181,6 +185,8 @@ struct CamundaConfig
         c.tls.keyPath = get("CAMUNDA_MTLS_KEY_PATH");
         c.tls.caPath = get("CAMUNDA_MTLS_CA_PATH");
         c.tls.keyPassphrase = get("CAMUNDA_MTLS_KEY_PASSPHRASE");
+        c.tls.keystorePath = get("CAMUNDA_TLS_KEYSTORE_PATH");
+        c.tls.keystorePassword = get("CAMUNDA_TLS_KEYSTORE_PASSWORD");
 
         c.workerDefaults.timeoutMs = parseLong(get("CAMUNDA_WORKER_TIMEOUT"), 60_000);
         c.workerDefaults.maxConcurrentJobs = cast(int) parseLong(get("CAMUNDA_WORKER_MAX_CONCURRENT_JOBS"), 32);
@@ -220,6 +226,10 @@ struct CamundaConfig
                 ["CAMUNDA_MTLS_KEY", tls.key, tls.keyPath]])
             if (pair[1].length && pair[2].length)
                 throw new ConfigException("set " ~ pair[0] ~ " or " ~ pair[0] ~ "_PATH, not both");
+        if (tls.keystorePath.length && (tls.cert.length || tls.certPath.length || tls.key.length || tls.keyPath.length))
+            throw new ConfigException("set CAMUNDA_TLS_KEYSTORE_PATH or the CAMUNDA_MTLS_CERT/KEY settings, not both");
+        if (tls.keystorePassword.length && !tls.keystorePath.length)
+            throw new ConfigException("CAMUNDA_TLS_KEYSTORE_PASSWORD is set without CAMUNDA_TLS_KEYSTORE_PATH");
     }
 }
 
@@ -575,4 +585,22 @@ unittest
         }
         catch (ConfigException) {}
     }
+}
+
+// #28: a PKCS#12 keystore is the client certificate; it can't be combined
+// with the PEM ones, and a password needs a keystore.
+unittest
+{
+    import std.algorithm.searching : canFind;
+    string fails(string[string] m)
+    {
+        try { CamundaConfig.fromMap(m); return null; }
+        catch (ConfigException e) return e.msg;
+    }
+    assert(fails(["CAMUNDA_TLS_KEYSTORE_PATH": "c.p12", "CAMUNDA_MTLS_CERT_PATH": "c.pem",
+        "CAMUNDA_MTLS_KEY_PATH": "c.key"]).canFind("not both"));
+    assert(fails(["CAMUNDA_TLS_KEYSTORE_PASSWORD": "pw"]).canFind("without CAMUNDA_TLS_KEYSTORE_PATH"));
+    auto ok = CamundaConfig.fromMap(["CAMUNDA_TLS_KEYSTORE_PATH": "c.p12", "CAMUNDA_TLS_KEYSTORE_PASSWORD": "pw",
+        "CAMUNDA_MTLS_CA_PATH": "ca.pem"]);
+    assert(ok.tls.keystorePath == "c.p12" && ok.tls.keystorePassword == "pw" && ok.tls.isConfigured);
 }

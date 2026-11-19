@@ -438,10 +438,12 @@ version (Windows)
     import core.sys.windows.wincrypt;
     import camunda.wincrypt;
 
-    /// This thread's WinHTTP session. WinHTTP pools connections per session,
-    /// so sequential requests on one thread reuse one keep-alive connection.
-    /// Module variables are thread-local in D, so no other thread sees it.
-    private HINTERNET session;
+    /// This thread's WinHTTP sessions, one per TLS configuration. WinHTTP
+    /// pools keep-alive connections per session, so sequential requests
+    /// reuse a connection, but never one authenticated with another client
+    /// certificate (as curl keeps one handle per TLS configuration). Module
+    /// variables are thread-local in D, so no other thread sees them.
+    private HINTERNET[string] sessions;
 
     /// This thread's chain engines, by trust source: "" is the Windows
     /// certificate store, "pem:<text>" / "path:<file>" a custom CA (which
@@ -458,7 +460,7 @@ version (Windows)
     // nothing else can be using them once the thread ends).
     static ~this() @trusted
     {
-        if (session !is null) WinHttpCloseHandle(session);
+        foreach (s; sessions) WinHttpCloseHandle(s);
         foreach (e; engines) CertFreeCertificateChainEngine(e);
         foreach (st; caStores) CertCloseStore(st, 0);
         foreach (c; clientCerts) CertFreeCertificateContext(c);
@@ -742,6 +744,62 @@ version (Windows)
             return leaf;
         }
 
+        // The client certificate from a PKCS#12 keystore, made once per
+        // thread. PFXImportCertStore persists the key under a generated
+        // name (Schannel needs a persisted key); that name is recorded so
+        // the key is deleted at exit like the PEM ones.
+        PCCERT_CONTEXT keystoreCertFor()
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.file : read;
+            import std.format : format;
+            import std.string : fromStringz;
+            import std.utf : toUTF16, toUTF8;
+
+            const cacheKey = "p12:" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
+            if (auto c = cacheKey in clientCerts) return *c;
+            const(ubyte)[] pfx;
+            try pfx = cast(const(ubyte)[]) read(req.keystorePath);
+            catch (Exception e) throw new CamundaException("cannot read the keystore " ~ req.keystorePath ~ ": " ~ e.msg);
+            CRYPT_DATA_BLOB blob;
+            blob.cbData = cast(DWORD) pfx.length;
+            blob.pbData = cast(ubyte*) pfx.ptr;
+            const wpass = toUTF16(req.keystorePassword) ~ "\0"w;
+            auto store = PFXImportCertStore(&blob, wpass.ptr, CRYPT_USER_KEYSET | PKCS12_ALWAYS_CNG_KSP);
+            if (store is null)
+            {
+                const code = GetLastError();
+                throw new CamundaException(code == 86 /* ERROR_INVALID_PASSWORD */
+                    ? "cannot open the keystore " ~ req.keystorePath ~ ": wrong CAMUNDA_TLS_KEYSTORE_PASSWORD"
+                    : format("cannot open the keystore %s (Windows error %s)", req.keystorePath, code));
+            }
+            scope (exit) CertCloseStore(store, 0);
+
+            PCCERT_CONTEXT leaf;
+            string[] containers;
+            for (PCCERT_CONTEXT c = CertEnumCertificatesInStore(store, null); c !is null;
+                    c = CertEnumCertificatesInStore(store, c))
+            {
+                DWORD size;
+                if (!CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, null, &size)) continue;
+                auto buf = new ubyte[size];
+                if (!CertGetCertificateContextProperty(c, CERT_KEY_PROV_INFO_PROP_ID, buf.ptr, &size)) continue;
+                auto info = cast(CryptKeyProvInfo*) buf.ptr;
+                if (info.pwszContainerName !is null) containers ~= toUTF8(fromStringz(info.pwszContainerName));
+                if (leaf is null) leaf = CertDuplicateCertificateContext(c);
+            }
+            if (containers.length)
+            {
+                import core.atomic : atomicLoad;
+                const names = containers.idup;
+                atomicLoad(importedKeys).update((ref immutable(string)[] all) { all ~= names; });
+            }
+            if (leaf is null)
+                throw new CamundaException("the keystore " ~ req.keystorePath ~ " holds no certificate with a private key");
+            clientCerts[cacheKey] = leaf;
+            return leaf;
+        }
+
         // The chain engine for this request's trust source, made once per
         // thread. A custom CA is an exclusive root: only it is trusted.
         HCERTCHAINENGINE engineFor(string key, lazy string caText, string trust)
@@ -786,7 +844,12 @@ version (Windows)
         try u = splitUrl(req.url);
         catch (Exception e) throw new CamundaException(e.msg);
 
-        if (session is null) session = openSession();
+        const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
+            ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem
+            ~ "\0" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
+        HINTERNET session;
+        if (auto found = tlsKey in sessions) session = *found;
+        else sessions[tlsKey] = session = openSession();
 
         auto conn = WinHttpConnect(session, u.host.toUTF16z, u.port, 0);
         if (conn is null) throw lastError("cannot connect to", req.url);
@@ -844,9 +907,9 @@ version (Windows)
                 | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
             if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
                 throw lastError("cannot set the TLS options for", req.url);
-            if (req.certPath.length || req.certPem.length)
+            if (req.certPath.length || req.certPem.length || req.keystorePath.length)
             {
-                auto cert = clientCertFor();
+                auto cert = req.keystorePath.length ? keystoreCertFor() : clientCertFor();
                 if (!WinHttpSetOption(h, WINHTTP_OPTION_CLIENT_CERT_CONTEXT, cast(void*) cert, CERT_CONTEXT.sizeof))
                     throw lastError("cannot set the client certificate for", req.url);
             }

@@ -39,6 +39,9 @@ struct HttpRequest
     string certPem;
     string keyPem;
     string caPem;
+    /// PKCS#12 client certificate + key (CAMUNDA_TLS_KEYSTORE_PATH/_PASSWORD).
+    string keystorePath;
+    string keystorePassword;
 }
 
 struct HttpResponse
@@ -260,7 +263,8 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
     }
 
     const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
-        ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem;
+        ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem
+        ~ "\0" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
     HTTP http;
     if (auto h = tlsKey in tlsHandles) http = *h;
     else
@@ -294,6 +298,12 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
             if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
         }
         if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
+        if (req.keystorePath.length)
+        {
+            http.handle.set(CurlOption.sslcert, req.keystorePath);
+            http.handle.set(CurlOption.sslcerttype, "P12");
+            if (req.keystorePassword.length) http.handle.set(CurlOption.keypasswd, req.keystorePassword);
+        }
         setBlob(http, curlOptCaInfoBlob, req.caPem, "CAMUNDA_MTLS_CA");
         setBlob(http, curlOptSslCertBlob, req.certPem, "CAMUNDA_MTLS_CERT");
         setBlob(http, curlOptSslKeyBlob, req.keyPem, "CAMUNDA_MTLS_KEY");
