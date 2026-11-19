@@ -74,19 +74,76 @@ private struct CurlBlob
     uint flags;
 }
 
-/// The CAMUNDA_MTLS_* settings whose inline PEM the running libcurl's TLS
-/// backend cannot consume. Setting a blob option successfully is not proof
-/// of support: several backends accept the option and then silently ignore
-/// the blob (GnuTLS, mbedTLS and Schannel ignore the client certificate/key
-/// blobs; rustls ignores the CA blob — <https://curl.se/libcurl/c/tls-options.html>).
-/// Inline credentials that never reach the TLS handshake would let a server
-/// with optional client authentication accept the request without mTLS, so
-/// unsupported combinations must fail closed before any request is sent.
-/// Mirrors the support table; revisit as libcurl grows blob support.
+/// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
+/// consume, decided purely from the reported TLS backend and libcurl version.
+/// Setting a blob option successfully is not proof of support: several
+/// backends accept the option and then silently ignore the blob
+/// (<https://curl.se/libcurl/c/tls-options.html>). Inline credentials that
+/// never reach the TLS handshake would let a server with optional client
+/// authentication accept the request without mTLS, so unsupported
+/// combinations must fail closed before any request is sent.
+///
+/// `sslVersion` is libcurl's `ssl_version` string and `versionNum` its
+/// `version_num`. Per-backend minimums from the upstream history
+/// (<https://curl.se/libcurl/c/CURLOPT_CAINFO_BLOB.html>): the client
+/// certificate/key blobs are OpenSSL-family only (GnuTLS, mbedTLS, wolfSSL
+/// and Schannel ignore them); the CA blob is supported by the OpenSSL family
+/// from 7.77, by rustls from 7.82, mbedTLS from 7.81, wolfSSL from 8.2 and
+/// GnuTLS from 8.18, and never by Schannel.
+private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
+    bool caPem, bool certPem, bool keyPem)
+{
+    import std.algorithm.searching : canFind;
+    import std.string : indexOf, strip;
+
+    // MultiSSL builds append the inactive backends in parentheses, e.g.
+    // `OpenSSL/3.0.8 (GnuTLS/3.7.9)`. Only the active backend (before the
+    // first `(`) decides blob support, so drop the parenthesized list.
+    string ssl = sslVersion;
+    const paren = ssl.indexOf('(');
+    if (paren >= 0)
+        ssl = ssl[0 .. paren];
+    ssl = ssl.strip;
+
+    const v = versionNum;
+    const opensslFamily = ssl.canFind("OpenSSL") || ssl.canFind("LibreSSL")
+        || ssl.canFind("BoringSSL") || ssl.canFind("AWS-LC") || ssl.canFind("quictls");
+    const gnutls = ssl.canFind("GnuTLS");
+    const mbedtls = ssl.canFind("mbedTLS");
+    const wolfssl = ssl.canFind("wolfSSL");
+    const rustls = ssl.canFind("rustls");
+    const schannel = ssl.canFind("Schannel");
+
+    string[] missing;
+    if (certPem || keyPem)
+    {
+        // Client cert/key blobs: OpenSSL family only, from 7.77.
+        const certKeyOk = opensslFamily && v >= 0x07_4D_00; // 7.77.0
+        if (!certKeyOk)
+        {
+            if (certPem) missing ~= "CAMUNDA_MTLS_CERT";
+            if (keyPem) missing ~= "CAMUNDA_MTLS_KEY";
+        }
+    }
+    if (caPem)
+    {
+        const caOk = (opensslFamily && v >= 0x07_4D_00) // 7.77.0
+            || (rustls && v >= 0x07_52_00)   // 7.82.0
+            || (mbedtls && v >= 0x07_51_00)  // 7.81.0
+            || (wolfssl && v >= 0x08_02_00)  // 8.2.0
+            || (gnutls && v >= 0x08_12_00);  // 8.18.0
+        if (!caOk) missing ~= "CAMUNDA_MTLS_CA";
+    }
+    return missing;
+}
+
+/// Thin probe: read the running libcurl's backend + version and decide.
+/// Must run after libcurl is initialized (`HTTP()` construction performs the
+/// synchronized `curl_global_init`); `curl_version_info` is not documented as
+/// safe to call before that.
 private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
 {
     import etc.c.curl : CURLVERSION_NOW, curl_version_info;
-    import std.algorithm.searching : canFind;
     import std.string : fromStringz;
 
     // `@trusted`: `curl_version_info` returns a pointer to libcurl's own
@@ -98,27 +155,53 @@ private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
         return i is null ? Probe("", 0)
             : Probe(i.ssl_version is null ? "" : fromStringz(i.ssl_version).idup, i.version_num);
     }();
-    // libcurl < 7.77 predates the blob options entirely: every inline PEM is
-    // unsupported regardless of backend.
-    const preBlob = probe.num < 0x07_4D_00; // 7.77.0
-    const ssl = probe.ssl;
-    const opensslFamily = ssl.canFind("OpenSSL") || ssl.canFind("LibreSSL") || ssl.canFind("BoringSSL")
-        || ssl.canFind("AWS-LC") || ssl.canFind("quictls") || ssl.canFind("GnuTLS")
-        || ssl.canFind("wolfSSL") || ssl.canFind("mbedTLS") || ssl.canFind("Schannel");
-    string[] missing;
-    if (req.certPem.length || req.keyPem.length)
-    {
-        const certKeyOk = !preBlob && ((opensslFamily && !ssl.canFind("GnuTLS") && !ssl.canFind("mbedTLS")
-            && !ssl.canFind("Schannel")) || ssl.canFind("rustls"));
-        if (!certKeyOk)
-        {
-            if (req.certPem.length) missing ~= "CAMUNDA_MTLS_CERT";
-            if (req.keyPem.length) missing ~= "CAMUNDA_MTLS_KEY";
-        }
-    }
-    if (req.caPem.length && (preBlob || !opensslFamily || ssl.canFind("rustls")))
-        missing ~= "CAMUNDA_MTLS_CA";
-    return missing;
+    return missingInlinePemSupport(probe.ssl, probe.num,
+        req.caPem.length != 0, req.certPem.length != 0, req.keyPem.length != 0);
+}
+
+unittest
+{
+    // cert/key blobs: OpenSSL family only, from 7.77.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4D_00, false, true, true).length == 0);
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4C_00, false, true, true)
+        == ["CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"]);
+    // GnuTLS / mbedTLS / Schannel ignore client cert/key blobs.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_12_00, false, true, true).length == 2);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_51_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
+    assert(missingInlinePemSupport("Schannel", 0x08_00_00, false, false, true)
+        == ["CAMUNDA_MTLS_KEY"]);
+    // rustls ignores the client cert/key blobs too.
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_52_00, false, true, true).length == 2);
+
+    // CA blob per-backend minimum versions.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4D_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_52_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_51_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_51_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_50_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("wolfSSL/5.6", 0x08_02_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("wolfSSL/5.6", 0x08_01_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_12_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_11_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    // Schannel never takes the CA blob.
+    assert(missingInlinePemSupport("Schannel", 0x08_12_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+
+    // MultiSSL: only the active backend (before the parenthesized list) decides.
+    // Active OpenSSL must not be rejected because an inactive GnuTLS is listed.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8 (GnuTLS/3.7.9)", 0x08_12_00, true, true, true)
+        .length == 0);
+    // Active GnuTLS must not be authorized by an inactive supported name.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (OpenSSL/3.0.8)", 0x08_12_00, false, true, true)
+        .length == 2);
+    // Inactive rustls must not authorize the CA blob for active GnuTLS < 8.18.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (rustls/1.0)", 0x08_11_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
 }
 
 version (Windows) {} else
@@ -157,19 +240,24 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
 
     const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
         ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem;
-    // Fail closed before touching the network when this libcurl's TLS
-    // backend would silently drop the inline PEM (curl.se support table).
-    if (const missing = curlTlsBackendMissingBlobs(req))
-    {
-        import std.array : join;
-        throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
-            ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
-    }
     HTTP http;
     if (auto h = tlsKey in tlsHandles) http = *h;
     else
     {
+        // Constructing the first `HTTP` runs Phobos' synchronized
+        // `curl_global_init`. Probe the TLS backend only after that:
+        // `curl_version_info` is not documented as safe before global init,
+        // and concurrent first requests would otherwise race on it. The
+        // backend check still throws before any network request is sent.
         http = HTTP();
+        // Fail closed when this libcurl's TLS backend would silently drop the
+        // inline PEM (curl.se support table).
+        if (const missing = curlTlsBackendMissingBlobs(req))
+        {
+            import std.array : join;
+            throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
+                ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
+        }
         if (req.caPath.length) http.caInfo = req.caPath;
         if (req.certPath.length)
         {
