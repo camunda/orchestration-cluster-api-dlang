@@ -273,6 +273,8 @@ final class Transport
         req.certPem = _config.tls.cert;
         req.keyPem = _config.tls.key;
         req.caPem = _config.tls.ca;
+        req.keystorePath = _config.tls.keystorePath;
+        req.keystorePassword = _config.tls.keystorePassword;
         return req;
     }
 

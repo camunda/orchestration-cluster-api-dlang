@@ -52,7 +52,9 @@
         "curl"
       ],
       "libs-windows": [
-        "winhttp"
+        "winhttp",
+        "crypt32",
+        "ncrypt"
       ],
       "libs-linux": [
         "z"

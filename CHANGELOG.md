@@ -1,3 +1,10 @@
+# [11.0.0-alpha.10](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.9...v11.0.0-alpha.10) (2026-11-19)
+
+
+### Features
+
+* **runtime:** custom CA, revocation and mTLS on WinHTTP ([#28](https://github.com/camunda/orchestration-cluster-api-dlang/issues/28) phase 3) ([#32](https://github.com/camunda/orchestration-cluster-api-dlang/issues/32)) ([e77d470](https://github.com/camunda/orchestration-cluster-api-dlang/commit/e77d470da3b6a17b317d3fe4c3d7806a13134d1f)), closes [PKCS#8](https://github.com/PKCS/issues/8) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#1](https://github.com/PKCS/issues/1) [PKCS#8](https://github.com/PKCS/issues/8) [PKCS#1](https://github.com/PKCS/issues/1) [PKCS#1](https://github.com/PKCS/issues/1) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#8](https://github.com/PKCS/issues/8) [PKCS#12](https://github.com/PKCS/issues/12) [PKCS#12](https://github.com/PKCS/issues/12)
+
 # [11.0.0-alpha.9](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.8...v11.0.0-alpha.9) (2026-11-19)
 
 
