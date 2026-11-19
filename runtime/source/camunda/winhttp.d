@@ -450,6 +450,10 @@ version (Windows)
     private HCERTCHAINENGINE[string] engines;
     private HCERTSTORE[string] caStores;
 
+    /// This thread's client certificates (each carrying a CERT_KEY_PROV_INFO
+    /// that names its CNG key), by certificate + key material.
+    private PCCERT_CONTEXT[string] clientCerts;
+
     // `@trusted`: frees the handles this thread created (thread-local, so
     // nothing else can be using them once the thread ends).
     static ~this() @trusted
@@ -457,6 +461,39 @@ version (Windows)
         if (session !is null) WinHttpCloseHandle(session);
         foreach (e; engines) CertFreeCertificateChainEngine(e);
         foreach (st; caStores) CertCloseStore(st, 0);
+        foreach (c; clientCerts) CertFreeCertificateContext(c);
+    }
+
+    import camunda.safeio : Locked;
+
+    /// Names of the CNG keys this process created; deleted at exit. Schannel
+    /// only uses a persisted (named) key, so a client key has to be stored
+    /// for as long as the process runs (spike in #28).
+    private shared Locked!(immutable(string)[]) importedKeys;
+
+    shared static this()
+    {
+        import core.atomic : atomicStore;
+        atomicStore(importedKeys, new shared Locked!(immutable(string)[]));
+    }
+
+    // `@trusted`: runs once, after every thread has ended (so no handshake
+    // can still be using a key), and deletes only the keys this process
+    // created; NCryptDeleteKey also frees the handle NCryptOpenKey returned.
+    shared static ~this() @trusted
+    {
+        import core.atomic : atomicLoad;
+        auto names = atomicLoad(importedKeys).get;
+        if (!names.length) return;
+        NCRYPT_HANDLE provider;
+        if (NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER.ptr, 0) != 0) return;
+        scope (exit) NCryptFreeObject(provider);
+        foreach (name; names)
+        {
+            import std.utf : toUTF16z;
+            NCRYPT_HANDLE key;
+            if (NCryptOpenKey(provider, &key, name.toUTF16z, 0, 0) == 0) NCryptDeleteKey(key, 0);
+        }
     }
 
     /// What the send callback checks one HTTPS request against. Its address
@@ -587,9 +624,123 @@ version (Windows)
             return s;
         }
 
-        if (req.certPath.length || req.keyPath.length || req.certPem.length || req.keyPem.length)
-            throw new CamundaException("client certificates (mTLS) are not supported on Windows yet"
-                ~ " (camunda/orchestration-cluster-api-dlang#28)");
+        string readFileFor(string path, string what)
+        {
+            import std.file : readText;
+            try return readText(path);
+            catch (Exception e) throw new CamundaException("cannot read the " ~ what ~ " " ~ path ~ ": " ~ e.msg);
+        }
+
+        // The client certificate, made once per thread: its key imported
+        // into a named CNG key (Schannel refuses ephemeral keys; spike in
+        // #28) that the certificate's CERT_KEY_PROV_INFO points at.
+        PCCERT_CONTEXT clientCertFor()
+        {
+            import camunda.pem : parsePem, pemBlocks, PemBlock;
+            import core.sys.windows.winbase : GetLastError;
+            import std.digest : toHexString, LetterCase;
+            import std.digest.sha : sha256Of;
+            import std.format : format;
+            import std.process : thisProcessID;
+            import std.utf : toUTF16;
+
+            const certFrom = req.certPem.length ? "CAMUNDA_MTLS_CERT" : req.certPath;
+            const keyFrom = req.keyPem.length ? "CAMUNDA_MTLS_KEY" : req.keyPath;
+            const certText = req.certPem.length ? req.certPem : readFileFor(req.certPath, "client certificate");
+            const keyText = req.keyPem.length ? req.keyPem : readFileFor(req.keyPath, "client key");
+            const cacheKey = certText ~ "\0" ~ keyText ~ "\0" ~ req.keyPassphrase;
+            if (auto c = cacheKey in clientCerts) return *c;
+
+            immutable(ubyte)[][] certs;
+            PemBlock[] keys;
+            try
+            {
+                certs = pemBlocks(certText, "CERTIFICATE");
+                keys = parsePem(keyText);
+            }
+            catch (Exception e) throw new CamundaException("client certificate or key: " ~ e.msg);
+            if (!certs.length) throw new CamundaException(certFrom ~ " contains no PEM certificate");
+            PemBlock key;
+            foreach (k; keys)
+                if (k.label.length >= 11 && k.label[$ - 11 .. $] == "PRIVATE KEY") { key = k; break; }
+            bool encrypted;
+            switch (key.label)
+            {
+            case "PRIVATE KEY": break;
+            case "ENCRYPTED PRIVATE KEY":
+                if (!req.keyPassphrase.length)
+                    throw new CamundaException(keyFrom ~ " is encrypted; set CAMUNDA_MTLS_KEY_PASSPHRASE");
+                encrypted = true;
+                break;
+            case "RSA PRIVATE KEY", "EC PRIVATE KEY":
+                throw new CamundaException(keyFrom ~ " is a " ~ key.label ~ "; Windows needs PKCS#8 for now"
+                    ~ " (convert: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-pkcs8.pem)");
+            case null:
+                throw new CamundaException(keyFrom ~ " contains no PEM private key");
+            default:
+                throw new CamundaException(keyFrom ~ ": unsupported key type " ~ key.label);
+            }
+
+            // Same name, same key: the name is a hash of the key, scoped to
+            // this process (another process may use the same key and delete
+            // its own copy at exit).
+            const name = format("camunda-sdk-%s-%s", thisProcessID,
+                toHexString!(LetterCase.lower)(sha256Of(key.der))[0 .. 16]);
+            const wname = toUTF16(name) ~ "\0"w;
+            NCryptBuffer[2] params;
+            params[0] = NCryptBuffer(cast(uint)(wname.length * wchar.sizeof), NCRYPTBUFFER_PKCS_KEY_NAME, wname.ptr);
+            const wpass = toUTF16(req.keyPassphrase) ~ "\0"w;
+            if (encrypted)
+                params[1] = NCryptBuffer(cast(uint)(wpass.length * wchar.sizeof), NCRYPTBUFFER_PKCS_SECRET, wpass.ptr);
+            auto desc = NCryptBufferDesc(0, encrypted ? 2 : 1, params.ptr);
+
+            NCRYPT_HANDLE provider;
+            int status = NCryptOpenStorageProvider(&provider, MS_KEY_STORAGE_PROVIDER.ptr, 0);
+            if (status != 0) throw new CamundaException(format("cannot open the CNG key storage provider (0x%08X)", status));
+            scope (exit) NCryptFreeObject(provider);
+            NCRYPT_HANDLE handle;
+            enum NTE_EXISTS = 0x8009000F;
+            status = NCryptImportKey(provider, 0, "PKCS8_PRIVATEKEY"w.ptr, &desc, &handle, key.der.ptr,
+                cast(DWORD) key.der.length, NCRYPT_DO_NOT_FINALIZE_FLAG);
+            if (status == 0)
+            {
+                status = NCryptFinalizeKey(handle, 0);
+                NCryptFreeObject(handle);
+            }
+            if (status == 0)
+            {
+                import core.atomic : atomicLoad;
+                atomicLoad(importedKeys).update((ref immutable(string)[] names) { names ~= name; });
+            }
+            else if (cast(uint) status != NTE_EXISTS)
+                throw new CamundaException(format("cannot import the client key from %s%s (NCrypt 0x%08X)", keyFrom,
+                    encrypted ? " (is CAMUNDA_MTLS_KEY_PASSPHRASE right?)" : "", status));
+
+            // The leaf and any intermediates share a store, so the chain can
+            // be sent; the leaf context keeps the store alive.
+            auto store = CertOpenStore(cast(const(char)*) 2 /* CERT_STORE_PROV_MEMORY */, 0, 0, 0, null);
+            if (store is null) throw new CamundaException(format("cannot create a certificate store (Windows error %s)", GetLastError()));
+            scope (exit) CertCloseStore(store, 0);
+            PCCERT_CONTEXT leaf;
+            foreach (i, der; certs)
+            {
+                auto ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, der.ptr, cast(DWORD) der.length);
+                if (ctx is null) throw new CamundaException(format("%s: a certificate is not valid (Windows error %s)", certFrom, GetLastError()));
+                scope (exit) CertFreeCertificateContext(ctx);
+                if (!CertAddCertificateContextToStore(store, ctx, CERT_STORE_ADD_REPLACE_EXISTING, i == 0 ? &leaf : null))
+                    throw new CamundaException(format("cannot store the client certificate (Windows error %s)", GetLastError()));
+            }
+            CryptKeyProvInfo info;
+            info.pwszContainerName = wname.ptr;
+            info.pwszProvName = MS_KEY_STORAGE_PROVIDER.ptr;
+            if (!CertSetCertificateContextProperty(leaf, CERT_KEY_PROV_INFO_PROP_ID, 0, &info))
+            {
+                CertFreeCertificateContext(leaf);
+                throw new CamundaException(format("cannot attach the client key (Windows error %s)", GetLastError()));
+            }
+            clientCerts[cacheKey] = leaf;
+            return leaf;
+        }
 
         // The chain engine for this request's trust source, made once per
         // thread. A custom CA is an exclusive root: only it is trusted.
@@ -673,15 +824,9 @@ version (Windows)
             }
             else if (req.caPath.length)
             {
-                import std.file : readText;
                 key = "path:" ~ req.caPath;
                 check.trust = "the CA in " ~ req.caPath;
-                string readCa()
-                {
-                    try return readText(req.caPath);
-                    catch (Exception e) throw new CamundaException("cannot read the CA file " ~ req.caPath ~ ": " ~ e.msg);
-                }
-                check.engine = engineFor(key, readCa(), check.trust);
+                check.engine = engineFor(key, readFileFor(req.caPath, "CA file"), check.trust);
             }
             else
             {
@@ -699,6 +844,12 @@ version (Windows)
                 | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
             if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
                 throw lastError("cannot set the TLS options for", req.url);
+            if (req.certPath.length || req.certPem.length)
+            {
+                auto cert = clientCertFor();
+                if (!WinHttpSetOption(h, WINHTTP_OPTION_CLIENT_CERT_CONTEXT, cast(void*) cert, CERT_CONTEXT.sizeof))
+                    throw lastError("cannot set the client certificate for", req.url);
+            }
             size_t contextValue = cast(size_t) cast(void*) check;
             if (!WinHttpSetOption(h, WINHTTP_OPTION_CONTEXT_VALUE, &contextValue, contextValue.sizeof))
                 throw lastError("cannot set the TLS check for", req.url);
@@ -811,13 +962,21 @@ version (Windows) unittest
     import std.algorithm.searching : canFind;
     import std.exception : collectException;
 
-    // Client certificates are refused (until #28 phase 3b), not ignored.
+    // A client certificate that can't be read fails before connecting.
     HttpRequest tls;
     tls.url = "https://127.0.0.1:9/v2/topology";
-    tls.certPath = "client.pem";
-    tls.keyPath = "client.key";
+    tls.certPath = "no-such-client.pem";
+    tls.keyPath = "no-such-client.key";
     auto e = collectException!CamundaException(winHttpPerform(tls));
-    assert(e !is null && e.msg.canFind("not supported on Windows"), e is null ? "no exception" : e.msg);
+    assert(e !is null && e.msg.canFind("cannot read the client certificate"), e is null ? "no exception" : e.msg);
+
+    // A PKCS#1 key gets a conversion hint, not an NCrypt code.
+    HttpRequest pkcs1;
+    pkcs1.url = "https://127.0.0.1:9/v2/topology";
+    pkcs1.certPem = "-----BEGIN CERTIFICATE-----\nAQ==\n-----END CERTIFICATE-----\n";
+    pkcs1.keyPem = "-----BEGIN RSA PRIVATE KEY-----\nAQ==\n-----END RSA PRIVATE KEY-----\n";
+    e = collectException!CamundaException(winHttpPerform(pkcs1));
+    assert(e !is null && e.msg.canFind("openssl pkcs8 -topk8"), e is null ? "no exception" : e.msg);
 
     // A refused connection is a NetworkException that says so.
     HttpRequest closed;

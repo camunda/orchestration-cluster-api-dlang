@@ -40,6 +40,9 @@ struct Pki
         p.leaf("server", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n");
         p.leaf("client", "extendedKeyUsage=clientAuth\n");
         p.serverWithCrl("offline", "http://127.0.0.1:9/offline.crl");
+        // The client key again, as encrypted PKCS#8 (passphrase "s3cret").
+        p.openssl(["pkcs8", "-topk8", "-in", p.path("client.key"), "-out", p.path("client-enc.key"),
+            "-v2", "aes-256-cbc", "-passout", "pass:s3cret"]);
         return p;
     }
 
@@ -97,20 +100,19 @@ enum Mode
 {
     www,  /// answers every request with 200 (`-www`)
     mtls, /// ditto, and requires a client cert signed by the test CA
-    echo, /// writes whatever request bytes arrive to `echo.log`; never answers
+    files, /// serves files from the PKI dir (`-WWW`), logging `FILE:<name>` to `access.log`
 }
 
 /// `openssl s_server` on a free local port, presenting leaf `cert`.
 struct TlsServer
 {
-    import std.process : Pid, Pipe;
+    import std.process : Pid;
     Pid pid;
     ushort port;
-    Pipe stdin; // POSIX echo mode: held open so s_server keeps echoing
 
     static TlsServer start(const ref Pki pki, Mode mode, string cert = "server")
     {
-        import std.process : spawnProcess;
+        import std.process : spawnProcess, Config;
         import std.socket : TcpSocket, InternetAddress;
         import std.stdio : File;
         import std.conv : to;
@@ -125,10 +127,9 @@ struct TlsServer
         {
         case Mode.www: args ~= "-www"; break;
         case Mode.mtls: args ~= ["-www", "-Verify", "1", "-CAfile", pki.path("ca.pem")]; break;
-        // -quiet: only the peer's bytes on stdout, and keep serving
-        // although stdin is empty (OpenSSL's -ign_eof, implied; LibreSSL
-        // has no flag for it).
-        case Mode.echo: args ~= "-quiet"; break;
+        // OpenSSL and LibreSSL both print FILE:<name> to stderr for each
+        // file they serve.
+        case Mode.files: args ~= "-WWW"; break;
         }
         // macOS system libcurl uses LibreSSL 3.3.6, which fails to decode a
         // TLS 1.3 CertificateRequest from current OpenSSL (`tlsv1 alert
@@ -136,17 +137,8 @@ struct TlsServer
         version (OSX) if (mode == Mode.mtls) args ~= "-no_tls1_3";
         version (Windows) enum devnull = "NUL"; else enum devnull = "/dev/null";
         auto nul = File(devnull, "w");
-        auto stdout = mode == Mode.echo ? File(pki.path("echo.log"), "w") : nul;
-        auto input = File(devnull, "r");
-        // LibreSSL's s_server stops echoing at stdin EOF; Windows OpenSSL
-        // only reads stdin on console key presses, so NUL is fine there.
-        version (Posix) if (mode == Mode.echo)
-        {
-            import std.process : pipe;
-            s.stdin = pipe();
-            input = s.stdin.readEnd;
-        }
-        s.pid = spawnProcess(args, input, stdout, nul);
+        auto stderr = mode == Mode.files ? File(pki.path("access.log"), "w") : nul;
+        s.pid = spawnProcess(args, File(devnull, "r"), nul, stderr, null, Config.none, pki.dir);
         foreach (_; 0 .. 100) // up to 10 s for the server to listen
         {
             auto c = new TcpSocket();
@@ -172,7 +164,6 @@ struct TlsServer
         // wait on ours below, so it cannot have been reaped and reused yet).
         () @trusted { kill(pid); }();
         wait(pid);
-        if (stdin.writeEnd.isOpen) stdin.writeEnd.close();
     }
 }
 
@@ -276,8 +267,8 @@ unittest
 }
 
 // #28 security: a server the client does not trust receives no request
-// bytes (WinHTTP checks in the send callback, before writing; curl checks in
-// the handshake). The echo server logs what arrives; a trusted control
+// (WinHTTP checks in the send callback, before writing; curl checks in the
+// handshake). The server logs each file requested; a trusted control
 // request proves the log works.
 unittest
 {
@@ -287,7 +278,10 @@ unittest
 
     auto pki = Pki.make();
     scope (exit) pki.remove();
-    auto srv = TlsServer.start(pki, Mode.echo);
+    import std.file : write;
+    write(pki.path("control-arrives"), "ok");
+    write(pki.path("must-not-arrive"), "secret");
+    auto srv = TlsServer.start(pki, Mode.files);
     scope (exit) srv.stop();
 
     auto untrusted = get(srv, "/must-not-arrive");
@@ -295,16 +289,14 @@ unittest
     untrusted.headers["Authorization"] = "Bearer must-not-leak";
     assert(failure(untrusted) !is null);
 
-    // The echo server never answers, so this one times out after sending.
     auto control = get(srv, "/control-arrives");
     control.caPem = pki.read("ca.pem");
-    control.timeoutMs = 3_000;
-    failure(control);
+    assert(perform(control).status == 200);
 
     Thread.sleep(300.msecs);
-    const log = pki.read("echo.log");
-    assert(log.canFind("GET /control-arrives "), "the echo server logged nothing; log: " ~ log);
-    assert(!log.canFind("must-not"), "an untrusted server received request bytes: " ~ log);
+    const log = pki.read("access.log");
+    assert(log.canFind("FILE:control-arrives"), "the server logged no request; log: " ~ log);
+    assert(!log.canFind("must-not-arrive"), "an untrusted server received the request: " ~ log);
 }
 
 // #28 revocation soft-fail: a CRL that cannot be fetched does not fail the
@@ -357,10 +349,12 @@ version (Windows) unittest
     assert(msg !is null && msg.canFind("revoked"), msg is null ? "a revoked certificate was accepted" : msg);
 }
 
-// #30: client certificates, as files or inline.
-// Windows: WinHTTP client certificates are #28 phase 3b.
-version (Windows) {} else unittest
+// #30 / #28: client certificates, as files or inline, plain or encrypted
+// PKCS#8.
+unittest
 {
+    import std.exception : collectException;
+
     auto pki = Pki.make();
     scope (exit) pki.remove();
     auto srv = TlsServer.start(pki, Mode.mtls);
@@ -377,6 +371,17 @@ version (Windows) {} else unittest
     inline.certPem = pki.read("client.pem");
     inline.keyPem = pki.read("client.key");
     assert(perform(inline).status == 200);
+
+    auto encrypted = get(srv);
+    encrypted.caPem = pki.read("ca.pem");
+    encrypted.certPem = pki.read("client.pem");
+    encrypted.keyPem = pki.read("client-enc.key");
+    encrypted.keyPassphrase = "s3cret";
+    assert(perform(encrypted).status == 200);
+
+    auto wrongPass = encrypted;
+    wrongPass.keyPassphrase = "wrong";
+    assert(collectException(perform(wrongPass)) !is null, "a wrong passphrase must fail");
 
     auto none = get(srv);
     none.caPem = pki.read("ca.pem");
