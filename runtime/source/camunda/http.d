@@ -565,3 +565,49 @@ unittest
     assert(raw[4].startsWith("PUT /v2/things ") && hasHeader(raw[4], "content-length: 0"), raw[4]);
     assert(raw[5].startsWith("GET /v2/things ") && bodyOf(raw[5]) == "", raw[5]);
 }
+
+version (unittest)
+{
+    /// Answers its first request slowly: the head after `delayMs`, then the
+    /// body after another `delayMs`.
+    private void slowServer(Chan!int port, int delayMs)
+    {
+        import core.thread : Thread;
+        import core.time : msecs;
+        import std.socket : TcpSocket, InternetAddress;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(4);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        auto conn = listener.accept();
+        scope (exit) conn.close();
+        ubyte[4096] chunk;
+        conn.receive(chunk[]);
+        Thread.sleep(delayMs.msecs);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+        Thread.sleep(delayMs.msecs);
+        conn.send("{}");
+    }
+}
+
+// The request timeout bounds the whole exchange, not each step: a head that
+// arrives just in time followed by a slow body still times out.
+unittest
+{
+    import std.conv : to;
+    import std.exception : collectException;
+    import camunda.errors : NetworkException;
+
+    auto port = Chan!int.make;
+    auto server = spawn(&slowServer, port, 700);
+    int p;
+    port.take(p);
+    HttpRequest req;
+    req.method = "GET";
+    req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/slow";
+    req.timeoutMs = 1_000;
+    auto e = collectException!NetworkException(perform(req));
+    server.join();
+    assert(e !is null, "a 1400 ms exchange finished inside a 1000 ms timeout");
+}

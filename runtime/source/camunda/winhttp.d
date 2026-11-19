@@ -1,7 +1,9 @@
 /// HTTP over WinHTTP, the HTTP stack built into Windows: `camunda.http.perform`
 /// on Windows. TLS is Schannel, server trust is the Windows certificate
 /// store, and the proxy is the system's (or `HTTPS_PROXY`/`HTTP_PROXY`/
-/// `NO_PROXY` when set, as on POSIX). Nothing to link or ship: winhttp.dll is
+/// `NO_PROXY` when set, as on POSIX; `NO_PROXY` applies to the system
+/// proxy too). Redirects are not followed and cookies are not kept, as with
+/// the curl backend. Nothing to link or ship: winhttp.dll is
 /// part of Windows. (camunda/orchestration-cluster-api-dlang#28)
 ///
 /// Not yet: a custom CA file (`caPath`) and PEM client certificates (mTLS).
@@ -14,7 +16,7 @@ module camunda.winhttp;
 
 @safe:
 
-import std.string : indexOf, toLower;
+import std.string : indexOf, lastIndexOf, toLower;
 
 /// The parts of an absolute http(s) URL that WinHTTP takes separately.
 struct UrlParts
@@ -95,28 +97,41 @@ unittest
     assertThrown(splitUrl("http://user:pw@h/"));
 }
 
-/// The proxy WinHTTP should use, from the POSIX-style environment variables
-/// (the values passed in; empty when unset). `list` is WinHTTP's per-scheme
-/// form (`http=host:port;https=host:port`), `bypass` its `;`-separated list.
-/// Both empty: no variable set, so use the system proxy.
+/// The proxy WinHTTP should use, from the POSIX-style `HTTPS_PROXY` /
+/// `HTTP_PROXY` values passed in (empty when unset). `list` is WinHTTP's
+/// per-scheme form (`http=host:port;https=host:port`); empty means no
+/// variable is set, so use the system proxy. `NO_PROXY` is not folded in
+/// here: WinHTTP's bypass list has different matching rules, so it is applied
+/// per request with `noProxyMatches` instead.
+///
+/// WinHTTP talks to a proxy only in plain HTTP (CONNECT for https targets),
+/// so a proxy URL with any other scheme (`https://`, `socks5://`, ...) is
+/// rejected rather than silently downgraded.
 struct ProxyChoice
 {
     string list;
-    string bypass;
 }
 
-ProxyChoice proxyFromEnv(string httpsProxy, string httpProxy, string noProxy) pure
+ProxyChoice proxyFromEnv(string httpsProxy, string httpProxy) pure
 {
-    import std.algorithm : map, filter;
-    import std.array : join, split;
+    import std.array : join;
     import std.string : strip;
 
     static string hostPort(string v)
     {
         auto s = v.strip;
         const sep = s.indexOf("://");
-        if (sep >= 0) s = s[sep + 3 .. $];
+        if (sep >= 0)
+        {
+            const scheme = s[0 .. sep].toLower;
+            if (scheme != "http")
+                throw new Exception("unsupported proxy scheme '" ~ scheme ~ "' in " ~ v
+                    ~ ": WinHTTP supports only http:// proxies");
+            s = s[sep + 3 .. $];
+        }
         while (s.length && s[$ - 1] == '/') s = s[0 .. $ - 1];
+        if (!s.length || s.indexOf('/') >= 0 || s.indexOf('@') >= 0)
+            throw new Exception("unsupported proxy '" ~ v ~ "': expected [http://]host[:port]");
         return s;
     }
 
@@ -125,18 +140,69 @@ ProxyChoice proxyFromEnv(string httpsProxy, string httpProxy, string noProxy) pu
     if (httpProxy.strip.length) parts ~= "http=" ~ hostPort(httpProxy);
     if (httpsProxy.strip.length) parts ~= "https=" ~ hostPort(httpsProxy);
     p.list = parts.join(";");
-    if (p.list.length && noProxy.strip.length)
-        p.bypass = noProxy.split(",").map!(s => s.strip).filter!(s => s.length > 0).join(";");
     return p;
 }
 
 unittest
 {
-    assert(proxyFromEnv("", "", "") == ProxyChoice.init);
-    auto p = proxyFromEnv("http://proxy.corp:3128/", "proxy.corp:3128", "localhost, .internal ,");
+    import std.exception : assertThrown;
+
+    assert(proxyFromEnv("", "") == ProxyChoice.init);
+    auto p = proxyFromEnv("http://proxy.corp:3128/", "proxy.corp:3128");
     assert(p.list == "http=proxy.corp:3128;https=proxy.corp:3128", p.list);
-    assert(p.bypass == "localhost;.internal", p.bypass);
-    assert(proxyFromEnv("", "", "localhost").bypass == ""); // NO_PROXY alone changes nothing
+    assert(proxyFromEnv("HTTP://p:1", "").list == "https=p:1");
+    // Never silently downgrade a TLS or SOCKS proxy to plain HTTP.
+    assertThrown(proxyFromEnv("https://proxy.corp:443", ""));
+    assertThrown(proxyFromEnv("", "socks5://proxy.corp:1080"));
+    assertThrown(proxyFromEnv("http://user:pw@proxy:1", ""));
+    assertThrown(proxyFromEnv("http://proxy:1/path", ""));
+}
+
+/// Whether `host` is excluded from proxying by `noProxy` (the `NO_PROXY`
+/// value), with curl's semantics: comma-separated, case-insensitive; `*`
+/// alone matches everything; an entry matches the host itself and every
+/// subdomain, with or without a leading dot (`.internal` and `internal` both
+/// match `cluster.internal` and `internal`). An entry's `:port` is ignored.
+bool noProxyMatches(string noProxy, string host) pure
+{
+    import std.algorithm : endsWith;
+    import std.array : split;
+    import std.string : strip;
+
+    auto h = host.toLower;
+    while (h.length && h[$ - 1] == '.') h = h[0 .. $ - 1];
+    if (h.length > 1 && h[0] == '[' && h[$ - 1] == ']') h = h[1 .. $ - 1];
+    foreach (raw; noProxy.split(","))
+    {
+        auto e = raw.strip.toLower;
+        if (e == "*") return true;
+        if (e.length && e[0] == '[')
+        {
+            const close = e.indexOf(']');
+            e = close > 0 ? e[1 .. close] : e;
+        }
+        else if (e.indexOf(':') >= 0 && e.indexOf(':') == e.lastIndexOf(':'))
+            e = e[0 .. e.indexOf(':')]; // host:port; bare IPv6 has several ':'
+        while (e.length && e[0] == '.') e = e[1 .. $];
+        while (e.length && e[$ - 1] == '.') e = e[0 .. $ - 1];
+        if (!e.length) continue;
+        if (h == e || h.endsWith("." ~ e)) return true;
+    }
+    return false;
+}
+
+unittest
+{
+    assert(!noProxyMatches("", "h"));
+    assert(noProxyMatches("*", "anything.example"));
+    assert(noProxyMatches(" localhost , .internal ,", "cluster.internal"));
+    assert(noProxyMatches(".internal", "internal"));
+    assert(noProxyMatches("internal", "a.b.INTERNAL"));
+    assert(!noProxyMatches("internal", "notinternal"));
+    assert(noProxyMatches("Camunda.io:443", "x.camunda.io"));
+    assert(noProxyMatches("::1", "::1"));
+    assert(noProxyMatches("[::1]:8080", "::1"));
+    assert(!noProxyMatches("localhost", "example.com"));
 }
 
 /// A readable name for the WinHTTP errors a caller can act on.
@@ -156,7 +222,7 @@ string winHttpErrorName(uint code) pure nothrow
 
 version (Windows)
 {
-    import camunda.errors : CamundaException, NetworkException;
+    import camunda.errors : CamundaException, ConfigException, NetworkException;
     import camunda.http : HttpRequest, HttpResponse;
     import camunda.safeio : ownText;
     import camunda.transport : hasHeaderNamed;
@@ -200,13 +266,14 @@ version (Windows)
             import std.process : environment;
             import std.utf : toUTF16z;
 
-            const p = proxyFromEnv(environment.get("HTTPS_PROXY", environment.get("https_proxy", "")),
-                environment.get("HTTP_PROXY", environment.get("http_proxy", "")),
-                environment.get("NO_PROXY", environment.get("no_proxy", "")));
+            ProxyChoice p;
+            try p = proxyFromEnv(environment.get("HTTPS_PROXY", environment.get("https_proxy", "")),
+                environment.get("HTTP_PROXY", environment.get("http_proxy", "")));
+            catch (Exception e) throw new ConfigException(e.msg);
             HINTERNET s;
             if (p.list.length)
                 s = WinHttpOpen("camunda-orchestration-sdk-d"w.ptr, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
-                    p.list.toUTF16z, p.bypass.length ? p.bypass.toUTF16z : WINHTTP_NO_PROXY_BYPASS, 0);
+                    p.list.toUTF16z, WINHTTP_NO_PROXY_BYPASS, 0);
             else
             {
                 // The system proxy (including PAC); Windows 8.1+.
@@ -248,9 +315,37 @@ version (Windows)
         if (h is null) throw lastError("cannot open a request to", req.url);
         scope (exit) WinHttpCloseHandle(h);
 
-        const timeout = cast(int)(req.timeoutMs > 0 ? req.timeoutMs : 30_000);
-        WinHttpSetTimeouts(h, timeout, timeout, timeout, timeout);
+        // The session is shared by every client on this thread: no cookie
+        // jar (one client's cookies must not reach another), and no
+        // automatic redirects (WinHTTP would replay caller headers such as
+        // credentials to the new host). Same behaviour as the curl backend.
+        DWORD features = WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS;
+        if (!WinHttpSetOption(h, WINHTTP_OPTION_DISABLE_FEATURE, &features, DWORD.sizeof))
+            throw lastError("cannot configure the request to", req.url);
+
+        // NO_PROXY, with curl's matching, for an explicit and a system proxy.
+        import std.process : environment;
+        if (noProxyMatches(environment.get("NO_PROXY", environment.get("no_proxy", "")), u.host))
+        {
+            WINHTTP_PROXY_INFO direct;
+            direct.dwAccessType = WINHTTP_ACCESS_TYPE_NO_PROXY;
+            if (!WinHttpSetOption(h, WINHTTP_OPTION_PROXY, &direct, WINHTTP_PROXY_INFO.sizeof))
+                throw lastError("cannot bypass the proxy for", req.url);
+        }
+
+        // One deadline for the whole request: every blocking step gets only
+        // the time that is left.
+        const timeout = cast(long)(req.timeoutMs > 0 ? req.timeoutMs : 30_000);
         const deadline = MonoTime.currTime + timeout.msecs;
+        void armTimeouts(string stage)
+        {
+            const left = (deadline - MonoTime.currTime).total!"msecs";
+            if (left <= 0)
+                throw new NetworkException("timed out " ~ stage ~ " " ~ req.url);
+            const ms = cast(int)(left > int.max ? int.max : left);
+            WinHttpSetTimeouts(h, ms, ms, ms, ms);
+        }
+        armTimeouts("before sending to");
 
         const(ubyte)[] payload;
         if (req.rawBody.length) payload = req.rawBody;
@@ -274,6 +369,7 @@ version (Windows)
         if (!WinHttpSendRequest(h, wideHeaders, headers.length ? cast(DWORD) -1 : 0,
                 cast(void*) payload.ptr, len, len, 0))
             throw lastError("cannot send to", req.url);
+        armTimeouts("waiting for a response from");
         if (!WinHttpReceiveResponse(h, null))
             throw lastError("no response from", req.url);
 
@@ -294,11 +390,12 @@ version (Windows)
         ubyte[16 * 1024] chunk;
         for (;;)
         {
-            if (MonoTime.currTime > deadline)
-                throw new NetworkException("timed out reading the response from " ~ req.url);
+            armTimeouts("reading the response from");
             DWORD got;
             if (!WinHttpReadData(h, chunk.ptr, cast(DWORD) chunk.length, &got))
                 throw lastError("cannot read the response from", req.url);
+            if (MonoTime.currTime > deadline)
+                throw new NetworkException("timed out reading the response from " ~ req.url);
             if (got == 0) break;
             buf ~= chunk[0 .. got];
         }
