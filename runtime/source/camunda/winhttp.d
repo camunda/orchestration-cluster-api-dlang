@@ -852,6 +852,11 @@ version (Windows)
                 NCRYPT_HANDLE k;
                 DWORD spec;
                 int callerFrees;
+                // An unpersisted PFX key hangs off the certificate as
+                // CERT_NCRYPT_KEY_HANDLE_PROP_ID (78), owned by the context;
+                // CryptAcquireCertificatePrivateKey does not always find it.
+                enum CERT_NCRYPT_KEY_HANDLE_PROP_ID = 78;
+                DWORD hsize = NCRYPT_HANDLE.sizeof;
                 if (leafDer is null && CryptAcquireCertificatePrivateKey(c,
                         CRYPT_ACQUIRE_SILENT_FLAG | CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, null, &k, &spec, &callerFrees))
                 {
@@ -859,11 +864,18 @@ version (Windows)
                     key = k;
                     freeKey = !!callerFrees;
                 }
+                else if (leafDer is null && CertGetCertificateContextProperty(c, CERT_NCRYPT_KEY_HANDLE_PROP_ID, &k, &hsize))
+                {
+                    leafDer = der;
+                    key = k;
+                    freeKey = false;
+                }
                 else
                     others ~= der;
             }
             if (leafDer is null)
-                throw new CamundaException("the keystore " ~ req.keystorePath ~ " holds no certificate with a private key");
+                throw new CamundaException(format("the keystore %s holds no certificate with a private key (Windows error %s)",
+                    req.keystorePath, GetLastError()));
 
             // Export under a one-off secret (CNG exports a PFX key
             // encrypted only), PBE-SHA1-3DES with an 8-byte salt.
