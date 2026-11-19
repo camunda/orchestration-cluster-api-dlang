@@ -214,6 +214,10 @@ struct CamundaConfig
         if (tls.certPath.length ^ tls.keyPath.length)
             throw new ConfigException(
                 "mutual TLS requires both CAMUNDA_MTLS_CERT_PATH and CAMUNDA_MTLS_KEY_PATH");
+        foreach (pair; [["CAMUNDA_MTLS_CA", tls.ca, tls.caPath], ["CAMUNDA_MTLS_CERT", tls.cert, tls.certPath],
+                ["CAMUNDA_MTLS_KEY", tls.key, tls.keyPath]])
+            if (pair[1].length && pair[2].length)
+                throw new ConfigException("set " ~ pair[0] ~ " or " ~ pair[0] ~ "_PATH, not both");
     }
 }
 
@@ -515,4 +519,28 @@ unittest
         assert(false, "expected ConfigException");
     }
     catch (ConfigException) {}
+}
+
+// #30: an mTLS item comes inline or from a file, never both.
+unittest
+{
+    import std.algorithm.searching : canFind;
+    foreach (name; ["CAMUNDA_MTLS_CA", "CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"])
+    {
+        string[string] m = [name: "-----BEGIN X-----", name ~ "_PATH": "x.pem"];
+        // Cert and key must come as a pair, so their test sets the other one
+        // both ways too; whichever is checked first is reported.
+        if (name != "CAMUNDA_MTLS_CA")
+        {
+            const other = name == "CAMUNDA_MTLS_CERT" ? "CAMUNDA_MTLS_KEY" : "CAMUNDA_MTLS_CERT";
+            m[other] = "-----BEGIN Y-----";
+            m[other ~ "_PATH"] = "y.pem";
+        }
+        string msg;
+        try CamundaConfig.fromMap(m);
+        catch (ConfigException e) msg = e.msg;
+        assert(msg.canFind("_PATH, not both"), name ~ ": " ~ msg);
+    }
+    auto ok = CamundaConfig.fromMap(["CAMUNDA_MTLS_CA": "-----BEGIN X-----"]);
+    assert(ok.tls.ca.length);
 }

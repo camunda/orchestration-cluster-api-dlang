@@ -34,6 +34,11 @@ struct HttpRequest
     string keyPath;
     string caPath;
     string keyPassphrase;
+    /// Inline PEM (CAMUNDA_MTLS_CERT / _KEY / _CA). Never written to disk:
+    /// curl gets them as blobs. At most one of `x` and `xPath` is set.
+    string certPem;
+    string keyPem;
+    string caPem;
 }
 
 struct HttpResponse
@@ -57,6 +62,19 @@ HttpResponse perform(const ref HttpRequest req)
         return curlPerform(req);
 }
 
+// libcurl >= 7.77 blob options (CURLOPTTYPE_BLOB + n); std.net.curl's
+// CurlOption enum predates them.
+private enum : int { curlOptSslCertBlob = 40_291, curlOptSslKeyBlob = 40_292, curlOptCaInfoBlob = 40_309 }
+
+/// `struct curl_blob`; CURL_BLOB_COPY makes libcurl keep its own copy.
+private struct CurlBlob
+{
+    const(void)* data;
+    size_t len;
+    uint flags;
+}
+
+
 version (Windows) {} else
 {
 /// `@trusted`: std.net.curl is `@system` throughout. This only hands it values
@@ -78,7 +96,21 @@ version (Windows) {} else
 private HttpResponse curlPerform(const ref HttpRequest req) @trusted
 {
     import etc.c.curl : CurlOption;
-    const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase;
+    // Hand inline PEM to curl as a blob. Throws a CamundaException naming the
+    // setting when this libcurl or its TLS backend cannot take blobs.
+    void setBlob(ref HTTP http, int option, string pem, string setting)
+    {
+        if (!pem.length) return;
+        auto blob = CurlBlob(pem.ptr, pem.length, 1 /* CURL_BLOB_COPY */);
+        try
+            http.handle.set(cast(CurlOption) option, cast(void*) &blob);
+        catch (CurlException e)
+            throw new CamundaException(setting ~ " (inline PEM) needs libcurl 7.77 or later with an"
+                ~ " OpenSSL-compatible TLS backend; set " ~ setting ~ "_PATH to a file instead (" ~ e.msg ~ ")");
+    }
+
+    const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
+        ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem;
     HTTP http;
     if (auto h = tlsKey in tlsHandles) http = *h;
     else
@@ -89,8 +121,11 @@ private HttpResponse curlPerform(const ref HttpRequest req) @trusted
         {
             http.handle.set(CurlOption.sslcert, req.certPath);
             if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
-            if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
         }
+        if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
+        setBlob(http, curlOptCaInfoBlob, req.caPem, "CAMUNDA_MTLS_CA");
+        setBlob(http, curlOptSslCertBlob, req.certPem, "CAMUNDA_MTLS_CERT");
+        setBlob(http, curlOptSslKeyBlob, req.keyPem, "CAMUNDA_MTLS_KEY");
         tlsHandles[tlsKey] = http;
     }
     http.url = req.url;

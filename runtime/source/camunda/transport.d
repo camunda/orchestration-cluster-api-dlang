@@ -270,6 +270,9 @@ final class Transport
         req.keyPath = _config.tls.keyPath;
         req.caPath = _config.tls.caPath;
         req.keyPassphrase = _config.tls.keyPassphrase;
+        req.certPem = _config.tls.cert;
+        req.keyPem = _config.tls.key;
+        req.caPem = _config.tls.ca;
         return req;
     }
 
