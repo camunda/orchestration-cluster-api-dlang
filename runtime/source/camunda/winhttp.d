@@ -460,7 +460,8 @@ version (Windows)
             return s;
         }
 
-        if (req.caPath.length || req.certPath.length || req.keyPath.length)
+        if (req.caPath.length || req.certPath.length || req.keyPath.length
+            || req.caPem.length || req.certPem.length || req.keyPem.length)
             throw new CamundaException("a custom CA file and client certificates (mTLS) are not supported"
                 ~ " on Windows yet (camunda/orchestration-cluster-api-dlang#28); trust the CA through the"
                 ~ " Windows certificate store and unset the CA path");

@@ -208,12 +208,18 @@ struct CamundaConfig
                 throw new ConfigException(
                     "BASIC strategy requires CAMUNDA_BASIC_AUTH_USERNAME and CAMUNDA_BASIC_AUTH_PASSWORD");
         }
-        if (tls.cert.length ^ tls.key.length)
+        // Pairing is about presence, never length: a PEM certificate and its
+        // private key are different documents, so their lengths differ.
+        if ((tls.cert.length != 0) ^ (tls.key.length != 0))
             throw new ConfigException(
                 "mutual TLS requires both CAMUNDA_MTLS_CERT and CAMUNDA_MTLS_KEY");
-        if (tls.certPath.length ^ tls.keyPath.length)
+        if ((tls.certPath.length != 0) ^ (tls.keyPath.length != 0))
             throw new ConfigException(
                 "mutual TLS requires both CAMUNDA_MTLS_CERT_PATH and CAMUNDA_MTLS_KEY_PATH");
+        foreach (pair; [["CAMUNDA_MTLS_CA", tls.ca, tls.caPath], ["CAMUNDA_MTLS_CERT", tls.cert, tls.certPath],
+                ["CAMUNDA_MTLS_KEY", tls.key, tls.keyPath]])
+            if (pair[1].length && pair[2].length)
+                throw new ConfigException("set " ~ pair[0] ~ " or " ~ pair[0] ~ "_PATH, not both");
     }
 }
 
@@ -515,4 +521,58 @@ unittest
         assert(false, "expected ConfigException");
     }
     catch (ConfigException) {}
+}
+
+// #30: an mTLS item comes inline or from a file, never both.
+unittest
+{
+    import std.algorithm.searching : canFind;
+    foreach (name; ["CAMUNDA_MTLS_CA", "CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"])
+    {
+        string[string] m = [name: "-----BEGIN X-----", name ~ "_PATH": "x.pem"];
+        // Cert and key must come as a pair, so their test sets the other one
+        // both ways too; whichever is checked first is reported.
+        if (name != "CAMUNDA_MTLS_CA")
+        {
+            const other = name == "CAMUNDA_MTLS_CERT" ? "CAMUNDA_MTLS_KEY" : "CAMUNDA_MTLS_CERT";
+            m[other] = "-----BEGIN Y-----";
+            m[other ~ "_PATH"] = "y.pem";
+        }
+        string msg;
+        try CamundaConfig.fromMap(m);
+        catch (ConfigException e) msg = e.msg;
+        assert(msg.canFind("_PATH, not both"), name ~ ": " ~ msg);
+    }
+    auto ok = CamundaConfig.fromMap(["CAMUNDA_MTLS_CA": "-----BEGIN X-----"]);
+    assert(ok.tls.ca.length);
+}
+
+// #31: pairing compares presence, not length — a PEM certificate and its
+// private key are different documents, so their lengths differ. Both the
+// inline and the path form must accept such a pair.
+unittest
+{
+    const cert = "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----"; // 53
+    const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n";
+    assert(cert.length != key.length);
+    auto inline = CamundaConfig.fromMap(["CAMUNDA_MTLS_CERT": cert, "CAMUNDA_MTLS_KEY": key]);
+    assert(inline.tls.cert == cert && inline.tls.key == key.strip);
+    auto byPath = CamundaConfig.fromMap(
+        ["CAMUNDA_MTLS_CERT_PATH": "/p/client-cert.pem", "CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"]);
+    assert(byPath.tls.certPath.length && byPath.tls.keyPath.length);
+    // And a genuinely missing half is still rejected, each way.
+    string[string][] unpaired;
+    unpaired ~= ["CAMUNDA_MTLS_CERT": cert];
+    unpaired ~= ["CAMUNDA_MTLS_KEY": key];
+    unpaired ~= ["CAMUNDA_MTLS_CERT_PATH": "/p/c.pem"];
+    unpaired ~= ["CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"];
+    foreach (m; unpaired)
+    {
+        try
+        {
+            CamundaConfig.fromMap(m);
+            assert(false, "expected ConfigException for an unpaired mTLS item");
+        }
+        catch (ConfigException) {}
+    }
 }
