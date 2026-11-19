@@ -74,7 +74,11 @@ enum : DWORD
     NCRYPT_OVERWRITE_KEY_FLAG = 0x80,
     NCRYPT_DO_NOT_FINALIZE_FLAG = 0x400,
     CRYPT_USER_KEYSET = 0x1000,
-    CRYPT_SET_KEY_PROV_FLAG = 0x1,
+    NCRYPTBUFFER_PKCS_ALG_OID = 41,
+    NCRYPTBUFFER_PKCS_ALG_PARAM = 42,
+    PKCS12_NO_PERSIST_KEY = 0x8000,
+    CRYPT_ACQUIRE_SILENT_FLAG = 0x40,
+    CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG = 0x40000,
     PKCS12_ALWAYS_CNG_KSP = 0x200,
 }
 
@@ -99,4 +103,6 @@ extern (Windows) @system nothrow @nogc
     int NCryptOpenKey(NCRYPT_HANDLE hProvider, NCRYPT_HANDLE* phKey, const(wchar)* pszKeyName, DWORD dwLegacyKeySpec, DWORD dwFlags);
     int NCryptDeleteKey(NCRYPT_HANDLE hKey, DWORD dwFlags);
     int NCryptFreeObject(NCRYPT_HANDLE hObject);
+    int NCryptExportKey(NCRYPT_HANDLE hKey, NCRYPT_HANDLE hExportKey, const(wchar)* pszBlobType, NCryptBufferDesc* pParameterList, BYTE* pbOutput, DWORD cbOutput, DWORD* pcbResult, DWORD dwFlags);
+    BOOL CryptAcquireCertificatePrivateKey(PCCERT_CONTEXT pCert, DWORD dwFlags, void* pvParameters, NCRYPT_HANDLE* phCryptProvOrNCryptKey, DWORD* pdwKeySpec, int* pfCallerFreeProvOrNCryptKey);
 }

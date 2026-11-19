@@ -457,6 +457,59 @@ unittest
     assert(failure(none) !is null, "the server requires a client certificate");
 }
 
+/// One thread's first use of a client key (PEM, then PKCS#12) for the
+/// concurrent mTLS test: puts "" on success, else what failed.
+private void firstUseClient(ushort port, string dir, Chan!string results)
+{
+    import std.conv : to;
+    import std.path : buildPath;
+
+    string outcome;
+    try
+    {
+        HttpRequest r;
+        r.url = "https://127.0.0.1:" ~ port.to!string ~ "/";
+        r.timeoutMs = 30_000;
+        r.caPath = buildPath(dir, "ca.pem");
+        auto pem = r;
+        pem.certPath = buildPath(dir, "client.pem");
+        pem.keyPath = buildPath(dir, "client.key");
+        if (perform(pem).status != 200) outcome = "PEM key: not 200";
+        auto p12 = r;
+        p12.keystorePath = buildPath(dir, "client.p12");
+        p12.keystorePassword = "s3cret";
+        if (!outcome.length && perform(p12).status != 200) outcome = "keystore: not 200";
+    }
+    catch (Exception e) outcome = e.msg.length ? e.msg : "(no message)";
+    results.put(outcome);
+}
+
+// #28: threads making the same client key at the same time share one
+// persisted copy; none deletes it under another's handshake.
+unittest
+{
+    import std.algorithm.searching : canFind;
+
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.mtls);
+    scope (exit) srv.stop();
+
+    enum n = 4;
+    auto results = Chan!string.make;
+    typeof(spawn(&firstUseClient, srv.port, pki.dir, results))[n] threads;
+    foreach (ref t; threads) t = spawn(&firstUseClient, srv.port, pki.dir, results);
+    string[] failures;
+    foreach (i; 0 .. n)
+    {
+        string outcome;
+        results.take(outcome);
+        if (outcome.length) failures ~= outcome;
+    }
+    foreach (ref t; threads) t.join();
+    assert(!failures.length, "concurrent first use failed: " ~ failures[0]);
+}
+
 // camunda.pem.toPkcs8 wraps a PKCS#1 key exactly as OpenSSL does.
 unittest
 {
