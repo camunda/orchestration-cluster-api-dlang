@@ -1,4 +1,5 @@
-/// HTTP over libcurl. Auth headers, mTLS, retries and backpressure sit above this.
+/// HTTP: libcurl on POSIX, WinHTTP on Windows (`camunda.winhttp`). Auth
+/// headers, mTLS, retries and backpressure sit above this.
 module camunda.http;
 
 @safe:
@@ -8,7 +9,7 @@ import camunda.jsonx;
 import camunda.safeio : Chan, ownText, readBytes, spawn;
 import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
-import std.net.curl : HTTP, CurlException;
+version (Windows) {} else import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
 
 struct HttpRequest
@@ -43,6 +44,21 @@ struct HttpResponse
     string contentType;
 }
 
+/// Send `req` and return the response. Connection failures throw
+/// `NetworkException`; HTTP error statuses are returned, not thrown.
+HttpResponse perform(const ref HttpRequest req)
+{
+    version (Windows)
+    {
+        import camunda.winhttp : winHttpPerform;
+        return winHttpPerform(req);
+    }
+    else
+        return curlPerform(req);
+}
+
+version (Windows) {} else
+{
 /// `@trusted`: std.net.curl is `@system` throughout. This only hands it values
 /// it reads or copies, and copies every buffer it hands back before keeping it.
 ///
@@ -59,7 +75,7 @@ struct HttpResponse
 /// (headers, custom verb, body pointer) on the way out, so nothing leaks into
 /// the next request on the same handle. A handle whose transfer failed is
 /// dropped and rebuilt on next use.
-HttpResponse perform(const ref HttpRequest req) @trusted
+private HttpResponse curlPerform(const ref HttpRequest req) @trusted
 {
     import etc.c.curl : CurlOption;
     const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase;
@@ -162,6 +178,7 @@ HttpResponse perform(const ref HttpRequest req) @trusted
 /// fixed per handle, so a request with a different CA or client certificate
 /// never inherits another's.
 private HTTP[string] tlsHandles;
+}
 
 string encodeQuery(string[string] query)
 {
@@ -199,34 +216,67 @@ unittest
 
 version (unittest)
 {
-    /// Send `req` at a listener that never answers, then read what curl wrote.
-    /// Single-threaded: the kernel completes the TCP handshake from the listen
-    /// backlog, curl writes the whole request and times out waiting for a
-    /// response, and only then is the queued connection accepted and drained.
-    private string captureRequest(HttpRequest req)
+    /// One-shot server for `captureRequest`: sends its port on `port`, reads
+    /// one whole request (head, then a Content-Length body), sends it on
+    /// `seen`, and answers `200 {}`.
+    private void captureServer(Chan!int port, Chan!string seen)
     {
-        import std.socket : TcpSocket, InternetAddress, SocketShutdown;
+        import std.socket : TcpSocket, InternetAddress;
         import std.conv : to;
+        import std.string : indexOf, strip, toLower;
         auto listener = new TcpSocket();
         scope (exit) listener.close();
         listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
         listener.listen(4);
-        const port = (cast(InternetAddress) listener.localAddress).port;
-        req.url = "http://127.0.0.1:" ~ port.to!string ~ "/v2/things";
-        req.timeoutMs = 400;
-        try { perform(req); assert(false, "expected a timeout"); }
-        catch (NetworkException) {}
+        port.put((cast(InternetAddress) listener.localAddress).port);
         auto conn = listener.accept();
         scope (exit) conn.close();
-        conn.blocking = false;
         string got;
         ubyte[4096] chunk;
         for (;;)
         {
+            const end = got.indexOf("\r\n\r\n");
+            if (end >= 0)
+            {
+                size_t bodyLen;
+                const head = got[0 .. end + 4];
+                const cl = head.toLower.indexOf("\r\ncontent-length:");
+                if (cl >= 0)
+                {
+                    auto rest = head[cl + 17 .. $];
+                    bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                }
+                // `Expect: 100-continue`: say continue, or the body waits.
+                if (got.length == head.length && bodyLen && head.toLower.indexOf("\r\nexpect: 100-continue") >= 0)
+                    conn.send("HTTP/1.1 100 Continue\r\n\r\n");
+                if (got.length >= head.length + bodyLen) break;
+            }
             const n = conn.receive(chunk[]);
             if (n <= 0) break;
             got ~= cast(const(char)[]) chunk[0 .. n];
         }
+        seen.put(got);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+    }
+
+    /// Send `req` to a one-shot local server and return the raw request it
+    /// received. Works the same for every backend (curl, WinHTTP), because
+    /// the server reads on its own thread while the client sends.
+    private string captureRequest(HttpRequest req)
+    {
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto seen = Chan!string.make;
+        auto server = spawn(&captureServer, port, seen);
+        int p;
+        port.take(p);
+        req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/things";
+        req.timeoutMs = 10_000;
+        auto res = perform(req);
+        assert(res.status == 200, "capture server answered " ~ res.status.to!string);
+        string got;
+        seen.take(got);
+        server.join();
         return got;
     }
 
@@ -514,4 +564,50 @@ unittest
     }
     assert(raw[4].startsWith("PUT /v2/things ") && hasHeader(raw[4], "content-length: 0"), raw[4]);
     assert(raw[5].startsWith("GET /v2/things ") && bodyOf(raw[5]) == "", raw[5]);
+}
+
+version (unittest)
+{
+    /// Answers its first request slowly: the head after `delayMs`, then the
+    /// body after another `delayMs`.
+    private void slowServer(Chan!int port, int delayMs)
+    {
+        import core.thread : Thread;
+        import core.time : msecs;
+        import std.socket : TcpSocket, InternetAddress;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(4);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        auto conn = listener.accept();
+        scope (exit) conn.close();
+        ubyte[4096] chunk;
+        conn.receive(chunk[]);
+        Thread.sleep(delayMs.msecs);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+        Thread.sleep(delayMs.msecs);
+        conn.send("{}");
+    }
+}
+
+// The request timeout bounds the whole exchange, not each step: a head that
+// arrives just in time followed by a slow body still times out.
+unittest
+{
+    import std.conv : to;
+    import std.exception : collectException;
+    import camunda.errors : NetworkException;
+
+    auto port = Chan!int.make;
+    auto server = spawn(&slowServer, port, 700);
+    int p;
+    port.take(p);
+    HttpRequest req;
+    req.method = "GET";
+    req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/slow";
+    req.timeoutMs = 1_000;
+    auto e = collectException!NetworkException(perform(req));
+    server.join();
+    assert(e !is null, "a 1400 ms exchange finished inside a 1000 ms timeout");
 }
