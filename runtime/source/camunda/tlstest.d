@@ -1,7 +1,8 @@
-/// End-to-end TLS tests: custom CA, inline PEM and mTLS against a real TLS
-/// server (`openssl s_server`), with throwaway certificates made by the
-/// `openssl` CLI. Test-only; needs `openssl` on PATH (CI runners and Git for
-/// Windows have it).
+/// End-to-end TLS tests: custom CA, inline PEM, mTLS and revocation against
+/// a real TLS server (`openssl s_server`), with throwaway certificates made
+/// by the `openssl` CLI. Test-only; needs `openssl` on PATH (CI runners and
+/// Git for Windows have it). The same tests run against curl (POSIX) and
+/// WinHTTP (Windows).
 module camunda.tlstest;
 
 version (unittest):
@@ -10,9 +11,11 @@ version (unittest):
 
 import camunda.errors;
 import camunda.http;
+import camunda.safeio : Chan, spawn;
 
-/// Throwaway PKI in a temp dir: a CA, a server cert for 127.0.0.1 signed by
-/// it, a client cert signed by it, and an unrelated CA.
+/// Throwaway PKI in a temp dir: a CA; leaves signed by it (`server` for
+/// 127.0.0.1, `client`, and `offline`, a server cert whose CRL URL nothing
+/// answers); and an unrelated CA.
 struct Pki
 {
     string dir;
@@ -31,20 +34,48 @@ struct Pki
         Pki p;
         p.dir = buildPath(tempDir, "camunda-tlstest-" ~ thisProcessID.to!string ~ "-" ~ randomUUID.toString[0 .. 8]);
         mkdirRecurse(p.dir);
-        write(p.path("server.ext"), "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n");
-        write(p.path("client.ext"), "extendedKeyUsage=clientAuth\n");
         foreach (ca; ["ca", "other-ca"])
             p.openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", p.path(ca ~ ".key"),
                 "-out", p.path(ca ~ ".pem"), "-days", "2", "-subj", "/CN=camunda test " ~ ca]);
-        foreach (leaf; ["server", "client"])
-        {
-            p.openssl(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", p.path(leaf ~ ".key"),
-                "-out", p.path(leaf ~ ".csr"), "-subj", "/CN=" ~ (leaf == "server" ? "127.0.0.1" : "camunda test client")]);
-            p.openssl(["x509", "-req", "-in", p.path(leaf ~ ".csr"), "-CA", p.path("ca.pem"),
-                "-CAkey", p.path("ca.key"), "-CAcreateserial", "-out", p.path(leaf ~ ".pem"), "-days", "2",
-                "-extfile", p.path(leaf ~ ".ext")]);
-        }
+        p.leaf("server", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n");
+        p.leaf("client", "extendedKeyUsage=clientAuth\n");
+        p.serverWithCrl("offline", "http://127.0.0.1:9/offline.crl");
         return p;
+    }
+
+    /// A server cert for 127.0.0.1 whose CRL distribution point is `crlUrl`.
+    void serverWithCrl(string name, string crlUrl) const
+    {
+        leaf(name, "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\ncrlDistributionPoints=URI:" ~ crlUrl ~ "\n");
+    }
+
+    /// Revoke leaf `name` and write the CA's CRL (DER) to `ca.crl`.
+    void revoke(string name) const
+    {
+        import std.file : write;
+        import std.array : replace;
+
+        // openssl config values treat `\` as an escape: use `/`.
+        const d = dir.replace("\\", "/");
+        write(path("index.txt"), "");
+        write(path("crlnumber"), "01\n");
+        write(path("ca.cnf"), "[ca]\ndefault_ca = test_ca\n[test_ca]\ndatabase = " ~ d ~ "/index.txt\n"
+            ~ "crlnumber = " ~ d ~ "/crlnumber\ndefault_md = sha256\ndefault_crl_days = 2\n");
+        const ca = ["-config", path("ca.cnf"), "-keyfile", path("ca.key"), "-cert", path("ca.pem")];
+        openssl(["ca"] ~ ca ~ ["-revoke", path(name ~ ".pem")]);
+        openssl(["ca"] ~ ca ~ ["-gencrl", "-out", path("ca.crl.pem")]);
+        openssl(["crl", "-in", path("ca.crl.pem"), "-outform", "DER", "-out", path("ca.crl")]);
+    }
+
+    private void leaf(string name, string ext) const
+    {
+        import std.file : write;
+        write(path(name ~ ".ext"), ext);
+        openssl(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", path(name ~ ".key"),
+            "-out", path(name ~ ".csr"), "-subj", "/CN=camunda test " ~ name]);
+        openssl(["x509", "-req", "-in", path(name ~ ".csr"), "-CA", path("ca.pem"),
+            "-CAkey", path("ca.key"), "-CAcreateserial", "-out", path(name ~ ".pem"), "-days", "2",
+            "-extfile", path(name ~ ".ext")]);
     }
 
     void openssl(string[] args) const
@@ -61,17 +92,25 @@ struct Pki
     }
 }
 
-/// `openssl s_server -www` on a free local port; `mtls` requires a client
-/// certificate signed by the test CA.
+/// How the test server behaves.
+enum Mode
+{
+    www,  /// answers every request with 200 (`-www`)
+    mtls, /// ditto, and requires a client cert signed by the test CA
+    echo, /// writes whatever request bytes arrive to `echo.log`; never answers
+}
+
+/// `openssl s_server` on a free local port, presenting leaf `cert`.
 struct TlsServer
 {
-    import std.process : Pid;
+    import std.process : Pid, Pipe;
     Pid pid;
     ushort port;
+    Pipe stdin; // POSIX echo mode: held open so s_server keeps echoing
 
-    static TlsServer start(const ref Pki pki, bool mtls)
+    static TlsServer start(const ref Pki pki, Mode mode, string cert = "server")
     {
-        import std.process : spawnProcess, Config;
+        import std.process : spawnProcess;
         import std.socket : TcpSocket, InternetAddress;
         import std.stdio : File;
         import std.conv : to;
@@ -79,22 +118,35 @@ struct TlsServer
         import core.time : msecs;
 
         TlsServer s;
+        s.port = freePort();
+        auto args = ["openssl", "s_server", "-accept", s.port.to!string,
+            "-cert", pki.path(cert ~ ".pem"), "-key", pki.path(cert ~ ".key")];
+        final switch (mode)
         {
-            auto probe = new TcpSocket();
-            scope (exit) probe.close();
-            probe.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
-            s.port = (cast(InternetAddress) probe.localAddress).port;
+        case Mode.www: args ~= "-www"; break;
+        case Mode.mtls: args ~= ["-www", "-Verify", "1", "-CAfile", pki.path("ca.pem")]; break;
+        // -quiet: only the peer's bytes on stdout, and keep serving
+        // although stdin is empty (OpenSSL's -ign_eof, implied; LibreSSL
+        // has no flag for it).
+        case Mode.echo: args ~= "-quiet"; break;
         }
-        auto args = ["openssl", "s_server", "-accept", s.port.to!string, "-www",
-            "-cert", pki.path("server.pem"), "-key", pki.path("server.key")];
-        if (mtls) args ~= ["-Verify", "1", "-CAfile", pki.path("ca.pem")];
         // macOS system libcurl uses LibreSSL 3.3.6, which fails to decode a
         // TLS 1.3 CertificateRequest from current OpenSSL (`tlsv1 alert
         // decode error`). Test-server interop quirk only: pin TLS 1.2 there.
-        version (OSX) if (mtls) args ~= "-no_tls1_3";
+        version (OSX) if (mode == Mode.mtls) args ~= "-no_tls1_3";
         version (Windows) enum devnull = "NUL"; else enum devnull = "/dev/null";
         auto nul = File(devnull, "w");
-        s.pid = spawnProcess(args, File(devnull, "r"), nul, nul);
+        auto stdout = mode == Mode.echo ? File(pki.path("echo.log"), "w") : nul;
+        auto input = File(devnull, "r");
+        // LibreSSL's s_server stops echoing at stdin EOF; Windows OpenSSL
+        // only reads stdin on console key presses, so NUL is fine there.
+        version (Posix) if (mode == Mode.echo)
+        {
+            import std.process : pipe;
+            s.stdin = pipe();
+            input = s.stdin.readEnd;
+        }
+        s.pid = spawnProcess(args, input, stdout, nul);
         foreach (_; 0 .. 100) // up to 10 s for the server to listen
         {
             auto c = new TcpSocket();
@@ -106,7 +158,11 @@ struct TlsServer
         assert(false, "openssl s_server did not start");
     }
 
-    string url() const { import std.conv : to; return "https://127.0.0.1:" ~ port.to!string ~ "/"; }
+    string url(string host = "127.0.0.1", string path = "/") const
+    {
+        import std.conv : to;
+        return "https://" ~ host ~ ":" ~ port.to!string ~ path;
+    }
 
     void stop()
     {
@@ -116,99 +172,213 @@ struct TlsServer
         // wait on ours below, so it cannot have been reaped and reused yet).
         () @trusted { kill(pid); }();
         wait(pid);
+        if (stdin.writeEnd.isOpen) stdin.writeEnd.close();
     }
 }
 
-private HttpRequest get(const ref TlsServer s)
+private ushort freePort()
+{
+    import std.socket : TcpSocket, InternetAddress;
+    auto probe = new TcpSocket();
+    scope (exit) probe.close();
+    probe.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+    return (cast(InternetAddress) probe.localAddress).port;
+}
+
+private HttpRequest get(const ref TlsServer s, string path = "/")
 {
     HttpRequest r;
-    r.url = s.url;
+    r.url = s.url("127.0.0.1", path);
     r.timeoutMs = 10_000;
     return r;
 }
 
-// Windows: these run against WinHTTP in phase 3 of #28; until then the
-// backend refuses custom CAs and client certs (see camunda.winhttp).
-version (Windows) {} else
+/// The message of the NetworkException `r` fails with, or null if it succeeds.
+private string failure(HttpRequest r)
 {
-    // camunda/orchestration-cluster-api-dlang#30: the CA, as a file or inline,
-    // decides trust; an unrelated CA and the system store both fail.
-    unittest
+    try { perform(r); return null; }
+    catch (NetworkException e) return e.msg.length ? e.msg : "(no message)";
+}
+
+/// Plain-HTTP CRL server for the revocation test: sends its port on `port`,
+/// takes the CRL file path from `crlFile`, then answers every request with
+/// that file until one asks for `/stop`.
+private void crlServer(Chan!int port, Chan!string crlFile)
+{
+    import std.socket : TcpSocket, InternetAddress;
+    import std.file : read;
+    import std.conv : to;
+    import std.algorithm.searching : canFind;
+
+    auto listener = new TcpSocket();
+    scope (exit) listener.close();
+    listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+    listener.listen(8);
+    port.put((cast(InternetAddress) listener.localAddress).port);
+    string file;
+    crlFile.take(file);
+    for (;;)
     {
-        auto pki = Pki.make();
-        scope (exit) pki.remove();
-        auto srv = TlsServer.start(pki, false);
-        scope (exit) srv.stop();
+        auto conn = listener.accept();
+        scope (exit) conn.close();
+        char[4096] buf;
+        string head;
+        while (!head.canFind("\r\n\r\n"))
+        {
+            const n = conn.receive(buf[]);
+            if (n <= 0) break;
+            head ~= buf[0 .. n].idup;
+        }
+        if (head.canFind("GET /stop ")) return;
+        const crl = cast(const(ubyte)[]) read(file);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/pkix-crl\r\nContent-Length: "
+            ~ crl.length.to!string ~ "\r\nConnection: close\r\n\r\n");
+        conn.send(crl);
+    }
+}
 
-        auto byPath = get(srv);
-        byPath.caPath = pki.path("ca.pem");
-        assert(perform(byPath).status == 200);
+// camunda/orchestration-cluster-api-dlang#30 and #28: the CA, as a file or
+// inline, decides trust (it replaces the system store); an unrelated CA, the
+// system store and a certificate for another host all fail.
+unittest
+{
+    import std.algorithm.searching : canFind;
 
-        auto inline = get(srv);
-        inline.caPem = pki.read("ca.pem");
-        assert(perform(inline).status == 200);
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.www);
+    scope (exit) srv.stop();
 
-        auto wrong = get(srv);
-        wrong.caPem = pki.read("other-ca.pem");
-        assert(collectNetwork(wrong), "an unrelated inline CA must not be trusted");
+    auto byPath = get(srv);
+    byPath.caPath = pki.path("ca.pem");
+    assert(perform(byPath).status == 200);
 
-        auto system = get(srv);
-        assert(collectNetwork(system), "the system store must not trust the test CA");
+    auto inline = get(srv);
+    inline.caPem = pki.read("ca.pem");
+    assert(perform(inline).status == 200);
+
+    auto wrong = get(srv);
+    wrong.caPem = pki.read("other-ca.pem");
+    const w = failure(wrong);
+    assert(w !is null, "an unrelated inline CA must not be trusted");
+    version (Windows) assert(w.canFind("not signed by the CA in CAMUNDA_MTLS_CA"), w);
+
+    auto system = get(srv);
+    assert(failure(system) !is null, "the system store must not trust the test CA");
+
+    // The certificate is for 127.0.0.1 only.
+    auto otherHost = get(srv);
+    otherHost.url = srv.url("localhost");
+    otherHost.caPath = pki.path("ca.pem");
+    const h = failure(otherHost);
+    assert(h !is null, "a certificate for another host must be refused");
+    version (Windows) assert(h.canFind("not issued for localhost"), h);
+}
+
+// #28 security: a server the client does not trust receives no request
+// bytes (WinHTTP checks in the send callback, before writing; curl checks in
+// the handshake). The echo server logs what arrives; a trusted control
+// request proves the log works.
+unittest
+{
+    import std.algorithm.searching : canFind;
+    import core.thread : Thread;
+    import core.time : msecs;
+
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.echo);
+    scope (exit) srv.stop();
+
+    auto untrusted = get(srv, "/must-not-arrive");
+    untrusted.caPem = pki.read("other-ca.pem");
+    untrusted.headers["Authorization"] = "Bearer must-not-leak";
+    assert(failure(untrusted) !is null);
+
+    // The echo server never answers, so this one times out after sending.
+    auto control = get(srv, "/control-arrives");
+    control.caPem = pki.read("ca.pem");
+    control.timeoutMs = 3_000;
+    failure(control);
+
+    Thread.sleep(300.msecs);
+    const log = pki.read("echo.log");
+    assert(log.canFind("GET /control-arrives "), "the echo server logged nothing; log: " ~ log);
+    assert(!log.canFind("must-not"), "an untrusted server received request bytes: " ~ log);
+}
+
+// #28 revocation soft-fail: a CRL that cannot be fetched does not fail the
+// request (curl does not check CRLs at all; WinHTTP checks and tolerates
+// "offline").
+unittest
+{
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.www, "offline");
+    scope (exit) srv.stop();
+
+    auto r = get(srv);
+    r.caPath = pki.path("ca.pem");
+    assert(perform(r).status == 200);
+}
+
+// #28 revocation on Windows: a server certificate on its CA's CRL is
+// refused. (curl does not fetch CRLs, so this is WinHTTP only.)
+version (Windows) unittest
+{
+    import std.algorithm.searching : canFind;
+    import std.conv : to;
+    import std.socket : TcpSocket, InternetAddress;
+
+    auto port = Chan!int.make;
+    auto crlFile = Chan!string.make;
+    auto crl = spawn(&crlServer, port, crlFile);
+    int p;
+    port.take(p);
+    scope (exit)
+    {
+        auto c = new TcpSocket(new InternetAddress("127.0.0.1", cast(ushort) p));
+        c.send("GET /stop HTTP/1.1\r\n\r\n");
+        c.close();
+        crl.join();
     }
 
-    // #30: client certificates, as files or inline.
-    unittest
-    {
-        auto pki = Pki.make();
-        scope (exit) pki.remove();
-        auto srv = TlsServer.start(pki, true);
-        scope (exit) srv.stop();
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    pki.serverWithCrl("revoked", "http://127.0.0.1:" ~ p.to!string ~ "/ca.crl");
+    pki.revoke("revoked");
+    crlFile.put(pki.path("ca.crl"));
 
-        auto byPath = get(srv);
-        byPath.caPath = pki.path("ca.pem");
-        byPath.certPath = pki.path("client.pem");
-        byPath.keyPath = pki.path("client.key");
-        assert(perform(byPath).status == 200);
+    auto srv = TlsServer.start(pki, Mode.www, "revoked");
+    scope (exit) srv.stop();
+    auto r = get(srv);
+    r.caPath = pki.path("ca.pem");
+    const msg = failure(r);
+    assert(msg !is null && msg.canFind("revoked"), msg is null ? "a revoked certificate was accepted" : msg);
+}
 
-        auto inline = get(srv);
-        inline.caPem = pki.read("ca.pem");
-        inline.certPem = pki.read("client.pem");
-        inline.keyPem = pki.read("client.key");
-        assert(perform(inline).status == 200);
+// #30: client certificates, as files or inline.
+// Windows: WinHTTP client certificates are #28 phase 3b.
+version (Windows) {} else unittest
+{
+    auto pki = Pki.make();
+    scope (exit) pki.remove();
+    auto srv = TlsServer.start(pki, Mode.mtls);
+    scope (exit) srv.stop();
 
-        auto none = get(srv);
-        none.caPem = pki.read("ca.pem");
-        assert(collectNetwork(none), "the server requires a client certificate");
-    }
+    auto byPath = get(srv);
+    byPath.caPath = pki.path("ca.pem");
+    byPath.certPath = pki.path("client.pem");
+    byPath.keyPath = pki.path("client.key");
+    assert(perform(byPath).status == 200);
 
-    private bool collectNetwork(ref HttpRequest r)
-    {
-        try { perform(r); return false; }
-        catch (NetworkException) return true;
-    }
+    auto inline = get(srv);
+    inline.caPem = pki.read("ca.pem");
+    inline.certPem = pki.read("client.pem");
+    inline.keyPem = pki.read("client.key");
+    assert(perform(inline).status == 200);
 
-    // #31: a `Transport` built from CAMUNDA_MTLS_CA/CERT/KEY forwards the
-    // inline PEMs to the HTTP layer — the direct `HttpRequest` tests above
-    // cannot see a break in that wiring. The server requires a client
-    // certificate signed by the test CA, so it answers 200 only when the
-    // inline CA and the inline client credentials all reached the TLS
-    // handshake.
-    unittest
-    {
-        import camunda.transport : CamundaOptions, Transport;
-        import std.json : JSONValue;
-
-        auto pki = Pki.make();
-        scope (exit) pki.remove();
-        auto srv = TlsServer.start(pki, true);
-        scope (exit) srv.stop();
-
-        auto t = new Transport(CamundaOptions.create
-            .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
-            .withKey("CAMUNDA_REST_ADDRESS", srv.url)
-            .withKey("CAMUNDA_MTLS_CA", pki.read("ca.pem"))
-            .withKey("CAMUNDA_MTLS_CERT", pki.read("client.pem"))
-            .withKey("CAMUNDA_MTLS_KEY", pki.read("client.key")));
-        t.requestVoid("GET", "/topology", JSONValue.init, null);
-    }
+    auto none = get(srv);
+    none.caPem = pki.read("ca.pem");
+    assert(failure(none) !is null, "the server requires a client certificate");
 }

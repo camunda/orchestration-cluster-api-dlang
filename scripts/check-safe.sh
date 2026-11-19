@@ -17,10 +17,11 @@ if grep -rnE '^[[:space:]]*@(system|trusted)[[:space:]]*:' $SRC --include='*.d' 
     echo "Error: \`@system:\`/\`@trusted:\` turn off @safe for the rest of a scope; mark the smallest function or lambda instead" >&2
     status=1
 fi
-# `@system` code is only allowed at the C boundary (`extern (C)` prototypes);
+# `@system` code is only allowed at the C boundary (`extern (C)` and
+# `extern (Windows)` prototypes);
 # everything else is @safe or a small @trusted.
-if grep -rnE '(^|[^/`[:alnum:]])@system\b' $SRC --include='*.d' | grep -vE ':[[:space:]]*(///|//)' | grep -v 'extern (C)' >&2; then
-    echo "Error: \`@system\` is only allowed on \`extern (C)\` declarations; use @safe, or @trusted on the smallest function or lambda" >&2
+if grep -rnE '(^|[^/`[:alnum:]])@system\b' $SRC --include='*.d' | grep -vE ':[[:space:]]*(///|//)' | grep -vE 'extern \((C|Windows)\)' >&2; then
+    echo "Error: \`@system\` is only allowed on \`extern (C)\` / \`extern (Windows)\` declarations; use @safe, or @trusted on the smallest function or lambda" >&2
     status=1
 fi
 trusted() { grep -nE '(^|[^/`[:alnum:]])@trusted\b' "$@" | grep -vE ':[[:space:]]*(///|//)'; }

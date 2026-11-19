@@ -369,7 +369,7 @@ string winHttpErrorName(uint code) pure nothrow
     case 12_029: return "could not connect";
     case 12_030: return "connection aborted";
     case 12_152: return "invalid server response";
-    case 12_175: return "TLS failure (is the server certificate trusted in the Windows certificate store?)";
+    case 12_175: return "TLS failure (is the server certificate trusted in the Windows certificate store, or by CAMUNDA_MTLS_CA_PATH?)";
     default: return "error";
     }
 }
@@ -385,12 +385,46 @@ package uint bodyLengthDword(ulong n, string url)
     return cast(uint) n;
 }
 
+/// Why a server certificate was rejected, from the CertVerifyCertificateChainPolicy
+/// error and the chain's TrustStatus.dwErrorStatus. `trust` names what the
+/// chain was checked against ("the CA in CAMUNDA_MTLS_CA_PATH", ...).
+string trustFailure(uint policyError, uint chainStatus, string host, string trust) pure
+{
+    // Chain status bits first: they are the most specific.
+    if (chainStatus & 0x4) return "the server certificate has been revoked";
+    if (chainStatus & 0x1) return "the server certificate has expired or is not yet valid";
+    if (chainStatus & 0x8) return "the server certificate signature is invalid";
+    if (chainStatus & 0x10) return "the server certificate is not valid for TLS server authentication";
+    switch (policyError)
+    {
+    case 0x800B010F: return "the server certificate is not issued for " ~ host;
+    case 0x800B0101: return "the server certificate has expired or is not yet valid";
+    case 0x80092010: return "the server certificate has been revoked";
+    case 0x800B0110: return "the server certificate is not valid for TLS server authentication";
+    case 0x800B0109, 0x800B010A: return "the server certificate is not signed by " ~ trust;
+    default:
+        if (chainStatus & (0x20 | 0x10000)) return "the server certificate is not signed by " ~ trust;
+        import std.format : format;
+        return format("the server certificate is not trusted (policy 0x%08X, chain 0x%08X)", policyError, chainStatus);
+    }
+}
+
 unittest
 {
     import std.exception : assertThrown;
     assert(bodyLengthDword(0, "http://h") == 0);
     assert(bodyLengthDword(uint.max, "http://h") == uint.max);
     assertThrown(bodyLengthDword(cast(ulong) uint.max + 1, "http://h"));
+}
+
+unittest
+{
+    const ca = "the CA in CAMUNDA_MTLS_CA_PATH";
+    assert(trustFailure(0x800B0109, 0x10000, "h", ca) == "the server certificate is not signed by " ~ ca);
+    assert(trustFailure(0x800B010F, 0, "zeebe.local", ca) == "the server certificate is not issued for zeebe.local");
+    assert(trustFailure(0x80092010, 0x4, "h", ca) == "the server certificate has been revoked");
+    assert(trustFailure(0, 0x1, "h", ca) == "the server certificate has expired or is not yet valid");
+    assert(trustFailure(0x1234, 0x0, "h", ca) == "the server certificate is not trusted (policy 0x00001234, chain 0x00000000)");
 }
 
 version (Windows)
@@ -401,17 +435,110 @@ version (Windows)
     import camunda.transport : hasHeaderNamed;
     import core.sys.windows.winhttp;
     import core.sys.windows.windef : DWORD;
+    import core.sys.windows.wincrypt;
+    import camunda.wincrypt;
 
     /// This thread's WinHTTP session. WinHTTP pools connections per session,
     /// so sequential requests on one thread reuse one keep-alive connection.
     /// Module variables are thread-local in D, so no other thread sees it.
     private HINTERNET session;
 
-    // `@trusted`: closes the handle this thread opened (thread-local, so
-    // nothing else can be using it once the thread ends).
+    /// This thread's chain engines, by trust source: "" is the Windows
+    /// certificate store, "pem:<text>" / "path:<file>" a custom CA (which
+    /// replaces the store, as curl's CAINFO does). `caStores` keeps each
+    /// custom engine's exclusive-root store open for the engine's lifetime.
+    private HCERTCHAINENGINE[string] engines;
+    private HCERTSTORE[string] caStores;
+
+    // `@trusted`: frees the handles this thread created (thread-local, so
+    // nothing else can be using them once the thread ends).
     static ~this() @trusted
     {
         if (session !is null) WinHttpCloseHandle(session);
+        foreach (e; engines) CertFreeCertificateChainEngine(e);
+        foreach (st; caStores) CertCloseStore(st, 0);
+    }
+
+    /// What the send callback checks one HTTPS request against. Its address
+    /// is the request's WinHTTP context value; winHttpPerform keeps it alive.
+    private final class TlsCheck
+    {
+        HCERTCHAINENGINE engine;
+        const(wchar)* host; // NUL-terminated, for the SSL policy
+        string hostName;
+        string trust;       // what the chain must end in, for messages
+        string failure;     // set when the callback rejected the server
+        bool closed;        // the callback closed the request handle
+    }
+
+    // `@trusted`: WinHTTP calls this synchronously from inside
+    // WinHttpSendRequest on the sending thread, after the TLS handshake and
+    // before any request byte is written, with `context` set to the TlsCheck
+    // that winHttpPerform holds on its stack for the whole send. It frees the
+    // certificate and chain it is handed, and on a failed check closes the
+    // request handle (once; winHttpPerform then skips its own close).
+    private extern (Windows) int tlsCheckCallback(HINTERNET h, size_t context, DWORD status, void* info,
+        DWORD infoLength) nothrow @trusted
+    {
+        import core.sys.windows.wincrypt;
+        import camunda.wincrypt;
+
+        if (status != 0x10 /* WINHTTP_CALLBACK_STATUS_SENDING_REQUEST */ || context == 0) return 0;
+        auto check = cast(TlsCheck) cast(void*) context;
+        if (check.closed) return 0;
+
+        string verify()
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.format : format;
+
+            PCCERT_CONTEXT cert;
+            DWORD size = cert.sizeof;
+            if (!WinHttpQueryOption(h, 78 /* WINHTTP_OPTION_SERVER_CERT_CONTEXT */, &cert, &size) || cert is null)
+                return "WinHTTP did not provide the server certificate";
+            scope (exit) CertFreeCertificateContext(cert);
+
+            static immutable char[] serverAuth = "1.3.6.1.5.5.7.3.1\0";
+            char*[1] usage = [cast(char*) serverAuth.ptr];
+            CERT_CHAIN_PARA para;
+            para.cbSize = CERT_CHAIN_PARA.sizeof;
+            para.RequestedUsage.dwType = 0; // USAGE_MATCH_TYPE_AND
+            para.RequestedUsage.Usage.cUsageIdentifier = 1;
+            para.RequestedUsage.Usage.rgpszUsageIdentifier = usage.ptr;
+            PCCERT_CHAIN_CONTEXT chain;
+            if (!CertGetCertificateChain(check.engine, cert, null, cast(HCERTSTORE) cert.hCertStore, &para,
+                    CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT,
+                    null, &chain))
+                return format("cannot build the server certificate chain (Windows error %s)", GetLastError());
+            scope (exit) CertFreeCertificateChain(chain);
+
+            SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl;
+            ssl.cbStruct = SSL_EXTRA_CERT_CHAIN_POLICY_PARA.sizeof;
+            ssl.dwAuthType = 2; // AUTHTYPE_SERVER
+            ssl.pwszServerName = cast(wchar*) check.host;
+            CERT_CHAIN_POLICY_PARA policy;
+            policy.cbSize = CERT_CHAIN_POLICY_PARA.sizeof;
+            // Revocation soft-fail: "unknown" / "offline" pass, revoked fails.
+            policy.dwFlags = CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS;
+            policy.pvExtraPolicyPara = &ssl;
+            CERT_CHAIN_POLICY_STATUS result;
+            result.cbSize = CERT_CHAIN_POLICY_STATUS.sizeof;
+            if (!CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, chain, &policy, &result))
+                return format("cannot check the server certificate (Windows error %s)", GetLastError());
+            // Unknown and offline revocation status are tolerated.
+            const chainStatus = chain.TrustStatus.dwErrorStatus & ~(0x40u | 0x1000000u);
+            if (result.dwError == 0 && !(chainStatus & 0x4)) return null;
+            return trustFailure(result.dwError, chainStatus, check.hostName, check.trust);
+        }
+
+        try check.failure = verify();
+        catch (Exception e) check.failure = e.msg;
+        if (check.failure.length)
+        {
+            check.closed = true;
+            WinHttpCloseHandle(h);
+        }
+        return 0;
     }
 
     /// `@trusted`: WinHTTP is a C API. This hands it NUL-terminated UTF-16
@@ -460,11 +587,49 @@ version (Windows)
             return s;
         }
 
-        if (req.caPath.length || req.certPath.length || req.keyPath.length
-            || req.caPem.length || req.certPem.length || req.keyPem.length)
-            throw new CamundaException("a custom CA file and client certificates (mTLS) are not supported"
-                ~ " on Windows yet (camunda/orchestration-cluster-api-dlang#28); trust the CA through the"
-                ~ " Windows certificate store and unset the CA path");
+        if (req.certPath.length || req.keyPath.length || req.certPem.length || req.keyPem.length)
+            throw new CamundaException("client certificates (mTLS) are not supported on Windows yet"
+                ~ " (camunda/orchestration-cluster-api-dlang#28)");
+
+        // The chain engine for this request's trust source, made once per
+        // thread. A custom CA is an exclusive root: only it is trusted.
+        HCERTCHAINENGINE engineFor(string key, lazy string caText, string trust)
+        {
+            import core.sys.windows.winbase : GetLastError;
+            import std.format : format;
+            import camunda.pem : pemBlocks;
+
+            if (auto e = key in engines) return *e;
+            CertChainEngineConfig config;
+            config.cbSize = CertChainEngineConfig.sizeof;
+            config.dwUrlRetrievalTimeout = 5_000; // CRL/OCSP fetches, per chain
+            if (key.length)
+            {
+                immutable(ubyte)[][] ders;
+                try ders = pemBlocks(caText, "CERTIFICATE");
+                catch (Exception e) throw new CamundaException(trust ~ ": " ~ e.msg);
+                if (!ders.length) throw new CamundaException(trust ~ " contains no PEM certificate");
+                auto store = CertOpenStore(cast(const(char)*) 2 /* CERT_STORE_PROV_MEMORY */, 0, 0, 0, null);
+                if (store is null) throw new CamundaException(format("cannot create a certificate store (Windows error %s)", GetLastError()));
+                caStores[key] = store;
+                foreach (der; ders)
+                {
+                    auto ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, der.ptr, cast(DWORD) der.length);
+                    if (ctx is null) throw new CamundaException(format("%s: a certificate is not valid (Windows error %s)", trust, GetLastError()));
+                    CertAddCertificateContextToStore(store, ctx, CERT_STORE_ADD_REPLACE_EXISTING, null);
+                    CertFreeCertificateContext(ctx);
+                }
+                config.hExclusiveRoot = store;
+                // An intermediate CA in the file is a trust anchor too, as
+                // curl (OpenSSL's partial-chain mode) treats it.
+                config.dwExclusiveFlags = CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG;
+            }
+            HCERTCHAINENGINE engine;
+            if (!CertCreateCertificateChainEngine(&config, &engine))
+                throw new CamundaException(format("cannot create a certificate chain engine (Windows error %s)", GetLastError()));
+            engines[key] = engine;
+            return engine;
+        }
 
         UrlParts u;
         try u = splitUrl(req.url);
@@ -483,11 +648,62 @@ version (Windows)
         }
         // ESCAPE_DISABLE: send the target exactly as built (joinUrl already
         // percent-encodes), as curl does.
+        TlsCheck check;
         auto h = WinHttpOpenRequest(conn, req.method.toUTF16z, u.target.toUTF16z, null,
             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
             (u.secure ? WINHTTP_FLAG_SECURE : 0) | WINHTTP_FLAG_ESCAPE_DISABLE);
         if (h is null) throw lastError("cannot open a request to", req.url);
-        scope (exit) WinHttpCloseHandle(h);
+        scope (exit) if (check is null || !check.closed) WinHttpCloseHandle(h);
+
+        if (u.secure)
+        {
+            // Every HTTPS request is checked in the send callback, before any
+            // byte goes out: against the custom CA if one is set (WinHTTP's
+            // own unknown-CA check is then off), else against the Windows
+            // store, with revocation soft-fail either way (#28).
+            check = new TlsCheck;
+            check.host = u.host.toUTF16z;
+            check.hostName = u.host;
+            string key;
+            if (req.caPem.length)
+            {
+                key = "pem:" ~ req.caPem;
+                check.trust = "the CA in CAMUNDA_MTLS_CA";
+                check.engine = engineFor(key, req.caPem, check.trust);
+            }
+            else if (req.caPath.length)
+            {
+                import std.file : readText;
+                key = "path:" ~ req.caPath;
+                check.trust = "the CA in " ~ req.caPath;
+                string readCa()
+                {
+                    try return readText(req.caPath);
+                    catch (Exception e) throw new CamundaException("cannot read the CA file " ~ req.caPath ~ ": " ~ e.msg);
+                }
+                check.engine = engineFor(key, readCa(), check.trust);
+            }
+            else
+            {
+                check.trust = "a CA in the Windows certificate store";
+                check.engine = engineFor("", null, check.trust);
+            }
+            if (key.length)
+            {
+                DWORD flags;
+                DWORD flagsSize = flags.sizeof;
+                WinHttpQueryOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, &flagsSize);
+                flags |= SECURITY_FLAG_IGNORE_UNKNOWN_CA;
+                if (!WinHttpSetOption(h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, flags.sizeof))
+                    throw lastError("cannot set the TLS options for", req.url);
+            }
+            size_t contextValue = cast(size_t) cast(void*) check;
+            if (!WinHttpSetOption(h, WINHTTP_OPTION_CONTEXT_VALUE, &contextValue, contextValue.sizeof))
+                throw lastError("cannot set the TLS check for", req.url);
+            if (WinHttpSetStatusCallback(h, &tlsCheckCallback, 0x30 /* WINHTTP_CALLBACK_FLAG_SEND_REQUEST */, 0)
+                    == WINHTTP_INVALID_STATUS_CALLBACK)
+                throw lastError("cannot set the TLS check for", req.url);
+        }
 
         // The session is shared by every client on this thread: no cookie
         // jar (one client's cookies must not reach another), and no
@@ -547,7 +763,11 @@ version (Windows)
         const len = bodyLengthDword(payload.length, req.url);
         if (!WinHttpSendRequest(h, wideHeaders, headers.length ? cast(DWORD) -1 : 0,
                 cast(void*) payload.ptr, len, len, 0))
+        {
+            if (check !is null && check.failure.length)
+                throw new NetworkException("TLS: " ~ check.failure ~ " (" ~ redactUserinfo(req.url) ~ ")");
             throw lastError("cannot send to", req.url);
+        }
         armTimeouts("waiting for a response from");
         if (!WinHttpReceiveResponse(h, null))
             throw lastError("no response from", req.url);
@@ -589,10 +809,11 @@ version (Windows) unittest
     import std.algorithm.searching : canFind;
     import std.exception : collectException;
 
-    // A CA file or client certificate is refused, not silently ignored.
+    // Client certificates are refused (until #28 phase 3b), not ignored.
     HttpRequest tls;
     tls.url = "https://127.0.0.1:9/v2/topology";
-    tls.caPath = "ca.pem";
+    tls.certPath = "client.pem";
+    tls.keyPath = "client.key";
     auto e = collectException!CamundaException(winHttpPerform(tls));
     assert(e !is null && e.msg.canFind("not supported on Windows"), e is null ? "no exception" : e.msg);
 
