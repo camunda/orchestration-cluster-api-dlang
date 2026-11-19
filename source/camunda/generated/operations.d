@@ -1047,6 +1047,14 @@ mixin template GeneratedOperations()
         return MessagePublicationResult.fromJson(payload);
     }
 
+    /// Resume process definitions (`POST /process-definitions/resumption`).
+    ProcessDefinitionResumptionResult resumeProcessDefinitions(ProcessDefinitionResumptionInstruction body_ = ProcessDefinitionResumptionInstruction.init)
+    {
+        const path_ = "/process-definitions/resumption";
+        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        return ProcessDefinitionResumptionResult.fromJson(payload);
+    }
+
     /// Search process definitions (`POST /process-definitions/search`).
     ProcessDefinitionSearchQueryResult searchProcessDefinitions(ProcessDefinitionSearchQuery body_ = ProcessDefinitionSearchQuery.init)
     {
@@ -1069,6 +1077,14 @@ mixin template GeneratedOperations()
         const path_ = "/process-definitions/statistics/process-instances";
         auto payload = this.requestJson("POST", path_, body_.toJson(), null);
         return ProcessDefinitionInstanceStatisticsQueryResult.fromJson(payload);
+    }
+
+    /// Suspend process definitions (`POST /process-definitions/suspension`).
+    ProcessDefinitionSuspensionResult suspendProcessDefinitions(ProcessDefinitionSuspensionInstruction body_ = ProcessDefinitionSuspensionInstruction.init)
+    {
+        const path_ = "/process-definitions/suspension";
+        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        return ProcessDefinitionSuspensionResult.fromJson(payload);
     }
 
     /// Get process definition (`GET /process-definitions/{processDefinitionKey}`).

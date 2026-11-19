@@ -24132,6 +24132,205 @@ struct ProcessDefinitionResult
     }
 
 }
+/// Instruction to resume process definitions, selected either by key or by ID.
+struct ProcessDefinitionResumptionInstruction
+{
+    JSONValue raw;
+
+    static ProcessDefinitionResumptionInstruction fromJson(JSONValue value)
+    {
+        ProcessDefinitionResumptionInstruction m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionResumptionInstruction of(JSONValue value) { return fromJson(value); }
+    static ProcessDefinitionResumptionInstruction fromProcessDefinitionResumptionInstructionByKey(ProcessDefinitionResumptionInstructionByKey value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProcessDefinitionResumptionInstruction fromProcessDefinitionResumptionInstructionById(ProcessDefinitionResumptionInstructionById value)
+    {
+        return fromJson(value.toJson());
+    }
+}
+/// `ProcessDefinitionResumptionInstructionById`
+struct ProcessDefinitionResumptionInstructionById
+{
+    JSONValue raw;
+
+    static ProcessDefinitionResumptionInstructionById fromJson(JSONValue value)
+    {
+        ProcessDefinitionResumptionInstructionById m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionResumptionInstructionById initEmpty()
+    {
+        ProcessDefinitionResumptionInstructionById m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The BPMN process ID of the process definition.
+    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
+    ProcessDefinitionId processDefinitionId() const { return ProcessDefinitionId.fromJson(jsonGet(raw, "processDefinitionId")); }
+    ref ProcessDefinitionResumptionInstructionById processDefinitionId(ProcessDefinitionId value) return
+    {
+        jsonSet(raw, "processDefinitionId", value.toJson());
+        return this;
+    }
+
+    /// The version of the process definition. Must be 1 or greater; `-1` is not accepted. If omitted, all versions are affected.
+    bool has_processDefinitionVersion() const { return jsonHas(raw, "processDefinitionVersion"); }
+    int processDefinitionVersion() const { return cast(int) jsonGetLong(raw, "processDefinitionVersion"); }
+    ref ProcessDefinitionResumptionInstructionById processDefinitionVersion(int value) return
+    {
+        jsonSet(raw, "processDefinitionVersion", JSONValue(value));
+        return this;
+    }
+
+    /// The tenant of the process definition. Required when multi-tenancy is enabled; if multi-tenancy is disabled, it can be omitted and the default tenant is used.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref ProcessDefinitionResumptionInstructionById tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// Whether to also resume the process instances of the affected process definition versions. The instances are changed by a batch operation.
+    bool has_includeProcessInstances() const { return jsonHas(raw, "includeProcessInstances"); }
+    bool includeProcessInstances() const { return jsonGetBool(raw, "includeProcessInstances"); }
+    ref ProcessDefinitionResumptionInstructionById includeProcessInstances(bool value) return
+    {
+        jsonSet(raw, "includeProcessInstances", JSONValue(value));
+        return this;
+    }
+
+}
+/// `ProcessDefinitionResumptionInstructionByKey`
+struct ProcessDefinitionResumptionInstructionByKey
+{
+    JSONValue raw;
+
+    static ProcessDefinitionResumptionInstructionByKey fromJson(JSONValue value)
+    {
+        ProcessDefinitionResumptionInstructionByKey m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionResumptionInstructionByKey initEmpty()
+    {
+        ProcessDefinitionResumptionInstructionByKey m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key of the process definition version to resume.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref ProcessDefinitionResumptionInstructionByKey processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// Whether to also resume the process instances of the affected process definition versions. The instances are changed by a batch operation.
+    bool has_includeProcessInstances() const { return jsonHas(raw, "includeProcessInstances"); }
+    bool includeProcessInstances() const { return jsonGetBool(raw, "includeProcessInstances"); }
+    ref ProcessDefinitionResumptionInstructionByKey includeProcessInstances(bool value) return
+    {
+        jsonSet(raw, "includeProcessInstances", JSONValue(value));
+        return this;
+    }
+
+}
+/// `ProcessDefinitionResumptionResult`
+struct ProcessDefinitionResumptionResult
+{
+    JSONValue raw;
+
+    static ProcessDefinitionResumptionResult fromJson(JSONValue value)
+    {
+        ProcessDefinitionResumptionResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionResumptionResult initEmpty()
+    {
+        ProcessDefinitionResumptionResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The affected process definition versions.
+    bool has_processDefinitions() const { return jsonHas(raw, "processDefinitions"); }
+    ProcessDefinitionResumptionVersionResult[] processDefinitions() const { return jsonMapArray(raw, "processDefinitions", (JSONValue v) => ProcessDefinitionResumptionVersionResult.fromJson(v)); }
+    ref ProcessDefinitionResumptionResult processDefinitions(ProcessDefinitionResumptionVersionResult[] value) return
+    {
+        jsonSet(raw, "processDefinitions", jsonFromMapped(value, (ProcessDefinitionResumptionVersionResult x) => x.toJson()));
+        return this;
+    }
+
+    /// The key of the batch operation that resumes the suspended process instances. Null when `includeProcessInstances` is not set.
+    bool has_batchOperationKey() const { return jsonHas(raw, "batchOperationKey"); }
+    BatchOperationKey batchOperationKey() const { return BatchOperationKey.fromJson(jsonGet(raw, "batchOperationKey")); }
+    ref ProcessDefinitionResumptionResult batchOperationKey(BatchOperationKey value) return
+    {
+        jsonSet(raw, "batchOperationKey", value.toJson());
+        return this;
+    }
+
+}
+/// `ProcessDefinitionResumptionVersionResult`
+struct ProcessDefinitionResumptionVersionResult
+{
+    JSONValue raw;
+
+    static ProcessDefinitionResumptionVersionResult fromJson(JSONValue value)
+    {
+        ProcessDefinitionResumptionVersionResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionResumptionVersionResult initEmpty()
+    {
+        ProcessDefinitionResumptionVersionResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key of the process definition version.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref ProcessDefinitionResumptionVersionResult processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// The version of the process definition.
+    bool has_processDefinitionVersion() const { return jsonHas(raw, "processDefinitionVersion"); }
+    int processDefinitionVersion() const { return cast(int) jsonGetLong(raw, "processDefinitionVersion"); }
+    ref ProcessDefinitionResumptionVersionResult processDefinitionVersion(int value) return
+    {
+        jsonSet(raw, "processDefinitionVersion", JSONValue(value));
+        return this;
+    }
+
+    /// `RESUMED` if the version was suspended and is now active again. The resumption applies to all partitions shortly after the response. `ALREADY_RESUMED` if the version was already active, so its state is unchanged. With `includeProcessInstances`, its suspended process instances are still resumed by the batch operation. `DRAINING` if it is being deleted and is left unchanged. This only occurs when the request selects by ID without a version; selecting a single draining version is rejected with 409.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProcessDefinitionResumptionVersionResult outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+}
 /// `ProcessDefinitionSearchQuery`
 struct ProcessDefinitionSearchQuery
 {
@@ -24457,6 +24656,205 @@ struct ProcessDefinitionStatisticsFilter
     ref ProcessDefinitionStatisticsFilter or(BaseProcessInstanceFilterFields[] value) return
     {
         jsonSet(raw, "$or", jsonFromMapped(value, (BaseProcessInstanceFilterFields x) => x.toJson()));
+        return this;
+    }
+
+}
+/// Instruction to suspend process definitions, selected either by key or by ID.
+struct ProcessDefinitionSuspensionInstruction
+{
+    JSONValue raw;
+
+    static ProcessDefinitionSuspensionInstruction fromJson(JSONValue value)
+    {
+        ProcessDefinitionSuspensionInstruction m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionSuspensionInstruction of(JSONValue value) { return fromJson(value); }
+    static ProcessDefinitionSuspensionInstruction fromProcessDefinitionSuspensionInstructionByKey(ProcessDefinitionSuspensionInstructionByKey value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProcessDefinitionSuspensionInstruction fromProcessDefinitionSuspensionInstructionById(ProcessDefinitionSuspensionInstructionById value)
+    {
+        return fromJson(value.toJson());
+    }
+}
+/// `ProcessDefinitionSuspensionInstructionById`
+struct ProcessDefinitionSuspensionInstructionById
+{
+    JSONValue raw;
+
+    static ProcessDefinitionSuspensionInstructionById fromJson(JSONValue value)
+    {
+        ProcessDefinitionSuspensionInstructionById m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionSuspensionInstructionById initEmpty()
+    {
+        ProcessDefinitionSuspensionInstructionById m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The BPMN process ID of the process definition.
+    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
+    ProcessDefinitionId processDefinitionId() const { return ProcessDefinitionId.fromJson(jsonGet(raw, "processDefinitionId")); }
+    ref ProcessDefinitionSuspensionInstructionById processDefinitionId(ProcessDefinitionId value) return
+    {
+        jsonSet(raw, "processDefinitionId", value.toJson());
+        return this;
+    }
+
+    /// The version of the process definition. Must be 1 or greater; `-1` is not accepted. If omitted, all versions are affected.
+    bool has_processDefinitionVersion() const { return jsonHas(raw, "processDefinitionVersion"); }
+    int processDefinitionVersion() const { return cast(int) jsonGetLong(raw, "processDefinitionVersion"); }
+    ref ProcessDefinitionSuspensionInstructionById processDefinitionVersion(int value) return
+    {
+        jsonSet(raw, "processDefinitionVersion", JSONValue(value));
+        return this;
+    }
+
+    /// The tenant of the process definition. Required when multi-tenancy is enabled; if multi-tenancy is disabled, it can be omitted and the default tenant is used.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref ProcessDefinitionSuspensionInstructionById tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// Whether to also suspend the process instances of the affected process definition versions. The instances are changed by a batch operation.
+    bool has_includeProcessInstances() const { return jsonHas(raw, "includeProcessInstances"); }
+    bool includeProcessInstances() const { return jsonGetBool(raw, "includeProcessInstances"); }
+    ref ProcessDefinitionSuspensionInstructionById includeProcessInstances(bool value) return
+    {
+        jsonSet(raw, "includeProcessInstances", JSONValue(value));
+        return this;
+    }
+
+}
+/// `ProcessDefinitionSuspensionInstructionByKey`
+struct ProcessDefinitionSuspensionInstructionByKey
+{
+    JSONValue raw;
+
+    static ProcessDefinitionSuspensionInstructionByKey fromJson(JSONValue value)
+    {
+        ProcessDefinitionSuspensionInstructionByKey m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionSuspensionInstructionByKey initEmpty()
+    {
+        ProcessDefinitionSuspensionInstructionByKey m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key of the process definition version to suspend.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref ProcessDefinitionSuspensionInstructionByKey processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// Whether to also suspend the process instances of the affected process definition versions. The instances are changed by a batch operation.
+    bool has_includeProcessInstances() const { return jsonHas(raw, "includeProcessInstances"); }
+    bool includeProcessInstances() const { return jsonGetBool(raw, "includeProcessInstances"); }
+    ref ProcessDefinitionSuspensionInstructionByKey includeProcessInstances(bool value) return
+    {
+        jsonSet(raw, "includeProcessInstances", JSONValue(value));
+        return this;
+    }
+
+}
+/// `ProcessDefinitionSuspensionResult`
+struct ProcessDefinitionSuspensionResult
+{
+    JSONValue raw;
+
+    static ProcessDefinitionSuspensionResult fromJson(JSONValue value)
+    {
+        ProcessDefinitionSuspensionResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionSuspensionResult initEmpty()
+    {
+        ProcessDefinitionSuspensionResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The affected process definition versions.
+    bool has_processDefinitions() const { return jsonHas(raw, "processDefinitions"); }
+    ProcessDefinitionSuspensionVersionResult[] processDefinitions() const { return jsonMapArray(raw, "processDefinitions", (JSONValue v) => ProcessDefinitionSuspensionVersionResult.fromJson(v)); }
+    ref ProcessDefinitionSuspensionResult processDefinitions(ProcessDefinitionSuspensionVersionResult[] value) return
+    {
+        jsonSet(raw, "processDefinitions", jsonFromMapped(value, (ProcessDefinitionSuspensionVersionResult x) => x.toJson()));
+        return this;
+    }
+
+    /// The key of the batch operation that suspends the running process instances. Null when `includeProcessInstances` is not set.
+    bool has_batchOperationKey() const { return jsonHas(raw, "batchOperationKey"); }
+    BatchOperationKey batchOperationKey() const { return BatchOperationKey.fromJson(jsonGet(raw, "batchOperationKey")); }
+    ref ProcessDefinitionSuspensionResult batchOperationKey(BatchOperationKey value) return
+    {
+        jsonSet(raw, "batchOperationKey", value.toJson());
+        return this;
+    }
+
+}
+/// `ProcessDefinitionSuspensionVersionResult`
+struct ProcessDefinitionSuspensionVersionResult
+{
+    JSONValue raw;
+
+    static ProcessDefinitionSuspensionVersionResult fromJson(JSONValue value)
+    {
+        ProcessDefinitionSuspensionVersionResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProcessDefinitionSuspensionVersionResult initEmpty()
+    {
+        ProcessDefinitionSuspensionVersionResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key of the process definition version.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref ProcessDefinitionSuspensionVersionResult processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// The version of the process definition.
+    bool has_processDefinitionVersion() const { return jsonHas(raw, "processDefinitionVersion"); }
+    int processDefinitionVersion() const { return cast(int) jsonGetLong(raw, "processDefinitionVersion"); }
+    ref ProcessDefinitionSuspensionVersionResult processDefinitionVersion(int value) return
+    {
+        jsonSet(raw, "processDefinitionVersion", JSONValue(value));
+        return this;
+    }
+
+    /// `SUSPENDED` if the version was active and is now suspended. The suspension applies to all partitions shortly after the response. `ALREADY_SUSPENDED` if the version was already suspended, so its state is unchanged. With `includeProcessInstances`, its process instances are still suspended by the batch operation. `DRAINING` if it is being deleted and is left unchanged. This only occurs when the request selects by ID without a version; selecting a single draining version is rejected with 409.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProcessDefinitionSuspensionVersionResult outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
         return this;
     }
 

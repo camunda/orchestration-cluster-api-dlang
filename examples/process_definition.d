@@ -9,6 +9,15 @@ module example_process_definition;
 import camunda;
 import std.json;
 
+// region ResumeProcessDefinitions
+/// Resume process definitions (`POST /process-definitions/resumption`).
+void resume_process_definitions(CamundaClient client, ProcessDefinitionResumptionInstruction body_)
+{
+    auto result = client.resumeProcessDefinitions(body_);
+    cast(void) result;
+}
+// endregion ResumeProcessDefinitions
+
 // region SearchProcessDefinitions
 /// Search process definitions (`POST /process-definitions/search`).
 void search_process_definitions(CamundaClient client, ProcessDefinitionSearchQuery body_)
@@ -35,6 +44,15 @@ void get_process_definition_instance_statistics(CamundaClient client, ProcessDef
     cast(void) result;
 }
 // endregion GetProcessDefinitionInstanceStatistics
+
+// region SuspendProcessDefinitions
+/// Suspend process definitions (`POST /process-definitions/suspension`).
+void suspend_process_definitions(CamundaClient client, ProcessDefinitionSuspensionInstruction body_)
+{
+    auto result = client.suspendProcessDefinitions(body_);
+    cast(void) result;
+}
+// endregion SuspendProcessDefinitions
 
 // region GetProcessDefinition
 /// Get process definition (`GET /process-definitions/{processDefinitionKey}`).

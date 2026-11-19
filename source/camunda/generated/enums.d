@@ -1154,6 +1154,7 @@ enum PermissionTypeEnum : string
     READ_TASK_LISTENER = "READ_TASK_LISTENER",
     RESTORE = "RESTORE",
     REVEAL = "REVEAL",
+    SUSPEND_PROCESS_DEFINITION = "SUSPEND_PROCESS_DEFINITION",
     SUSPEND_PROCESS_INSTANCE = "SUSPEND_PROCESS_INSTANCE",
     UPDATE = "UPDATE",
     UPDATE_PROCESS_INSTANCE = "UPDATE_PROCESS_INSTANCE",
@@ -1208,6 +1209,7 @@ PermissionTypeEnum parsePermissionTypeEnum(string value)
     case "READ_TASK_LISTENER": return PermissionTypeEnum.READ_TASK_LISTENER;
     case "RESTORE": return PermissionTypeEnum.RESTORE;
     case "REVEAL": return PermissionTypeEnum.REVEAL;
+    case "SUSPEND_PROCESS_DEFINITION": return PermissionTypeEnum.SUSPEND_PROCESS_DEFINITION;
     case "SUSPEND_PROCESS_INSTANCE": return PermissionTypeEnum.SUSPEND_PROCESS_INSTANCE;
     case "UPDATE": return PermissionTypeEnum.UPDATE;
     case "UPDATE_PROCESS_INSTANCE": return PermissionTypeEnum.UPDATE_PROCESS_INSTANCE;
