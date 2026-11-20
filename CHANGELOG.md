@@ -1,3 +1,10 @@
+# [11.0.0-alpha.11](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.10...v11.0.0-alpha.11) (2026-11-20)
+
+
+### Bug Fixes
+
+* **gen:** regenerate artifacts ([1da6bb8](https://github.com/camunda/orchestration-cluster-api-dlang/commit/1da6bb82b0b03f21b08a67f67db6aec224b09f77))
+
 # [11.0.0-alpha.10](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.9...v11.0.0-alpha.10) (2026-11-19)
 
 
