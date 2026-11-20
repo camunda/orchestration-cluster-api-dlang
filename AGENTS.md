@@ -79,8 +79,25 @@ make sync-readme-check
 make config-reference-check
 make example-coverage
 make docs-md
+make typecheck-windows  # compile Windows-only code for Windows (seconds; part of make check)
+make check-windows      # dub test on a real Windows runner for the working tree (~1-2 min)
 make check       # full local CI gate
 ```
+
+### Windows code
+
+Code behind `version (Windows)` (`winhttp.d`, `wincrypt.d`, Windows
+branches elsewhere) is not compiled by a POSIX build, and its tests only run
+on Windows. Before you push a change that touches it:
+
+1. `make check` includes `make typecheck-windows`, which catches compile errors.
+2. Run `make check-windows`, which runs the tests on a real Windows runner (it
+   needs `gh` auth and push access). Push only when it passes. A green
+   POSIX run says nothing about this code.
+
+Where you can, put the logic in plain functions that build and test on every
+OS (key naming, cache keys, error mapping), and keep the Windows-only part to
+the API calls.
 
 All code is `@safe`. Every module starts with `@safe:`. Calls the compiler
 cannot check live in small `@trusted` functions (shared ones in `safeio.d`).
