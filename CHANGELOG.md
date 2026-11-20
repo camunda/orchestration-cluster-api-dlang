@@ -1,3 +1,10 @@
+# [11.0.0-alpha.12](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.11...v11.0.0-alpha.12) (2026-11-20)
+
+
+### Bug Fixes
+
+* **runtime:** keep PKCS[#12](https://github.com/camunda/orchestration-cluster-api-dlang/issues/12) keys in SDK-owned containers on Windows ([#35](https://github.com/camunda/orchestration-cluster-api-dlang/issues/35)) ([6b5544d](https://github.com/camunda/orchestration-cluster-api-dlang/commit/6b5544dce6de132ec9b1532dac0d632be7799eee)), closes [#32](https://github.com/camunda/orchestration-cluster-api-dlang/issues/32) [PKCS#8](https://github.com/PKCS/issues/8) [#34](https://github.com/camunda/orchestration-cluster-api-dlang/issues/34)
+
 # [11.0.0-alpha.11](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.10...v11.0.0-alpha.11) (2026-11-20)
 
 
