@@ -13797,6 +13797,15 @@ struct DeploymentConfigurationResponse
         return this;
     }
 
+    /// Whether wait-state tracking is enabled.
+    bool has_isWaitStatesEnabled() const { return jsonHas(raw, "isWaitStatesEnabled"); }
+    bool isWaitStatesEnabled() const { return jsonGetBool(raw, "isWaitStatesEnabled"); }
+    ref DeploymentConfigurationResponse isWaitStatesEnabled(bool value) return
+    {
+        jsonSet(raw, "isWaitStatesEnabled", JSONValue(value));
+        return this;
+    }
+
     /// The maximum HTTP request size in bytes.
     bool has_maxRequestSize() const { return jsonHas(raw, "maxRequestSize"); }
     long maxRequestSize() const { return jsonGetLong(raw, "maxRequestSize"); }
@@ -23409,7 +23418,7 @@ struct ProcessDefinitionFilter
         return this;
     }
 
-    /// Filter by the process definition's state. When not set, process definitions in any state are returned. Set to `ACTIVE` to exclude draining and deleted definitions (recommended for most use cases). Set to `DRAINING` to return only definitions that are being deleted but still have active process instances draining. Set to `DELETED` to return only definitions that have been deleted but are still retained in secondary storage.
+    /// Filter by the process definition's state. When not set, process definitions in any state are returned. Set to `ACTIVE` to exclude draining and deleted definitions (recommended for most use cases). Set to `SUSPENDED` to return only definitions that are suspended, so that no new process instances can be created from them. Set to `DRAINING` to return only definitions that are being deleted but still have active process instances draining. Set to `DELETED` to return only definitions that have been deleted but are still retained in secondary storage.
     bool has_state() const { return jsonHas(raw, "state"); }
     string state() const { return jsonGetString(raw, "state"); }
     ref ProcessDefinitionFilter state(string value) return
@@ -24122,7 +24131,7 @@ struct ProcessDefinitionResult
         return this;
     }
 
-    /// The state of this process definition. `DRAINING` indicates the definition is being deleted but still has active process instances draining before it is removed.
+    /// The state of this process definition. `DRAINING` indicates the definition is being deleted but still has active process instances draining before it is removed. `SUSPENDED` indicates no new process instances can be created from the definition.
     bool has_state() const { return jsonHas(raw, "state"); }
     string state() const { return jsonGetString(raw, "state"); }
     ref ProcessDefinitionResult state(string value) return
