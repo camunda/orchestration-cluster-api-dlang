@@ -50,7 +50,9 @@ helps close that gap.
   - client certificates take PKCS#8, PKCS#1 or SEC1 PEM keys, or a PKCS#12 keystore
     (`CAMUNDA_TLS_KEYSTORE_PATH`). Schannel needs a persisted key, so the key is
     imported into a CNG key named `camunda-sdk-<pid>-…` for the life of the
-    process. Two limitations to weigh (#28): the persisted copy is protected by
+    process. From a keystore, only the client certificate's key is persisted,
+    under that SDK name; container names stored in the PFX are ignored, so
+    they never collide with or touch your own keys. Two limitations to weigh (#28): the persisted copy is protected by
     the Windows user's login (DPAPI), not by the original PEM/PFX passphrase;
     and deletion at exit is best effort — a crash can leave the copy on disk
     (a later run with the same PID reclaims it).
