@@ -902,44 +902,6 @@ string opServerArg(Spec spec, J op)
     die(format("unsupported server path '%s' for %s (top-level '%s')", own, op.get("operationId").orS(""), top));
 }
 
-/// "opt" / "req" for a body schema with a tenantId property, else null.
-/// oneOf/anyOf is "opt" only when every variant has an optional tenantId.
-string tenantKind(Spec spec, J schema, int depth = 0)
-{
-    auto comps = spec.spec.get("components").get("schemas").or(J.obj());
-    while (schema !is null && schema.isObj && schema.has("$ref") && depth < 32)
-    {
-        const r = schema.get("$ref").text;
-        if (!r.startsWith(COMPONENT_PREFIX))
-            return null;
-        schema = comps.get(r.split("/")[$ - 1]).or(J.obj());
-        depth++;
-    }
-    if (schema is null || !schema.isObj)
-        return null;
-    auto variants = schema.get("oneOf").or(schema.get("anyOf"));
-    if (truthy(variants))
-        return variants.items.all!(v => tenantKind(spec, v, depth + 1) == "opt") ? "opt" : null;
-    bool hasProp, required;
-    bool[string] req;
-    foreach (r; itemsOf(schema.get("required")))
-        req[pyStr(r)] = true;
-    foreach (part; itemsOf(schema.get("allOf")))
-    {
-        while (part !is null && part.isObj && part.has("$ref"))
-            part = comps.get(part.get("$ref").text.split("/")[$ - 1]).or(J.obj());
-        if (part.get("properties").has("tenantId"))
-            hasProp = true;
-        foreach (r; itemsOf(part.get("required")))
-            req[pyStr(r)] = true;
-    }
-    if (schema.get("properties").has("tenantId"))
-        hasProp = true;
-    if (!hasProp)
-        return null;
-    return ("tenantId" in req) ? "req" : "opt";
-}
-
 /// Resolve component `$ref`s to the schema object (or null).
 J resolveSchema(Spec spec, J schema)
 {
@@ -955,10 +917,10 @@ J resolveSchema(Spec spec, J schema)
 }
 
 /// How the effective default tenant applies to an operation's JSON body
-/// (the Camunda Java client's rule, #14 / #36). Derived from the spec, never
-/// from a list of operation ids: a body schema -- or a union variant -- with
-/// an optional top-level `tenantId` gets the default tenant when the caller
-/// leaves it unset.
+/// (the Camunda Java client's rule, #14 / #36 / #40). Read from the bundler's
+/// `spec-metadata.json` (`optionalTenantIdInBodyVariants`), never from a list
+/// of operation ids: a body schema -- or a union variant -- with an optional
+/// top-level `tenantId` gets the default tenant when the caller leaves it unset.
 struct TenantInjection
 {
     bool inject;
@@ -970,26 +932,26 @@ struct TenantInjection
 
 TenantInjection defaultTenantInjection(Spec spec, J op)
 {
-    J item;
-    auto operation = specOperation(spec, op, item);
-    auto content = operation.get("requestBody").get("content").get("application/json");
-    if (!truthy(content))
+    bool[string] tenantVariants;
+    foreach (v; itemsOf(op.get("optionalTenantIdInBodyVariants")))
+        tenantVariants[pyStr(v)] = true;
+    if (!tenantVariants.length)
         return TenantInjection.init;
-    auto schema = resolveSchema(spec, content.get("schema").or(J.obj()));
-    if (schema is null)
-        return TenantInjection.init;
-    auto unionJ = schema.get("oneOf").or(schema.get("anyOf"));
-    if (!truthy(unionJ))
-        return TenantInjection(tenantKind(spec, schema) == "opt");
-    auto variants = unionJ.items;
-    if (variants.all!(v => tenantKind(spec, v) == "opt"))
+    string[] unionRefs;
+    foreach (r; itemsOf(op.get("requestBodyUnionRefs")))
+        unionRefs ~= pyStr(r);
+    if (!unionRefs.length || unionRefs.all!(r => (r in tenantVariants) !is null))
         return TenantInjection(true);
+    auto comps = spec.spec.get("components").get("schemas").or(J.obj());
     string[][] sels;
-    foreach (v; variants)
+    foreach (name; unionRefs)
     {
-        if (tenantKind(spec, v) != "opt")
+        if ((name in tenantVariants) is null)
             continue;
-        auto rv = resolveSchema(spec, v);
+        auto rv = comps.get(name);
+        if (rv is null || !rv.isObj)
+            die(format("%s: tenant-bearing body variant %s is not a component schema",
+                op.get("operationId").orS(""), name));
         string[] req;
         foreach (r; itemsOf(rv.get("required")))
             req ~= pyStr(r);
@@ -1002,6 +964,14 @@ TenantInjection defaultTenantInjection(Spec spec, J op)
         sels ~= req;
     }
     return TenantInjection(sels.length > 0, sels);
+}
+
+/// Whether the body has an optional `tenantIds` array that gets the default
+/// tenant list (activateJobs), from `optionalTenantIdsInBody`.
+bool injectsDefaultJobTenants(J op)
+{
+    auto v = op.get("optionalTenantIdsInBody");
+    return v !is null && v.kind == Kind.bool_ && v.boolean;
 }
 
 /// D expression applying the default tenant to `bodyE` for `op`, or `bodyE`.
@@ -1158,10 +1128,10 @@ string renderOperation(Spec spec, J op)
         queryE = "null";
 
     string bodyE = bodyArg !is null ? bodyArg : "JSONValue.init";
-    if (bodyArg !is null && op.get("operationId").orS("") != "activateJobs")
-        bodyE = tenantBodyExpr(spec, op, bodyE);
-    else if (bodyArg !is null && op.get("operationId").orS("") == "activateJobs")
+    if (bodyArg !is null && injectsDefaultJobTenants(op))
         bodyE = "this.withDefaultJobTenants(" ~ bodyE ~ ")";
+    else if (bodyArg !is null)
+        bodyE = tenantBodyExpr(spec, op, bodyE);
     const serverE = opServerArg(spec, op);
     const tail = dString(method) ~ ", path_, " ~ bodyE ~ ", " ~ queryE ~ serverE ~ ");";
 
@@ -1527,54 +1497,40 @@ void hook07Examples(Spec spec)
 
 unittest
 {
+    // #14/#40: injection follows the bundler metadata, not the operation id.
     import camunda.openapi.json : parseJson;
 
-    // A minimal spec: one component schema with an optional tenantId, one
-    // command and one search that both use it as their JSON body.
-    const doc = `{
-        "paths": {
-            "/process-instances": {"post": {"requestBody": {"content": {
-                "application/json": {"schema": {"$ref": "#/components/schemas/Cmd"}}}}}},
-            "/process-instances/search": {"post": {"requestBody": {"content": {
-                "application/json": {"schema": {"$ref": "#/components/schemas/Cmd"}}}}}}
-        },
-        "components": {"schemas": {"Cmd": {"type": "object",
-            "properties": {"tenantId": {"type": "string"}}}}}
-    }`;
-    auto spec = new Spec(parseJson(doc));
-    J cmdOp = J.obj();
-    cmdOp.set("operationId", J.str("createProcessInstance"));
-    cmdOp.set("path", J.str("/process-instances"));
-    cmdOp.set("method", J.str("post"));
-    J searchOp = J.obj();
-    searchOp.set("operationId", J.str("searchProcessInstances"));
-    searchOp.set("path", J.str("/process-instances/search"));
-    searchOp.set("method", J.str("post"));
-
-    // #14/#36: injection follows the body shape, not the operation id.
-    assert(defaultTenantInjection(spec, cmdOp).inject);
-    assert(defaultTenantInjection(spec, searchOp).inject);
+    auto spec = new Spec(parseJson(`{"paths": {}, "components": {"schemas": {}}}`));
+    auto cmdOp = parseJson(`{"operationId": "createThing",
+        "optionalTenantIdInBodyVariants": ["Cmd"], "requestBodyUnionRefs": []}`);
+    auto searchOp = parseJson(`{"operationId": "searchThings",
+        "optionalTenantIdInBodyVariants": [], "requestBodyUnionRefs": []}`);
+    auto jobsOp = parseJson(`{"operationId": "activateThings",
+        "optionalTenantIdInBodyVariants": [], "optionalTenantIdsInBody": true}`);
+    assert(defaultTenantInjection(spec, cmdOp) == TenantInjection(true));
+    assert(tenantBodyExpr(spec, cmdOp, "b") == "this.withDefaultTenant(b)");
+    assert(!defaultTenantInjection(spec, searchOp).inject);
+    assert(tenantBodyExpr(spec, searchOp, "b") == "b");
+    assert(injectsDefaultJobTenants(jobsOp));
+    assert(!injectsDefaultJobTenants(cmdOp));
+    // A union whose every variant is tenant-bearing injects unconditionally.
+    auto allOp = parseJson(`{"operationId": "evalThing",
+        "optionalTenantIdInBodyVariants": ["A", "B"], "requestBodyUnionRefs": ["A", "B"]}`);
+    assert(defaultTenantInjection(spec, allOp) == TenantInjection(true));
 }
 
 unittest
 {
-    // #36: a union body injects only into the variant with an optional tenantId.
+    // #36: a union body injects only into the variant with an optional tenantId,
+    // told apart by that variant's required properties.
     import camunda.openapi.json : parseJson;
 
-    const doc = `{
-        "paths": {"/s": {"post": {"requestBody": {"content": {
-            "application/json": {"schema": {"$ref": "#/components/schemas/U"}}}}}}},
-        "components": {"schemas": {
-            "U": {"oneOf": [{"$ref": "#/components/schemas/ByKey"}, {"$ref": "#/components/schemas/ById"}]},
-            "ByKey": {"type": "object", "required": ["k"], "properties": {"k": {"type": "string"}}},
-            "ById": {"type": "object", "required": ["id"],
-                "properties": {"id": {"type": "string"}, "tenantId": {"type": "string"}}}}}
-    }`;
-    auto spec = new Spec(parseJson(doc));
-    J op = J.obj();
-    op.set("operationId", J.str("suspendThings"));
-    op.set("path", J.str("/s"));
-    op.set("method", J.str("post"));
+    auto spec = new Spec(parseJson(`{"paths": {}, "components": {"schemas": {
+        "ByKey": {"type": "object", "required": ["k"], "properties": {"k": {"type": "string"}}},
+        "ById": {"type": "object", "required": ["id"],
+            "properties": {"id": {"type": "string"}, "tenantId": {"type": "string"}}}}}}`));
+    auto op = parseJson(`{"operationId": "suspendThings",
+        "optionalTenantIdInBodyVariants": ["ById"], "requestBodyUnionRefs": ["ByKey", "ById"]}`);
     const t = defaultTenantInjection(spec, op);
     assert(t.inject && t.variants == [["id"]]);
     assert(tenantBodyExpr(spec, op, "b") == `this.withDefaultTenantFor(b, [["id"]])`);
@@ -1582,32 +1538,28 @@ unittest
 
 unittest
 {
-    // #36: against the real bundled spec, every operation whose JSON body (or
-    // a union variant of it) has an optional top-level tenantId is injected --
-    // derived from the spec, so a new tenant-scoped operation is covered too.
+    // #36/#40: against the real bundled spec + metadata, every operation the
+    // bundler marks as tenant-bearing is injected, and nothing else.
     auto spec = load();
-    string[] injected;
+    string[] injected, jobTenants;
     foreach (op; spec.operations)
     {
-        J item;
-        auto content = specOperation(spec, op, item).get("requestBody").get("content").get("application/json");
-        if (!truthy(content))
-            continue;
-        auto schema = resolveSchema(spec, content.get("schema").or(J.obj()));
-        if (schema is null)
-            continue;
-        auto u = schema.get("oneOf").or(schema.get("anyOf"));
-        const optTenant = truthy(u)
-            ? u.items.any!(v => tenantKind(spec, v) == "opt")
-            : tenantKind(spec, schema) == "opt";
         const id = op.get("operationId").orS("");
+        const rendered = renderOperation(spec, op);
+        if (injectsDefaultJobTenants(op))
+        {
+            jobTenants ~= id;
+            assert(rendered.canFind("this.withDefaultJobTenants"), id);
+            continue;
+        }
+        const optTenant = itemsOf(op.get("optionalTenantIdInBodyVariants")).length > 0;
         assert(defaultTenantInjection(spec, op).inject == optTenant, id);
         // The generated facade must actually apply the injection decision.
-        const rendered = renderOperation(spec, op);
         assert(rendered.canFind("this.withDefaultTenant") == optTenant, id);
         if (optTenant)
             injected ~= id;
     }
+    assert(jobTenants == ["activateJobs"]);
     foreach (id; ["createProcessInstance", "publishMessage", "correlateMessage",
             "broadcastSignal", "evaluateDecision", "evaluateExpression",
             "evaluateConditionals", "suspendProcessDefinitions", "resumeProcessDefinitions"])
