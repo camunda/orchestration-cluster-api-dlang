@@ -1,3 +1,11 @@
+## [10.2.1](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.2.0...v10.2.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **gen:** regenerate artifacts ([66f72d7](https://github.com/camunda/orchestration-cluster-api-dlang/commit/66f72d75baeea8ad89e02e35512fb1fdac4d7be8))
+* send the default tenant (<default> unless configured) on tenant-scoped commands ([#39](https://github.com/camunda/orchestration-cluster-api-dlang/issues/39)) ([37c72ff](https://github.com/camunda/orchestration-cluster-api-dlang/commit/37c72ffc5732c1f02b59a1d2ffa64eae86dbb44e)), closes [#38](https://github.com/camunda/orchestration-cluster-api-dlang/issues/38)
+
 # [10.2.0](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.1.1...v10.2.0) (2026-11-14)
 
 
