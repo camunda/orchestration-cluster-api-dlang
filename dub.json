@@ -34,7 +34,7 @@
     }
   },
   "preBuildCommands": [
-    "$PACKAGE_DIR/scripts/check-safe.sh"
+    "\"$PACKAGE_DIR/scripts/check-safe.sh\""
   ],
   "subPackages": [
     {
@@ -81,7 +81,7 @@
         }
       },
       "preBuildCommands": [
-        "$PACKAGE_DIR/scripts/check-safe.sh"
+        "\"$PACKAGE_DIR/scripts/check-safe.sh\""
       ]
     }
   ]
