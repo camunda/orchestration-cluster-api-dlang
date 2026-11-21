@@ -984,24 +984,56 @@ TenantInjection defaultTenantInjection(Spec spec, J op)
     auto variants = unionJ.items;
     if (variants.all!(v => tenantKind(spec, v) == "opt"))
         return TenantInjection(true);
-    string[][] sels;
+    string[][] sels, others;
     foreach (v; variants)
     {
-        if (tenantKind(spec, v) != "opt")
-            continue;
         auto rv = resolveSchema(spec, v);
         string[] req;
-        foreach (r; itemsOf(rv.get("required")))
-            req ~= pyStr(r);
-        foreach (part; itemsOf(rv.get("allOf")))
-            foreach (r; itemsOf(resolveSchema(spec, part).get("required")))
+        if (rv !is null)
+        {
+            foreach (r; itemsOf(rv.get("required")))
                 req ~= pyStr(r);
-        if (!req.length)
-            die(format("%s: tenant-bearing body variant has no required property to tell it apart",
-                op.get("operationId").orS("")));
-        sels ~= req;
+            foreach (part; itemsOf(rv.get("allOf")))
+                foreach (r; itemsOf(resolveSchema(spec, part).or(J.obj()).get("required")))
+                    req ~= pyStr(r);
+        }
+        if (tenantKind(spec, v) == "opt")
+            sels ~= req;
+        else
+            others ~= req;
     }
+    if (const why = ambiguousTenantSelector(sels, others))
+        die(format("%s: %s", op.get("operationId").orS(""), why));
     return TenantInjection(sels.length > 0, sels);
+}
+
+/// Fail closed: the runtime picks the tenant-bearing variant by required
+/// property names alone, so a selector must be non-empty and must not also
+/// match a non-tenant variant (whose required set would contain it, e.g. two
+/// branches told apart only by a discriminator value). Returns null if every
+/// selector is unambiguous, else why not.
+string ambiguousTenantSelector(const string[][] sels, const string[][] others)
+{
+    foreach (s; sels)
+    {
+        if (!s.length)
+            return "tenant-bearing body variant has no required property to tell it apart";
+        foreach (o; others)
+            if (s.all!(k => o.canFind(k)))
+                return format("tenant-bearing body variant selector %s also matches a variant "
+                    ~ "without tenantId (%s); cannot inject the default tenant by shape", s, o);
+    }
+    return null;
+}
+
+unittest
+{
+    // Branches distinguished only by a discriminator value are rejected.
+    assert(ambiguousTenantSelector([["kind", "id"]], [["kind", "id"]]) !is null);
+    assert(ambiguousTenantSelector([["id"]], [["id", "k"]]) !is null);
+    assert(ambiguousTenantSelector([[]], [["k"]]) !is null);
+    assert(ambiguousTenantSelector([["id"]], [["k"]]) is null);
+    assert(ambiguousTenantSelector([["id"]], [[]]) is null);
 }
 
 /// D expression applying the default tenant to `bodyE` for `op`, or `bodyE`.
