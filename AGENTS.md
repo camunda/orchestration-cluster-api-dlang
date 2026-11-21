@@ -4,6 +4,34 @@
 > https://raw.githubusercontent.com/camunda/.github/refs/heads/main/AGENTS.md
 > The instructions below extend those and take precedence on conflict.
 
+<!-- sdk-infra-delegation:start -->
+> **Note:** This file also delegates to the shared SDK AGENTS.md. Read and apply it too.
+
+**URL:**
+https://raw.githubusercontent.com/camunda/sdk-infra/refs/heads/main/policies/AGENTS.md
+
+It holds the conventions shared by all Camunda SDK repos (commits, bug fixes, tests, opening issues). Precedence on conflict: this file, then the shared SDK file, then the central Camunda file.
+<!-- sdk-infra-delegation:end -->
+
+## Opening issues
+
+Every issue you open (`gh issue create`, REST or MCP) must carry the SDK defect-metrics fields (https://camunda.github.io/sdk-quality-metrics/). This applies in this repo and to issues you file elsewhere (other SDKs, camunda/sdk-infra, camunda/camunda). Put these lines at the end of the body, or set the matching labels directly:
+
+```
+Type: bug | enhancement | documentation | question
+Found-by: review | ci | conformance-test | performance-test | integration | manual-test | audit | user
+Affects: main | stable | both
+Severity: critical | high | medium | low
+Introduced-by: <commit sha | owner/repo@sha | #PR | release tag>   (optional)
+```
+
+- For a bug, `Found-by`, `Affects` and `Severity` are required. Without them the issue gets `needs-triage`.
+- `Found-by` is the quality layer that caught it, not who typed the issue. `Affects: stable` means a released `stable/N` line.
+- An issue created with a workflow's `GITHUB_TOKEN` does not trigger `sdk-issue-labels.yml`, so the body lines are not turned into labels. Set the labels directly instead: `--label bug --label found-by/<x> --label affects/<main|stable> --label severity/<x>`.
+- Until this repo adopts `sdk-issue-labels.yml` (https://github.com/camunda/orchestration-cluster-api-dlang/issues/44), body lines are not converted here: always set the labels directly.
+
+Value definitions: [shared policy, "Opening issues"](https://github.com/camunda/sdk-infra/blob/main/policies/AGENTS.md#opening-issues).
+
 ## Role & boundary
 
 This repo produces the **D SDK** for the Camunda 8 Orchestration Cluster REST API.
