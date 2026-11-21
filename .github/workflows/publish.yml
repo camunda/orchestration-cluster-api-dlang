@@ -14,6 +14,13 @@ on:
           empty for a normal release run.
         required: false
         type: string
+      api_break_approved:
+        description: >-
+          stable/** only: release even though the public API breaks
+          compatibility with the last release of the major (for breaks with
+          no PR to label, e.g. from upstream spec drift).
+        type: boolean
+        default: false
 
 concurrency:
   group: orchestration-cluster-api-dlang-release-${{ github.ref_name }}
@@ -168,6 +175,21 @@ jobs:
         run: |
           git add external-spec/bundled source/camunda/generated docs examples
           git commit -m "fix(gen): regenerate artifacts"
+
+      # Stable branches must not break customer code that compiled against
+      # the last release of the major. This checks the commit about to be
+      # tagged, including the regenerated code above that no PR reviewed.
+      # Override: the api-break-approved label on a PR merged since that
+      # release, or the api_break_approved input of a manual run. A no-op on
+      # main, whose prereleases make no compatibility promise.
+      - name: API compatibility gate
+        if: ${{ github.event.inputs.repair-tag == '' && startsWith(github.ref_name, 'stable/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.api_break_approved }}
+        run: |
+          dub build -q --single scripts/api-compat.d || exit 2
+          API_COMPAT="$PWD/scripts/.dub/bin/api-compat" bash scripts/api-compat-release.sh
 
       - name: Publish (semantic-release)
         if: ${{ github.event.inputs.repair-tag == '' }}

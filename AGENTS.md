@@ -36,6 +36,7 @@ around them here:
 | `scripts/*.d` | Repo tooling as dub single-file programs (`dub run -q --single scripts/<name>.d`; the Makefile wraps them). No Python; Node.js is only needed for `npm run bundle:spec` and releases. |
 | `scripts/sync-readme-snippets.d` | Injects `examples/*.d` region snippets into `README.md`. `--check` is the CI gate. |
 | `docs/` | **Generated.** `api-reference.md` and `semantic-types.md`. Never hand-edit. |
+| `scripts/api-compat.d` | Public-API compatibility checker (`ldc2 -X` based). `scripts/api-compat-release.sh` is its release gate. |
 | `scripts/check-safe.sh` | `@safe` / `@trusted` / isolation ratchet. Runs as a dub `preBuildCommands` hook. |
 | `external-spec/bundled/` | Bundled OpenAPI spec + `spec-metadata.json`, written by `npm run bundle:spec`. Committed generator inputs. |
 | `examples/` | Compilable usage examples. `examples/readme.d` hosts region-tagged snippets for the README. |
@@ -82,7 +83,18 @@ make docs-md
 make typecheck-windows  # compile Windows-only code for Windows (seconds; part of make check)
 make check-windows      # dub test on a real Windows runner for the working tree (~1-2 min)
 make check       # full local CI gate
+make api-compat BASE=<ref>  # public-API breaks vs a git ref
 ```
+
+### API compatibility
+
+PRs to `stable/**` must not break the public API
+(`.github/workflows/api-compat.yml`), and releases from `stable/**` are
+compared with the last `N.x.y` release (`publish.yml`). README "API
+compatibility" lists what counts as a break. An intended break needs the
+`api-break-approved` label on the PR. Do not apply it yourself: ask the
+maintainer. Run `make api-compat BASE=origin/stable/<N>` before pushing to a
+stable branch.
 
 ### Windows code
 
