@@ -1602,6 +1602,9 @@ unittest
             : tenantKind(spec, schema) == "opt";
         const id = op.get("operationId").orS("");
         assert(defaultTenantInjection(spec, op).inject == optTenant, id);
+        // The generated facade must actually apply the injection decision.
+        const rendered = renderOperation(spec, op);
+        assert(rendered.canFind("this.withDefaultTenant") == optTenant, id);
         if (optTenant)
             injected ~= id;
     }
