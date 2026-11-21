@@ -45,7 +45,10 @@ CONFIG_REFERENCE: list[tuple[str, str, str]] = [
     ("CAMUNDA_BASIC_AUTH_USERNAME", "", "Basic-auth username."),
     ("CAMUNDA_BASIC_AUTH_PASSWORD", "", "Basic-auth password."),
     ("CAMUNDA_DEFAULT_TENANT_ID", "",
-     "Default tenant id applied to tenant-aware operations (alias `CAMUNDA_TENANT_ID`)."),
+     "Default tenant id (alias `CAMUNDA_TENANT_ID`). When unset, `<default>` is sent. Applied as "
+     "`tenantId` when omitted on createProcessInstance, publishMessage, correlateMessage, "
+     "broadcastSignal, evaluateDecision, evaluateExpression, evaluateConditionals and "
+     "deployments, and as `tenantIds` on activateJobs/workers when `CAMUNDA_TENANT_IDS` is unset."),
     ("CAMUNDA_DEFAULT_HEADERS", "",
      "Custom headers sent with every API request, as a JSON object of header name to value "
      "(`{\"X-Api-Key\":\"…\"}`). Applied last, merged case-insensitively (may replace "
@@ -54,7 +57,8 @@ CONFIG_REFERENCE: list[tuple[str, str, str]] = [
      "sent to the OAuth token endpoint. Values may be secrets."),
     ("CAMUNDA_TENANT_ID", "", "Alias for `CAMUNDA_DEFAULT_TENANT_ID`."),
     ("CAMUNDA_TENANT_IDS", "",
-     "Comma-separated default tenant ids (e.g. for job activation)."),
+     "Comma-separated tenant ids sent as `tenantIds` on activateJobs/workers when none are given "
+     "(falls back to the default tenant)."),
     ("CAMUNDA_SDK_BACKPRESSURE_PROFILE", "BALANCED",
      "`BALANCED`, `CONSERVATIVE`, `AGGRESSIVE`, or `LEGACY` (observe-only)."),
     ("CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS", "3",

@@ -103,7 +103,8 @@ final class CamundaClient
         return copy;
     }
 
-    /// `activateJobs` body with `tenantIds: [<effective default tenant>]` when
+    /// `activateJobs` body with `tenantIds` set to the configured
+    /// `CAMUNDA_TENANT_IDS` (or `[<effective default tenant>]` when none) when
     /// `tenantFilter` is `PROVIDED` or unset and no tenant ids are given
     /// (absent, null, empty or not an array). With `ASSIGNED` the body is
     /// left alone.
@@ -117,7 +118,7 @@ final class CamundaClient
         JSONValue copy = emptyObject();
         foreach (k, v; body_.objectNoRef)
             if (k != "tenantIds") copy[k] = v;
-        copy["tenantIds"] = JSONValue([effectiveDefaultTenant]);
+        copy["tenantIds"] = JSONValue(config.tenantIds.length ? config.tenantIds.dup : [effectiveDefaultTenant]);
         return copy;
     }
 
@@ -296,8 +297,8 @@ version (unittest)
     private void withoutTenantEnv(scope void delegate() @safe dg)
     {
         import std.process : environment;
-        static immutable keys = ["CAMUNDA_DEFAULT_TENANT_ID", "CAMUNDA_TENANT_ID"];
-        string[2] saved;
+        static immutable keys = ["CAMUNDA_DEFAULT_TENANT_ID", "CAMUNDA_TENANT_ID", "CAMUNDA_TENANT_IDS"];
+        string[3] saved;
         foreach (i, k; keys) { saved[i] = environment.get(k); environment.remove(k); }
         scope (exit) foreach (i, k; keys) if (saved[i] !is null) environment[k] = saved[i];
         dg();
@@ -340,6 +341,13 @@ unittest
     assert(ids(t1.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["t1"]);
     assert(ids(t1.withDefaultJobTenants(parseJSON(`{"tenantIds":["a","b"]}`))) == ["a", "b"]);
     assert("tenantIds" !in none.withDefaultJobTenants(parseJSON(`{"tenantFilter":"ASSIGNED"}`)).objectNoRef);
+    auto multi = CamundaClient.create(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_DEFAULT_TENANT_ID", "t1")
+        .withKey("CAMUNDA_TENANT_IDS", "acme,globex"));
+    assert(ids(multi.withDefaultJobTenants(parseJSON(`{"type":"x"}`))) == ["acme", "globex"]);
+    assert(ids(multi.withDefaultJobTenants(parseJSON(`{"tenantIds":["a"]}`))) == ["a"]);
+    assert(multi.withDefaultTenant(parseJSON(`{}`))["tenantId"].str == "t1");
     assert(t1.effectiveDefaultTenant == "t1");
     assert(none.effectiveDefaultTenant == "<default>");
     });
