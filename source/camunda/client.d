@@ -100,10 +100,8 @@ final class CamundaClient
     }
 
     /// `body_` with the effective default tenant as `tenantId`, unless it is
-    /// already set. Applied by the generated tenant-scoped commands
-    /// (createProcessInstance, publishMessage, correlateMessage,
-    /// broadcastSignal, evaluateDecision, evaluateExpression,
-    /// evaluateConditionals).
+    /// already set. Applied by every generated operation whose
+    /// JSON body has an optional top-level `tenantId` (derived from the spec).
     JSONValue withDefaultTenant(JSONValue body_)
     {
         const tenant = effectiveDefaultTenant;
@@ -114,6 +112,25 @@ final class CamundaClient
         foreach (k, v; body_.objectNoRef) copy[k] = v;
         copy["tenantId"] = tenant;
         return copy;
+    }
+
+    /// `withDefaultTenant` for a union body: applied only when `body_` is the
+    /// tenant-bearing variant, i.e. it carries every required property of one
+    /// of `variants` (e.g. suspension by `processDefinitionId`, not by key).
+    JSONValue withDefaultTenantFor(JSONValue body_, const string[][] variants)
+    {
+        if (body_.type != JSONType.object) return body_;
+        foreach (keys; variants)
+        {
+            bool all = true;
+            foreach (k; keys)
+            {
+                auto v = k in body_.objectNoRef;
+                if (v is null || v.type == JSONType.null_) { all = false; break; }
+            }
+            if (all) return withDefaultTenant(body_);
+        }
+        return body_;
     }
 
     /// `activateJobs` body with `tenantIds: [<effective default tenant>]` when
@@ -333,6 +350,22 @@ unittest
     auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     assert(none.withDefaultTenant(parseJSON(`{"a":1}`))["tenantId"].str == "<default>");
     assert(none.withDefaultTenant(parseJSON(`{"tenantId":"mine"}`))["tenantId"].str == "mine");
+    });
+}
+
+unittest
+{
+    // #36: suspend/resume by id get the default tenant; by key get none.
+    withoutTenantEnv(() {
+    auto t1 = CamundaClient.create(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_DEFAULT_TENANT_ID", "t1"));
+    auto none = CamundaClient.create(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    const string[][] byId = [["processDefinitionId"]];
+    assert(t1.withDefaultTenantFor(parseJSON(`{"processDefinitionId":"p"}`), byId)["tenantId"].str == "t1");
+    assert(none.withDefaultTenantFor(parseJSON(`{"processDefinitionId":"p"}`), byId)["tenantId"].str == "<default>");
+    assert(t1.withDefaultTenantFor(parseJSON(`{"processDefinitionId":"p","tenantId":"x"}`), byId)["tenantId"].str == "x");
+    assert("tenantId" !in t1.withDefaultTenantFor(parseJSON(`{"processDefinitionKey":"1"}`), byId).objectNoRef);
     });
 }
 

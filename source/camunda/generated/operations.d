@@ -1051,7 +1051,7 @@ mixin template GeneratedOperations()
     ProcessDefinitionResumptionResult resumeProcessDefinitions(ProcessDefinitionResumptionInstruction body_ = ProcessDefinitionResumptionInstruction.init)
     {
         const path_ = "/process-definitions/resumption";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenantFor(body_.toJson(), [["processDefinitionId"]]), null);
         return ProcessDefinitionResumptionResult.fromJson(payload);
     }
 
@@ -1083,7 +1083,7 @@ mixin template GeneratedOperations()
     ProcessDefinitionSuspensionResult suspendProcessDefinitions(ProcessDefinitionSuspensionInstruction body_ = ProcessDefinitionSuspensionInstruction.init)
     {
         const path_ = "/process-definitions/suspension";
-        auto payload = this.requestJson("POST", path_, body_.toJson(), null);
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenantFor(body_.toJson(), [["processDefinitionId"]]), null);
         return ProcessDefinitionSuspensionResult.fromJson(payload);
     }
 
