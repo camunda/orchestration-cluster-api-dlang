@@ -1,0 +1,84 @@
+name: API compatibility
+
+# Blocks PRs to stable branches that change the public D API in a way that stops
+# customer code from compiling (see scripts/api-compat.d and README "API
+# compatibility"). A PR is compared with its base branch, so it answers only for
+# its own changes: an approved break already merged does not fail every later PR.
+# When a break is intended (e.g. a bug fix that must change the API), apply the
+# `api-break-approved` label: the check still runs and lists the breaks, but
+# passes. The publish workflow compares the code it is about to tag with the last
+# release of the major.
+
+on:
+  pull_request:
+    branches:
+      - "stable/**"
+    # labeled/unlabeled: re-evaluate when api-break-approved is added or removed.
+    # edited: re-evaluate when the PR is retargeted to another stable branch. The
+    # job must run for every such event: a skipped run would replace a failed one
+    # and the required check would count as passing.
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-compat-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  api-compat:
+    name: API compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check out the base branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .api-compat-base
+          # Tags are needed to find the last published release of the major.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-1.43.0
+
+      - name: Build checker
+        run: |
+          dub build -q --single scripts/api-compat.d
+          cp scripts/.dub/bin/api-compat "$RUNNER_TEMP/api-compat"
+
+      - name: Check API compatibility
+        env:
+          # stable/<N> with no N.x release yet (just cut from main) has no
+          # published API to protect and passes.
+          BASE_REF: ${{ github.base_ref }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'api-break-approved') }}
+        run: |
+          set -uo pipefail
+          released=$("$RUNNER_TEMP/api-compat" --print-baseline-major "${BASE_REF#stable/}" --repo .api-compat-base) || exit 2
+          if [ -z "$released" ]; then
+            echo "::notice::No ${BASE_REF#stable/}.x release published yet; nothing to protect."
+            exit 0
+          fi
+          pipeline_status=(0 0)
+          "$RUNNER_TEMP/api-compat" --baseline-dir .api-compat-base | tee "$RUNNER_TEMP/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
+          [ "${pipeline_status[1]}" -eq 0 ] || exit 2
+          rc="${pipeline_status[0]}"
+          {
+            echo '## API compatibility'
+            echo '```'
+            cat "$RUNNER_TEMP/api-compat.txt" || exit 2
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || exit 2
+          if [ "$rc" -eq 1 ] && [ "$APPROVED" = "true" ]; then
+            echo "::warning::Breaking API changes approved with the api-break-approved label."
+            echo "Approved with the \`api-break-approved\` label." >> "$GITHUB_STEP_SUMMARY" || exit 2
+            exit 0
+          fi
+          if [ "$rc" -eq 1 ]; then
+            echo "::error::If this break is intended (e.g. a bug fix that must change the API), apply the api-break-approved label. Otherwise make the change backward compatible."
+          fi
+          exit "$rc"

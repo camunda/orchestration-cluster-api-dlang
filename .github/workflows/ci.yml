@@ -51,6 +51,8 @@ jobs:
           compiler: ldc-1.43.0
       - name: Generator parser unittests
         run: dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
+      - name: API compatibility checker unittests
+        run: dub run -q --build=unittest --single scripts/api-compat.d -- --DRT-testmode=test-only
       - run: dub run -q --single scripts/generate.d
       - name: Fail if generated sources, docs or examples drifted
         run: git diff --exit-code -- source/camunda/generated docs examples ':(exclude)examples/readme.d' ':(exclude)examples/topology.d'

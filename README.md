@@ -391,6 +391,48 @@ make test
 release re-bundles and commits any drift as `fix(gen): regenerate artifacts`.
 `source/camunda/generated/` is never hand-edited.
 
+## API compatibility
+
+`stable/N` branches publish `N.x` releases, and a release must not break code
+that compiled against an earlier `N.x`. `main` publishes `-alpha` prereleases
+and makes no compatibility promise.
+
+`scripts/api-compat.d` extracts the public API of the `camunda` packages
+(root, `:runtime`, `:openapi`) with `ldc2 -X` and compares it with a baseline.
+These count as breaks:
+
+- a public, protected or export symbol removed, renamed or made less visible
+  (modules, structs, classes, interfaces, functions, variables, aliases,
+  enums, enum members, templates)
+- a changed function signature: parameter types or order, return type,
+  `ref`/`scope`/`return`, or a removed default argument
+- dropped function attributes (`@safe`, `pure`, `nothrow`, `@nogc`)
+- a changed enum member value or enum base type, field or variable type, or
+  alias target
+- reordered or removed public struct fields (appending is fine), a changed
+  template parameter list, or a dropped base class or interface
+
+Additions, and added attributes or default arguments, are not breaks.
+
+- **Pull requests to `stable/**`** are compared with their base branch
+  (`.github/workflows/api-compat.yml`). A `stable/N` with no `N.x` release
+  yet passes.
+- **Releases** from `stable/**` compare the commit about to be tagged,
+  including regenerated code, with the last `N.x.y` release
+  (`.github/workflows/publish.yml`).
+- **Intended breaks:** apply the `api-break-approved` label to the PR. The
+  check still lists the breaks but passes, and the label also approves the
+  release. For a break no PR made (upstream spec drift), run the Publish
+  workflow manually with `api_break_approved`.
+
+Run it locally against any git ref (exit 1 means breaking changes):
+
+```sh
+make api-compat                      # against origin/main
+make api-compat BASE=v11.0.0         # against a release
+make api-compat BASE=origin/stable/11
+```
+
 ## License
 
 Apache-2.0.
