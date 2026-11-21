@@ -1,3 +1,11 @@
+# [11.0.0-alpha.13](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.12...v11.0.0-alpha.13) (2026-11-21)
+
+
+### Bug Fixes
+
+* **gen:** derive default-tenant injection from the body shape ([#37](https://github.com/camunda/orchestration-cluster-api-dlang/issues/37)) ([e1228e7](https://github.com/camunda/orchestration-cluster-api-dlang/commit/e1228e797e18791df185d101ba351ce5d3b5bbab)), closes [#36](https://github.com/camunda/orchestration-cluster-api-dlang/issues/36)
+* **gen:** regenerate artifacts ([a336a37](https://github.com/camunda/orchestration-cluster-api-dlang/commit/a336a373a40f5fb2fbf73a7b4d959dcb419d2c87))
+
 # [11.0.0-alpha.12](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.11...v11.0.0-alpha.12) (2026-11-20)
 
 
