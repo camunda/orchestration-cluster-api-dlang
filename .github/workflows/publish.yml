@@ -26,6 +26,38 @@ permissions:
   id-token: write
 
 jobs:
+  # The branch's default spec ref lives in package.json (`main` on main,
+  # `stable/8.N` on stable/N). A repo variable SPEC_REF_OVERRIDE can point the
+  # release at another camunda/camunda ref; the shared guard requires
+  # SPEC_REF_OVERRIDE_ACK=true and an unexpired SPEC_REF_OVERRIDE_EXPIRES
+  # (YYYY-MM-DD) so a temporary override cannot silently outlive its purpose.
+  spec-ref:
+    name: Resolve spec ref
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      default-ref: ${{ steps.ref.outputs.default-ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: ref
+        run: |
+          ref=$(jq -r '.scripts["bundle:spec"]' package.json | grep -oE -- '--ref [^ ]+' | sed -E 's/^--ref \$\{SPEC_REF:-([^}]*)\}$/\1/')
+          if [ -z "$ref" ]; then echo "::error::no default SPEC_REF in package.json bundle:spec"; exit 1; fi
+          echo "default-ref=$ref" >> "$GITHUB_OUTPUT"
+
+  spec-ref-guard:
+    needs: spec-ref
+    permissions: {}
+    uses: camunda/sdk-infra/.github/workflows/sdk-spec-ref-guard.yml@v1
+    with:
+      spec-ref: ${{ vars.SPEC_REF_OVERRIDE || needs.spec-ref.outputs.default-ref }}
+      default-ref: ${{ needs.spec-ref.outputs.default-ref }}
+      ack: ${{ vars.SPEC_REF_OVERRIDE_ACK || '' }}
+      expires: ${{ vars.SPEC_REF_OVERRIDE_EXPIRES || '' }}
+
   test:
     name: dub test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -46,7 +78,7 @@ jobs:
 
   release:
     name: Version & Publish (${{ github.ref_name }})
-    needs: test
+    needs: [test, spec-ref-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -142,6 +174,10 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libcurl4-openssl-dev zlib1g-dev
 
       - name: Bundle spec from upstream and regenerate
+        env:
+          # Empty unless overridden (and accepted by spec-ref-guard); package.json
+          # then falls back to the branch default.
+          SPEC_REF: ${{ vars.SPEC_REF_OVERRIDE }}
         run: |
           npm run bundle:spec
           dub run -q --single scripts/generate.d
@@ -207,7 +243,7 @@ jobs:
         run: bash scripts/repair-release.sh "${REPAIR_TAG}"
 
   notify-release-failure:
-    needs: [test, release]
+    needs: [spec-ref, spec-ref-guard, test, release]
     if: ${{ always() && contains(needs.*.result, 'failure') }}
     permissions: {}
     uses: camunda/sdk-infra/.github/workflows/sdk-slack-notify.yml@v1
