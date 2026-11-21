@@ -1,0 +1,64 @@
+# Backport configuration for camunda/sdk-infra's sdk-backport.yml
+# (schema: https://github.com/camunda/sdk-infra/blob/main/schema/backport.schema.json).
+# Read from the TARGET branch: keep a copy on main and on every live stable/N.
+# No `language`: setup-sdk-toolchain has no D, so .github/actions/codegen-setup
+# installs the toolchain.
+
+# Derived from the upstream spec or the generator. Restored from the target branch
+# and regenerated there. generated-paths takes no globs or excludes, and examples/
+# mixes generated files with the hand-written readme.d and topology.d, so the
+# generated examples are listed one by one (every examples/*.d except those two,
+# plus operation-map.json). If a spec change adds a tag, its new example file is
+# not listed: add it here on every branch BEFORE backporting such a change. The
+# shared workflow stages only listed paths; from sdk-infra#112 it fails and names
+# an unlisted file the regeneration wrote, before that it silently leaves it out.
+generated-paths:
+  - external-spec
+  - source/camunda/generated
+  - docs
+  - examples/ad_hoc_sub_process.d
+  - examples/agent_definition.d
+  - examples/agent_instance.d
+  - examples/audit_log.d
+  - examples/authentication.d
+  - examples/authorization.d
+  - examples/backup.d
+  - examples/batch_operation.d
+  - examples/clock.d
+  - examples/cluster.d
+  - examples/cluster_variable.d
+  - examples/conditional.d
+  - examples/decision_definition.d
+  - examples/decision_instance.d
+  - examples/decision_requirements.d
+  - examples/document.d
+  - examples/element_instance.d
+  - examples/exporting.d
+  - examples/expression.d
+  - examples/form.d
+  - examples/global_listener.d
+  - examples/group.d
+  - examples/incident.d
+  - examples/job.d
+  - examples/license.d
+  - examples/mapping_rule.d
+  - examples/message.d
+  - examples/message_subscription.d
+  - examples/operation-map.json
+  - examples/process_definition.d
+  - examples/process_instance.d
+  - examples/recovery.d
+  - examples/resource.d
+  - examples/role.d
+  - examples/secret.d
+  - examples/setup.d
+  - examples/signal.d
+  - examples/system.d
+  - examples/tenant.d
+  - examples/user.d
+  - examples/user_task.d
+  - examples/variable.d
+
+# Regenerates from the committed spec, then builds and runs the unit tests of the
+# SDK and the runtime (as ci.yml), so test-only references are checked too.
+regenerate: dub run -q --single scripts/generate.d && dub test && dub test :runtime

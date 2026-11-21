@@ -151,6 +151,46 @@ When a change modifies `scripts/generate.d` **and** that change alters
 1. Generator change only. No `source/camunda/generated/` changes.
 2. `chore(gen): regenerate for <summary>` — the regenerated output.
 
+## Backporting to stable branches
+
+`.github/workflows/backport.yml` calls camunda/sdk-infra's shared `sdk-backport.yml`
+(`korthout/backport-action`, running as `camunda-sdk-automation`; the same flow as the other
+SDKs). It is configured by `.github/backport.yml` and `.github/actions/codegen-setup`, both
+read from the **target** branch, so keep them on `main` and on every live `stable/N`
+(`stable/10` still generates with `scripts/generate.py`, so its copies differ).
+
+- Add the label `backport stable/<N>` to a PR. The backport PR opens when the PR merges, or
+  right away if it is already merged.
+- Or comment `/backport` on a merged PR to re-run it for its labels. PRs from forks can only
+  be backported this way.
+
+Backport hand-written runtime and infra changes when the affected code exists on the stable
+branch. Never backport generated output on its own; each branch regenerates from its own spec.
+A change to the generator itself doesn't carry over to `stable/10`'s Python generator: port
+it by hand there, or skip it.
+
+After the cherry-pick, the workflow adds a `chore(gen): regenerate for backport of #N`
+commit. The derived files (`generated-paths`: `external-spec/`, `source/camunda/generated/`,
+`docs/`, and the generated `examples/*.d` plus `operation-map.json`) are restored from the
+target branch, regenerated, and unit-tested (`dub test && dub test :runtime`). `generated-paths` takes no globs or excludes, so the
+generated examples are listed one by one, without the hand-written `readme.d` and
+`topology.d`. **When a new API tag adds an example file, add it to `generated-paths` on
+every branch that has it** before backporting such a change. The workflow commits only listed
+paths: from sdk-infra#112 it fails and names an unlisted file the regeneration wrote; before
+that, it silently leaves the file out.
+
+If the cherry-pick conflicts, the action opens a **draft** PR with the conflicts committed. A
+draft always means a conflict, even without conflict markers: if the source changes a file
+the target lacks, `main`'s whole file is committed. Resolve it on the backport branch, then
+comment `/backport` on the source PR to regenerate. If fix B builds on fix A, merge A's
+backport first, then rebuild B's branch from the updated target (`git switch -C
+backport-<B>-to-stable/N origin/stable/N && git cherry-pick -x <B's merge commit>`, push with
+`--force-with-lease`, comment `/backport`).
+
+If regenerating fails, the bot comments on the backport PR. If the change depends on spec the
+stable branch doesn't have, it can't be backported as-is: close the backport PR, or reduce it
+to what applies to the stable spec.
+
 ## Commit messages
 
 Conventional Commits. Use `fix` only for user-facing bug fixes; use `chore`
