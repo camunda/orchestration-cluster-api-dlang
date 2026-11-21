@@ -1112,6 +1112,7 @@ JSONValue toJson(OwnerTypeEnum value) { return JSONValue(cast(string) value); }
 enum PermissionTypeEnum : string
 {
     ACCESS = "ACCESS",
+    ANSWER = "ANSWER",
     CANCEL_PROCESS_INSTANCE = "CANCEL_PROCESS_INSTANCE",
     CLAIM = "CLAIM",
     CLAIM_USER_TASK = "CLAIM_USER_TASK",
@@ -1153,6 +1154,7 @@ enum PermissionTypeEnum : string
     READ_TASK_LISTENER = "READ_TASK_LISTENER",
     RESTORE = "RESTORE",
     REVEAL = "REVEAL",
+    SUSPEND_PROCESS_DEFINITION = "SUSPEND_PROCESS_DEFINITION",
     SUSPEND_PROCESS_INSTANCE = "SUSPEND_PROCESS_INSTANCE",
     UPDATE = "UPDATE",
     UPDATE_PROCESS_INSTANCE = "UPDATE_PROCESS_INSTANCE",
@@ -1165,6 +1167,7 @@ PermissionTypeEnum parsePermissionTypeEnum(string value)
     switch (value)
     {
     case "ACCESS": return PermissionTypeEnum.ACCESS;
+    case "ANSWER": return PermissionTypeEnum.ANSWER;
     case "CANCEL_PROCESS_INSTANCE": return PermissionTypeEnum.CANCEL_PROCESS_INSTANCE;
     case "CLAIM": return PermissionTypeEnum.CLAIM;
     case "CLAIM_USER_TASK": return PermissionTypeEnum.CLAIM_USER_TASK;
@@ -1206,6 +1209,7 @@ PermissionTypeEnum parsePermissionTypeEnum(string value)
     case "READ_TASK_LISTENER": return PermissionTypeEnum.READ_TASK_LISTENER;
     case "RESTORE": return PermissionTypeEnum.RESTORE;
     case "REVEAL": return PermissionTypeEnum.REVEAL;
+    case "SUSPEND_PROCESS_DEFINITION": return PermissionTypeEnum.SUSPEND_PROCESS_DEFINITION;
     case "SUSPEND_PROCESS_INSTANCE": return PermissionTypeEnum.SUSPEND_PROCESS_INSTANCE;
     case "UPDATE": return PermissionTypeEnum.UPDATE;
     case "UPDATE_PROCESS_INSTANCE": return PermissionTypeEnum.UPDATE_PROCESS_INSTANCE;
@@ -1266,6 +1270,7 @@ enum ResourceTypeEnum : string
     GROUP = "GROUP",
     MAPPING_RULE = "MAPPING_RULE",
     MESSAGE = "MESSAGE",
+    PROBE = "PROBE",
     PROCESS_DEFINITION = "PROCESS_DEFINITION",
     RESOURCE = "RESOURCE",
     ROLE = "ROLE",
@@ -1295,6 +1300,7 @@ ResourceTypeEnum parseResourceTypeEnum(string value)
     case "GROUP": return ResourceTypeEnum.GROUP;
     case "MAPPING_RULE": return ResourceTypeEnum.MAPPING_RULE;
     case "MESSAGE": return ResourceTypeEnum.MESSAGE;
+    case "PROBE": return ResourceTypeEnum.PROBE;
     case "PROCESS_DEFINITION": return ResourceTypeEnum.PROCESS_DEFINITION;
     case "RESOURCE": return ResourceTypeEnum.RESOURCE;
     case "ROLE": return ResourceTypeEnum.ROLE;
