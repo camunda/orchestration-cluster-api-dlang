@@ -130,7 +130,7 @@ for review-comment fix-ups and regeneration commits.
 
 ## Shared CI (camunda/sdk-infra)
 
-- `ci.yml` runs `sdk-commitlint.yml` (shared commitlint config) and
+- `ci.yml` runs `sdk-commitlint.yml` (rules from the root `commitlint.config.cjs`) and
   `sdk-breaking-change-guard.yml` on PRs. A `BREAKING CHANGE:` marker fails the
   PR unless it carries the `breaking-change-approved` label.
 - `issue-labels.yml` turns `Type:` / `Found-by:` / `Affects:` / `Severity:` body

@@ -66,8 +66,8 @@ jobs:
   commitlint:
     name: Commit messages
     # The commit-range linter is meaningful on pull requests; on direct pushes the
-    # before/after range is degenerate, so scope it to PRs. No local config: the
-    # shared camunda/sdk-infra commitlint.config.base.cjs applies.
+    # before/after range is degenerate, so scope it to PRs. The shared workflow
+    # loads no config itself, so commitlint.config.cjs at the repo root supplies one.
     if: github.event_name == 'pull_request'
     uses: camunda/sdk-infra/.github/workflows/sdk-commitlint.yml@v1
 
