@@ -18,7 +18,14 @@ current tree. It reports changes that can stop customer code from compiling:
   - a changed enum member value, enum base type, variable/field type or alias
   - a reordered or removed public struct/union field (positional struct
     literals depend on the order); appending fields is fine
-  - a changed template parameter list, or a dropped base class / interface
+  - a changed template parameter list, specialisation or constraint, or a
+    removed template default (adding one is fine)
+  - a dropped base class / interface
+  - a public import that no longer re-exports a name, or a removed `mixin`
+    invocation (which drops the members it mixed in)
+
+The host target and Windows (`x86_64-windows-msvc`) are both compared, so
+`version (Windows)` declarations are covered.
 
 Additions are not breaks.
 
@@ -143,6 +150,37 @@ private string signature(JSONValue f)
     return core ~ "|defaults=" ~ mask;
 }
 
+/// Signature of a template: each parameter (kind, name, type, specialisation)
+/// plus the constraint, with defaults in a separate `|defaults=` mask so an
+/// added default is compatible and a removed one is not.
+private string templateSignature(JSONValue t)
+{
+    import std.algorithm : among;
+    string[] ps;
+    string mask;
+    if (auto tp = "parameters" in t)
+        foreach (p; tp.array)
+        {
+            string[] parts;
+            bool hasDefault;
+            foreach (k; p.object.keys.sort)
+            {
+                if (k.startsWith("default"))
+                {
+                    hasDefault = true;
+                    continue;
+                }
+                if (k.among("line", "char"))
+                    continue;
+                const v = p[k];
+                parts ~= k ~ "=" ~ (v.type == JSONType.string ? v.str : v.toString);
+            }
+            ps ~= parts.join(";");
+            mask ~= hasDefault ? "1" : "0";
+        }
+    return "template:(" ~ ps.join(",") ~ ") if(" ~ str(t, "constraint") ~ ")|defaults=" ~ mask;
+}
+
 private void walk(ref Api api, string parent, JSONValue members, string parentKind)
 {
     string[] fieldOrder;
@@ -152,10 +190,31 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
         const kind = str(m, "kind");
         const name = str(m, "name");
         const prot = str(m, "protection");
-        if (kind == "import" || kind == "static import" || kind == "mixin")
-            continue;
         if (!visible(prot))
             continue;
+        if (kind == "import" || kind == "static import")
+        {
+            // Public imports re-export names through this scope.
+            Sym s = Sym("import", parent ~ ":" ~ name, "public");
+            const sel = "selective" in m, ren = "renamed" in m;
+            if (sel is null && ren is null)
+                s.overloads ~= "*";
+            if (sel !is null)
+                foreach (b; sel.array)
+                    s.overloads ~= b.str;
+            if (ren !is null)
+                foreach (k2, v; ren.object)
+                    s.overloads ~= k2 ~ "=" ~ v.str;
+            add(api, s);
+            continue;
+        }
+        if (kind == "mixin")
+        {
+            // Mixed-in members are not expanded by `-X`; track the
+            // invocations so dropping one (and its members) is a break.
+            add(api, Sym("mixin", parent ~ ":" ~ name, "public", ["1"]));
+            continue;
+        }
         // Anonymous enums put their members in the enclosing scope.
         if (kind == "enum" && name.length == 0)
         {
@@ -187,12 +246,7 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
             }
             break;
         case "template":
-            string[] ps;
-            if (auto tp = "parameters" in m)
-                foreach (p; tp.array)
-                    ps ~= str(p, "kind") ~ ":" ~ str(p, "name") ~ ":" ~ str(p, "type")
-                        ~ ":" ~ str(p, "deco") ~ ":" ~ (("default" in p) ? "d" : "");
-            s.overloads = [ps.join(",")];
+            s.overloads = [templateSignature(m)];
             break;
         case "variable":
             s.type = str(m, "deco").length ? str(m, "deco") : str(m, "originalType");
@@ -239,7 +293,7 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
 }
 
 /// Run `ldc2 -X` over the source roots that exist under `repo`.
-Api extract(string repo, string compiler = "ldc2")
+Api extract(string repo, string compiler = "ldc2", string triple = "")
 {
     repo = absolutePath(repo);
     string[] imports;
@@ -267,7 +321,7 @@ Api extract(string repo, string compiler = "ldc2")
         files.sort();
         const json = buildPath(tmp, format("api-%s.json", gi));
         auto r = execute([compiler, "-o-", "-X", "-Xf=" ~ json,
-            "-preview=dip1000", "-preview=nosharedaccess"] ~ imports ~ files);
+            "-preview=dip1000", "-preview=nosharedaccess"] ~ (triple.length ? ["-mtriple=" ~ triple] : []) ~ imports ~ files);
         if (r.status != 0)
             throw new Exception(format("%s -X failed in %s:\n%s", compiler, repo, r.output));
         foreach (k, v; normalise(parseJSON(readText(json))))
@@ -378,7 +432,7 @@ string[] compare(Api old, Api neu)
         auto np = k in neu;
         if (np is null)
         {
-            brk(o.path, format("%s removed", o.kind));
+            brk(o.path, o.kind == "mixin" ? "mixin invocation removed" : format("%s removed", o.kind));
             continue;
         }
         auto n = *np;
@@ -395,8 +449,17 @@ string[] compare(Api old, Api neu)
             break;
         case "template":
             foreach (ov; o.overloads)
-                if (!n.overloads.canFind(ov))
-                    brk(o.path, format("template parameters `%s` changed", ov));
+                if (!n.overloads.any!(nv => overloadCompatible(ov, nv)))
+                    brk(o.path, format("template parameters or constraint `%s` changed", show(ov)));
+            break;
+        case "import":
+            foreach (b; o.overloads)
+                if (!n.overloads.canFind(b) && !n.overloads.canFind("*"))
+                    brk(o.path, format("public import no longer re-exports `%s`", b));
+            break;
+        case "mixin":
+            if (n.overloads.length < o.overloads.length)
+                brk(o.path, "mixin invocation removed");
             break;
         case "variable", "alias":
             if (o.type != n.type)
@@ -426,6 +489,21 @@ string[] compare(Api old, Api neu)
     }
     out_.sort();
     return out_;
+}
+
+/// Extra targets whose `version` blocks are compared too (the host is always
+/// compared). Breaks seen only there are tagged with the target.
+immutable string[] extraTargets = ["x86_64-windows-msvc"];
+
+string[] compareTargets(string baselineDir, string repo, string compiler)
+{
+    auto breaks = compare(extract(baselineDir, compiler), extract(repo, compiler));
+    foreach (t; extraTargets)
+        foreach (b; compare(extract(baselineDir, compiler, t), extract(repo, compiler, t)))
+            if (!breaks.canFind(b))
+                breaks ~= b ~ " [" ~ t ~ "]";
+    breaks.sort();
+    return breaks;
 }
 
 // ---------------------------------------------------------------- baselines
@@ -499,7 +577,7 @@ int main(string[] args)
             stderr.writeln("api-compat: need --baseline-dir, --print-baseline-major or --dump");
             return 2;
         }
-        auto breaks = compare(extract(baselineDir, compiler), extract(repo, compiler));
+        auto breaks = compareTargets(baselineDir, repo, compiler);
         foreach (b; breaks)
             writeln(b);
         if (breaks.length)
@@ -522,7 +600,7 @@ int main(string[] args)
 version (unittest)
 {
     /// Compile a one-module `camunda.t` before/after pair and compare.
-    string[] diff(string before, string after)
+    string[] diff(string before, string after, string triple = "")
     {
         Api ex(string src)
         {
@@ -531,7 +609,7 @@ version (unittest)
             scope (exit)
                 rmdirRecurse(dir);
             write(buildPath(dir, "source", "camunda", "t.d"), "module camunda.t;\n" ~ src);
-            return extract(dir);
+            return extract(dir, "ldc2", triple);
         }
 
         return compare(ex(before), ex(after));
@@ -626,7 +704,7 @@ unittest // aliases and templates
 {
     assert(has(diff(q{ alias A = int; }, q{ alias A = long; }), "camunda.t.A: type changed"));
     assert(has(diff(q{ template T(X) { enum T = 1; } }, q{ template T(X, Y) { enum T = 1; } }),
-            "camunda.t.T: template parameters"));
+            "camunda.t.T: template parameters or constraint"));
     // Template members (e.g. the generated operations mixin) carry source text only.
     assert(has(diff(q{ mixin template M() { void op(int a) {} } },
             q{ mixin template M() { void op(string a) {} } }), "camunda.t.M.op"));
@@ -638,4 +716,38 @@ unittest // baseline selection ignores prereleases and other majors
 {
     assert(newestRelease(["v11.0.0-alpha.9", "v8.8.0"], "11") == "");
     assert(newestRelease(["v11.0.0", "v11.2.0", "v11.10.1", "v11.10.0-rc.1", "v12.0.0"], "11") == "11.10.1");
+}
+
+unittest // template defaults, constraints and specialisations
+{
+    assert(diff(q{ template T(X) { enum T = 1; } }, q{ template T(X = int) { enum T = 1; } }) == []);
+    assert(has(diff(q{ template T(X = int) { enum T = 1; } }, q{ template T(X) { enum T = 1; } }),
+            "camunda.t.T: template parameters"));
+    assert(has(diff(q{ template T(X) { enum T = 1; } },
+            q{ template T(X) if (is(X == int)) { enum T = 1; } }), "camunda.t.T: template parameters"));
+    assert(has(diff(q{ template T(X) { enum T = 1; } }, q{ template T(X : int) { enum T = 1; } }),
+            "camunda.t.T: template parameters"));
+}
+
+unittest // public re-exports
+{
+    assert(has(diff(q{ public import std.conv : to, text; }, q{ public import std.conv : to; }),
+            "re-exports `text`"));
+    assert(has(diff(q{ public import std.conv; }, q{ import std.conv; }), "import removed"));
+    assert(diff(q{ public import std.conv : to; }, q{ public import std.conv; }) == []);
+}
+
+unittest // removing a mixin invocation while keeping its template
+{
+    enum tmpl = q{ mixin template M() { void op() {} } };
+    assert(has(diff(tmpl ~ q{ class C { mixin M; } }, tmpl ~ q{ class C { } }),
+            "mixin invocation removed"));
+    assert(diff(tmpl ~ q{ class C { mixin M; } }, tmpl ~ q{ class C { mixin M; } }) == []);
+}
+
+unittest // Windows-only declarations are compared on the Windows target
+{
+    enum before = q{ version (Windows) { struct W { int a; } } };
+    assert(diff(before, "", "") == []);
+    assert(has(diff(before, "", "x86_64-windows-msvc"), "camunda.t.W: struct removed"));
 }

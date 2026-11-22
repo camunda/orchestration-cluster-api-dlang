@@ -410,9 +410,15 @@ These count as breaks:
 - a changed enum member value or enum base type, field or variable type, or
   alias target
 - reordered or removed public struct fields (appending is fine), a changed
-  template parameter list, or a dropped base class or interface
+  template parameter list, specialisation or constraint, or a dropped base
+  class or interface
+- a public import that no longer re-exports a name, or a removed `mixin`
+  invocation (its members disappear from the aggregate)
 
-Additions, and added attributes or default arguments, are not breaks.
+The API is compared for the host target and for Windows
+(`x86_64-windows-msvc`), so `version (Windows)` declarations are covered.
+Additions, and added attributes or default arguments (including template
+parameter defaults), are not breaks.
 
 - **Pull requests to `stable/**`** are compared with their base branch
   (`.github/workflows/api-compat.yml`). A `stable/N` with no `N.x` release
