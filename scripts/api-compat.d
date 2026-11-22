@@ -322,6 +322,11 @@ private string signature(JSONValue f)
         // of the type, so keep the letters and drop the parens.
         core = "text:" ~ text.replace("extern (", "extern_").stripDefaults.stripParamNames;
     }
+    // Staticness is a storage class, not part of the type: record it so a
+    // static method turning into an instance method (or back) is caught.
+    if (auto sc = "storageClass" in f)
+        if (sc.type == JSONType.array && sc.array.any!(x => x.type == JSONType.string && x.str == "static"))
+            core = "static:" ~ core;
     return core ~ "|defaults=" ~ mask;
 }
 
@@ -517,7 +522,8 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
                             ps ~= str(p, "name");
                     shown = "(" ~ ps.join(", ") ~ ") [" ~ str(m, "deco") ~ "]";
                 }
-                s.display[s.overloads[0]] = name ~ " " ~ shown;
+                s.display[s.overloads[0]] = (s.overloads[0].startsWith("static:") ? "static " : "")
+                    ~ name ~ " " ~ shown;
             }
             break;
         case "template":
@@ -724,13 +730,15 @@ private bool splitTextSig(string text, out string[] attrs, out string rest)
 /// Can callers of `old` keep calling `neu` unchanged?
 bool overloadCompatible(string old, string neu)
 {
-    import std.string : lastIndexOf;
+    import std.string : chompPrefix, lastIndexOf;
     const oi = old.lastIndexOf("|defaults=");
     const ni = neu.lastIndexOf("|defaults=");
-    const oCore = old[0 .. oi], nCore = neu[0 .. ni];
+    const oCore = old[0 .. oi].chompPrefix("static:"), nCore = neu[0 .. ni].chompPrefix("static:");
     const oMask = old[oi + 10 .. $], nMask = neu[ni + 10 .. $];
     if (oMask.length != nMask.length)
         return false;
+    if (old.startsWith("static:") != neu.startsWith("static:"))
+        return false; // static <-> instance changes how callers invoke it
     foreach (i; 0 .. oMask.length)
         if (oMask[i] == '1' && nMask[i] != '1')
             return false; // a default argument was removed
@@ -823,7 +831,11 @@ string[] compare(Api old, Api neu)
             continue;
         }
         auto n = *np;
-        if (o.protection != n.protection && !(o.protection == "protected"
+        // Functions/constructors are checked per overload below: the symbol's
+        // own protection is just the first declaration's, so reordering
+        // mixed-visibility overloads must not count as narrowing.
+        const perOverload = o.kind == "function" || o.kind == "constructor";
+        if (!perOverload && o.protection != n.protection && !(o.protection == "protected"
                 && n.protection != "protected"))
             brk(o.path, format("visibility narrowed from %s to %s", o.protection, n.protection));
         switch (o.kind)
@@ -1308,4 +1320,22 @@ unittest // wildcard imports do not cover renamed bindings
     assert(has(diff(q{ public import std.conv : convert = to; }, q{ public import std.conv; }),
             "no longer re-exports `convert=to`"));
     assert(diff(q{ public import std.conv : to; }, q{ public import std.conv; }) == []);
+}
+
+unittest // reordering mixed-visibility overloads is not a visibility change
+{
+    assert(diff(q{ class C { void f() {} protected void f(int a) {} } },
+            q{ class C { protected void f(int a) {} void f() {} } }) == []);
+}
+
+unittest // static <-> instance method changes are breaks
+{
+    assert(has(diff(q{ class C { static C make() { return null; } } },
+            q{ class C { C make() { return null; } } }), "camunda.t.C.make: function overload"));
+    assert(has(diff(q{ struct S { static S make() { return S.init; } } },
+            q{ struct S { S make() { return S.init; } } }), "camunda.t.S.make: function overload"));
+    assert(has(diff(q{ struct S { S make() { return S.init; } } },
+            q{ struct S { static S make() { return S.init; } } }), "camunda.t.S.make: function overload"));
+    assert(diff(q{ struct S { static S make() { return S.init; } } },
+            q{ struct S { static S make() { return S.init; } } }) == []);
 }
