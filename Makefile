@@ -1,6 +1,6 @@
 .PHONY: help generate generate-local bundle-spec test lint fmt-check check build examples \
 	sync-readme sync-readme-check config-reference config-reference-check \
-	example-coverage docs-md repair-release test-repair-release typecheck-windows check-windows
+	example-coverage docs-md api-compat repair-release test-repair-release typecheck-windows check-windows
 
 # Repo tooling is D, run as dub single-file programs (no Python needed).
 SCRIPT = dub run -q --single
@@ -20,6 +20,7 @@ help:
 	@echo "  make config-reference         Inject CAMUNDA_* table into README.md"
 	@echo "  make config-reference-check   CI: fail if the table drifted"
 	@echo "  make example-coverage         Every spec operation has a region in examples/"
+	@echo "  make api-compat [BASE=ref]    Public-API breaks vs a git ref (default origin/main; e.g. BASE=v11.0.0)"
 	@echo "  make docs-md                  Generate docs-md/d-sdk/ for camunda-docs"
 	@echo "  make repair-release TAG=vX.Y.Z  Repair a half-finished release (note + GitHub Release)"
 	@echo "  make test-repair-release      Run the repair-release.sh bash test harness"
@@ -40,6 +41,7 @@ test:
 	dub test :runtime
 	dub test :openapi
 	dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
+	dub run -q --build=unittest --single scripts/api-compat.d -- --DRT-testmode=test-only
 
 lint:
 	./scripts/check-safe.sh
@@ -84,6 +86,18 @@ config-reference-check:
 
 example-coverage:
 	$(SCRIPT) scripts/check-example-coverage.d
+
+# Public-API compatibility (see README "API compatibility"). Compares the
+# working tree with BASE checked out into a temporary git worktree.
+# Exit 1 means breaking changes; 2 means the check itself failed.
+BASE ?= origin/main
+API_COMPAT_BIN = scripts/.dub/bin/api-compat
+api-compat:
+	dub build -q --single scripts/api-compat.d
+	@set -e; tmp=$$(mktemp -d); \
+	trap 'git worktree remove --force "$$tmp/base" >/dev/null 2>&1; rm -rf "$$tmp"' EXIT; \
+	git worktree add -q --detach "$$tmp/base" "$(BASE)"; \
+	$(API_COMPAT_BIN) --baseline-dir "$$tmp/base"
 
 docs-md:
 	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links
