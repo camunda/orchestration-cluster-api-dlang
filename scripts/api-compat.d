@@ -58,7 +58,7 @@ import std.format : format;
 import std.json : JSONValue, JSONType, parseJSON;
 import std.path : buildPath, absolutePath;
 import std.process : execute;
-import std.regex : matchFirst, ctRegex;
+import std.regex : matchAll, matchFirst, ctRegex;
 import std.stdio : writeln, stderr;
 import std.string : strip, splitLines;
 
@@ -84,6 +84,7 @@ struct Sym
     string[] modifiers; /// classes: `final` / `abstract`
     string[] required;  /// interfaces/classes: abstract members (name + signature)
     string[string] display; /// overload signature -> source-like text for messages
+    string[string] overloadProtection; /// overload signature -> its own visibility
 }
 
 alias Api = Sym[string]; // key: "<kind> <path>"
@@ -126,11 +127,26 @@ private void add(ref Api api, Sym s)
     if (auto existing = k in api)
     {
         existing.overloads ~= s.overloads;
+        foreach (k2, v; s.overloadProtection)
+            if (auto cur = k2 in existing.overloadProtection)
+            {
+                // Identical signatures: the most visible declaration counts.
+                if (visRank(v) > visRank(*cur))
+                    *cur = v;
+            }
+            else
+                existing.overloadProtection[k2] = v;
         foreach (k2, v; s.display)
             existing.display[k2] = v;
         return;
     }
     api[k] = s;
+}
+
+/// Visibility ordering: public/export > protected.
+private int visRank(string protection)
+{
+    return protection == "protected" ? 1 : 2;
 }
 
 private bool visible(string protection)
@@ -358,17 +374,79 @@ private string[] classModifiers(string src, JSONValue m)
     off = off + (col > 0 ? col - 1 : 0);
     if (off > src.length)
         return [];
-    size_t start = off;
-    while (start > 0 && !";{}".canFind(src[start - 1]))
-        start--;
     import std.regex : replaceAll;
-    // Doc comments may mention the words; drop comments first.
-    const seg = src[start .. off].replaceAll(regex(`//[^\n]*|/\*[\s\S]*?\*/|/\+[\s\S]*?\+/`), " ");
+    // Doc comments may mention the words or braces; blank comments first,
+    // keeping offsets (newlines preserved, everything else a space).
+    char[] buf = src.dup;
+    foreach (cm; matchAll(src, regex(`//[^\n]*|/\*[\s\S]*?\*/|/\+[\s\S]*?\+/`)))
+    {
+        const b = cm.pre.length;
+        foreach (i; b .. b + cm.hit.length)
+            if (buf[i] != '\n')
+                buf[i] = ' ';
+    }
+    const clean = cast(string) buf.idup;
+    // The attributes written directly before `class` (previous `;`/`{`/`}`).
+    size_t start = off;
+    while (start > 0 && !";{}".canFind(clean[start - 1]))
+        start--;
+    const seg = clean[start .. off];
+    // Labels (`final:`) stay active for the rest of the enclosing scope, so
+    // collect the scope's own text (nested bodies skipped) back to its `{`.
+    string scopeText;
+    int depth;
+    for (size_t i = start; i > 0; i--)
+    {
+        const c = clean[i - 1];
+        if (c == '}')
+            depth++;
+        else if (c == '{')
+        {
+            if (depth == 0)
+                break;
+            depth--;
+        }
+        else if (depth == 0)
+            scopeText = c ~ scopeText;
+    }
     string[] mods;
     foreach (w; ["final", "abstract"])
-        if (!matchFirst(seg, regex(`(^|[^\w])` ~ w ~ `([^\w]|$)`)).empty)
+        if (!matchFirst(seg, regex(`(^|[^\w])` ~ w ~ `([^\w]|$)`)).empty
+                || !matchFirst(scopeText, regex(`(^|[^\w])` ~ w ~ `\s*:`)).empty)
             mods ~= w;
     return mods;
+}
+
+/// `-X` flattens an anonymous enum's members into the enclosing scope and
+/// drops the enum's base type. Read it from the source: the text between the
+/// `enum` keyword and the `{` that opens the member's enum body.
+private string anonymousEnumBase(string src, JSONValue m)
+{
+    import std.regex : regex, replaceAll;
+    if (!src.length || "line" !in m || "char" !in m)
+        return "";
+    const line = m["line"].integer, col = m["char"].integer;
+    size_t off;
+    long cur = 1;
+    while (off < src.length && cur < line)
+        if (src[off++] == '\n')
+            cur++;
+    off = off + (col > 0 ? col - 1 : 0);
+    if (off > src.length)
+        return "";
+    size_t brace = off;
+    while (brace > 0 && src[brace - 1] != '{')
+        brace--;
+    if (brace == 0)
+        return "";
+    size_t start = brace - 1;
+    while (start > 0 && !";{}".canFind(src[start - 1]))
+        start--;
+    const head = src[start .. brace - 1].replaceAll(regex(`//[^\n]*|/\*[\s\S]*?\*/|/\+[\s\S]*?\+/`), " ");
+    auto c = matchFirst(head, regex(`(^|[^\w])enum\s*:\s*([^{]*)$`));
+    if (c.empty)
+        return "";
+    return c[2].replaceAll(regex(`\s+`), " ").strip;
 }
 
 private void walk(ref Api api, string parent, JSONValue members, string parentKind, string src)
@@ -420,6 +498,7 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
         {
         case "function", "constructor":
             s.overloads = [signature(m)];
+            s.overloadProtection[s.overloads[0]] = s.protection;
             {
                 auto shown = str(m, "originalType");
                 if (!shown.length)
@@ -460,6 +539,10 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
             break;
         case "enum member":
             s.value = str(m, "value");
+            // Members of an anonymous enum are flattened into the enclosing
+            // scope; keep that enum's base type as the member's type.
+            if (parentKind != "enum")
+                s.type = anonymousEnumBase(src, m);
             break;
         case "class", "interface":
             if (str(m, "base").length)
@@ -747,9 +830,16 @@ string[] compare(Api old, Api neu)
         {
         case "function", "constructor":
             foreach (ov; o.overloads)
+            {
+                const need = visRank(o.overloadProtection.get(ov, o.protection));
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv)))
                     brk(o.path, format("%s overload `%s` changed or removed", o.kind,
                             (ov in o.display) ? o.display[ov] : show(ov)));
+                else if (!n.overloads.any!(nv => overloadCompatible(ov, nv)
+                        && visRank(n.overloadProtection.get(nv, n.protection)) >= need))
+                    brk(o.path, format("%s overload `%s` visibility narrowed", o.kind,
+                            (ov in o.display) ? o.display[ov] : show(ov)));
+            }
             break;
         case "template":
             foreach (ov; o.overloads)
@@ -758,7 +848,8 @@ string[] compare(Api old, Api neu)
             break;
         case "import":
             foreach (b; o.overloads)
-                if (!n.overloads.canFind(b) && !n.overloads.canFind("*"))
+                // A wildcard import re-exports names, never renamed bindings.
+                if (!n.overloads.canFind(b) && !(n.overloads.canFind("*") && !b.canFind('=')))
                     brk(o.path, format("public import no longer re-exports `%s`", b));
             break;
         case "mixin":
@@ -776,6 +867,8 @@ string[] compare(Api old, Api neu)
         case "enum member":
             if (o.value != n.value && !metadataEnumValue(o.path))
                 brk(o.path, format("value changed from %s to %s", o.value, n.value));
+            if (o.type != n.type)
+                brk(o.path, format("type changed from `%s` to `%s`", o.type, n.type));
             break;
         case "struct", "union":
             if (o.fields.length > n.fields.length || n.fields[0 .. o.fields.length] != o.fields)
@@ -1184,4 +1277,35 @@ unittest // defaults containing literals with separators/delimiters are stripped
     assert(stripDefaults(`void(char c = '\'', int b)`) == `void(char c, int b)`);
     assert(stripDefaults("void(string a = `x,)`, int b)") == `void(string a, int b)`);
     assert(stripDefaults(`void(int[] a = [1, 2], int b)`) == `void(int[] a, int b)`);
+}
+
+unittest // visibility is tracked per overload
+{
+    assert(has(diff(q{ class C { void f() {} void f(int a) {} } },
+            q{ class C { void f() {} protected void f(int a) {} } }), "camunda.t.C.f: function overload"));
+    assert(diff(q{ class C { void f() {} protected void f(int a) {} } },
+            q{ class C { void f() {} void f(int a) {} } }) == []);
+}
+
+unittest // storage-class labels apply to every later declaration in the scope
+{
+    assert(has(diff(q{ final class A {} class B {} }, q{ final: class A {} class B {} }),
+            "camunda.t.B: class made final"));
+    assert(has(diff(q{ class A {} interface I {} class B {} },
+            q{ abstract: class A {} interface I {} class B {} }), "camunda.t.B: class made abstract"));
+    // A label inside a nested body does not leak out.
+    assert(diff(q{ class A { } class B {} }, q{ class A { final: void f() {} } class B {} }) == []);
+}
+
+unittest // anonymous enum members keep their base type
+{
+    assert(has(diff(q{ enum : uint { x = 1 } }, q{ enum : ulong { x = 1 } }), "camunda.t.x: type changed"));
+    assert(diff(q{ enum : uint { x = 1 } }, q{ enum : uint { x = 1, y = 2 } }) == []);
+}
+
+unittest // wildcard imports do not cover renamed bindings
+{
+    assert(has(diff(q{ public import std.conv : convert = to; }, q{ public import std.conv; }),
+            "no longer re-exports `convert=to`"));
+    assert(diff(q{ public import std.conv : to; }, q{ public import std.conv; }) == []);
 }
