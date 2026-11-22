@@ -1,3 +1,10 @@
+# [11.0.0-alpha.14](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.13...v11.0.0-alpha.14) (2026-11-22)
+
+
+### Features
+
+* **gen:** honour optionalTenantIdInBody from bundler 2.5.1 metadata ([#48](https://github.com/camunda/orchestration-cluster-api-dlang/issues/48)) ([10628b0](https://github.com/camunda/orchestration-cluster-api-dlang/commit/10628b08b33e07a0b734baf9c8dacf25660b748f)), closes [#40](https://github.com/camunda/orchestration-cluster-api-dlang/issues/40)
+
 # [11.0.0-alpha.13](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.12...v11.0.0-alpha.13) (2026-11-21)
 
 
