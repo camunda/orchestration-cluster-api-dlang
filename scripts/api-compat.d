@@ -85,6 +85,7 @@ struct Sym
     string[] required;  /// interfaces/classes: abstract members (name + signature)
     string[string] display; /// overload signature -> source-like text for messages
     string[string] overloadProtection; /// overload signature -> its own visibility
+    bool overridable;   /// functions: a non-final class/interface method a subclass may override
 }
 
 alias Api = Sym[string]; // key: "<kind> <path>"
@@ -127,6 +128,7 @@ private void add(ref Api api, Sym s)
     if (auto existing = k in api)
     {
         existing.overloads ~= s.overloads;
+        existing.overridable |= s.overridable; // conservative across overloads
         foreach (k2, v; s.overloadProtection)
             if (auto cur = k2 in existing.overloadProtection)
             {
@@ -504,6 +506,11 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
         case "function", "constructor":
             s.overloads = [signature(m)];
             s.overloadProtection[s.overloads[0]] = s.protection;
+            if (kind == "function" && (parentKind == "class" || parentKind == "interface"))
+            {
+                auto fsc = "storageClass" in m;
+                s.overridable = fsc is null || !fsc.array.any!(x => x.str == "final" || x.str == "static");
+            }
             {
                 auto shown = str(m, "originalType");
                 if (!shown.length)
@@ -728,7 +735,9 @@ private bool splitTextSig(string text, out string[] attrs, out string rest)
 }
 
 /// Can callers of `old` keep calling `neu` unchanged?
-bool overloadCompatible(string old, string neu)
+/// `overridable`: the old member is a virtual class/interface method, so a
+/// subclass overriding it breaks if it turns static.
+bool overloadCompatible(string old, string neu, bool overridable = false)
 {
     import std.string : chompPrefix, lastIndexOf;
     const oi = old.lastIndexOf("|defaults=");
@@ -737,8 +746,12 @@ bool overloadCompatible(string old, string neu)
     const oMask = old[oi + 10 .. $], nMask = neu[ni + 10 .. $];
     if (oMask.length != nMask.length)
         return false;
-    if (old.startsWith("static:") != neu.startsWith("static:"))
-        return false; // static <-> instance changes how callers invoke it
+    // A static member stays callable through an instance, so instance ->
+    // static only breaks overriders; static -> instance breaks `T.f()` calls.
+    if (old.startsWith("static:") && !neu.startsWith("static:"))
+        return false;
+    if (!old.startsWith("static:") && neu.startsWith("static:") && overridable)
+        return false;
     foreach (i; 0 .. oMask.length)
         if (oMask[i] == '1' && nMask[i] != '1')
             return false; // a default argument was removed
@@ -844,10 +857,10 @@ string[] compare(Api old, Api neu)
             foreach (ov; o.overloads)
             {
                 const need = visRank(o.overloadProtection.get(ov, o.protection));
-                if (!n.overloads.any!(nv => overloadCompatible(ov, nv)))
+                if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)))
                     brk(o.path, format("%s overload `%s` changed or removed", o.kind,
                             (ov in o.display) ? o.display[ov] : show(ov)));
-                else if (!n.overloads.any!(nv => overloadCompatible(ov, nv)
+                else if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)
                         && visRank(n.overloadProtection.get(nv, n.protection)) >= need))
                     brk(o.path, format("%s overload `%s` visibility narrowed", o.kind,
                             (ov in o.display) ? o.display[ov] : show(ov)));
@@ -1328,14 +1341,22 @@ unittest // reordering mixed-visibility overloads is not a visibility change
             q{ class C { protected void f(int a) {} void f() {} } }) == []);
 }
 
-unittest // static <-> instance method changes are breaks
+unittest // static -> instance breaks; instance -> static breaks only overriders
 {
     assert(has(diff(q{ class C { static C make() { return null; } } },
             q{ class C { C make() { return null; } } }), "camunda.t.C.make: function overload"));
     assert(has(diff(q{ struct S { static S make() { return S.init; } } },
             q{ struct S { S make() { return S.init; } } }), "camunda.t.S.make: function overload"));
-    assert(has(diff(q{ struct S { S make() { return S.init; } } },
-            q{ struct S { static S make() { return S.init; } } }), "camunda.t.S.make: function overload"));
+    // instance -> static: callers via an instance still compile ...
+    assert(diff(q{ struct S { S make() { return S.init; } } },
+            q{ struct S { static S make() { return S.init; } } }) == []);
+    assert(diff(q{ class C { final C make() { return null; } } },
+            q{ class C { static C make() { return null; } } }) == []);
+    // ... but overriders of a virtual method break.
+    assert(has(diff(q{ class C { C make() { return null; } } },
+            q{ class C { static C make() { return null; } } }), "camunda.t.C.make: function overload"));
+    assert(has(diff(q{ interface I { I make(); } },
+            q{ interface I { static I make() { return null; } } }), "camunda.t.I.make: function overload"));
     assert(diff(q{ struct S { static S make() { return S.init; } } },
             q{ struct S { static S make() { return S.init; } } }) == []);
 }
