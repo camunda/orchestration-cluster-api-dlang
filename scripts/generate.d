@@ -918,7 +918,7 @@ J resolveSchema(Spec spec, J schema)
 
 /// How the effective default tenant applies to an operation's JSON body
 /// (the Camunda Java client's rule, #14 / #36 / #40). Read from the bundler's
-/// `spec-metadata.json` (`optionalTenantIdInBodyVariants`), never from a list
+/// `spec-metadata.json` (`optionalTenantIdInBody`, `optionalTenantIdInBodyVariants`), never from a list
 /// of operation ids: a body schema -- or a union variant -- with an optional
 /// top-level `tenantId` gets the default tenant when the caller leaves it unset.
 struct TenantInjection
@@ -932,6 +932,11 @@ struct TenantInjection
 
 TenantInjection defaultTenantInjection(Spec spec, J op)
 {
+    // `optionalTenantIdInBody`: the whole body (including an inline body that
+    // has no variant name, e.g. createDeployment) has an optional `tenantId`.
+    auto whole = op.get("optionalTenantIdInBody");
+    if (whole !is null && whole.kind == Kind.bool_ && whole.boolean)
+        return TenantInjection(true);
     bool[string] tenantVariants;
     foreach (v; itemsOf(op.get("optionalTenantIdInBodyVariants")))
         tenantVariants[pyStr(v)] = true;
@@ -1517,6 +1522,10 @@ unittest
     auto allOp = parseJson(`{"operationId": "evalThing",
         "optionalTenantIdInBodyVariants": ["A", "B"], "requestBodyUnionRefs": ["A", "B"]}`);
     assert(defaultTenantInjection(spec, allOp) == TenantInjection(true));
+    // An inline body (no variant name) is covered by `optionalTenantIdInBody`.
+    auto inlineOp = parseJson(`{"operationId": "deployThing", "optionalTenantIdInBody": true,
+        "optionalTenantIdInBodyVariants": [], "requestBodyUnionRefs": []}`);
+    assert(defaultTenantInjection(spec, inlineOp) == TenantInjection(true));
 }
 
 unittest
@@ -1552,17 +1561,22 @@ unittest
             assert(rendered.canFind("this.withDefaultJobTenants"), id);
             continue;
         }
-        const optTenant = itemsOf(op.get("optionalTenantIdInBodyVariants")).length > 0;
+        auto whole = op.get("optionalTenantIdInBody");
+        const optTenant = itemsOf(op.get("optionalTenantIdInBodyVariants")).length > 0
+            || (whole !is null && whole.kind == Kind.bool_ && whole.boolean);
         assert(defaultTenantInjection(spec, op).inject == optTenant, id);
         // The generated facade must actually apply the injection decision.
-        assert(rendered.canFind("this.withDefaultTenant") == optTenant, id);
+        // Multipart bodies (createDeployment) apply it in the hand-written
+        // CamundaClient method instead (deployResources).
+        if (!isMultipart(op))
+            assert(rendered.canFind("this.withDefaultTenant") == optTenant, id);
         if (optTenant)
             injected ~= id;
     }
     assert(jobTenants == ["activateJobs"]);
     foreach (id; ["createProcessInstance", "publishMessage", "correlateMessage",
             "broadcastSignal", "evaluateDecision", "evaluateExpression",
-            "evaluateConditionals", "suspendProcessDefinitions", "resumeProcessDefinitions"])
+            "evaluateConditionals", "createDeployment", "suspendProcessDefinitions", "resumeProcessDefinitions"])
         assert(injected.canFind(id), id);
     foreach (op; spec.operations)
         if (op.get("operationId").orS("") == "suspendProcessDefinitions"
