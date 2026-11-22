@@ -147,25 +147,26 @@ private bool isWordChar(char c)
 }
 
 /// Strip the parameter name that trails a type in a parameter list. A name
-/// is a word preceded by whitespace; words glued to type punctuation
-/// (`int[]`, `void delegate()`, `int[3]`) are part of the type. The last
-/// word before `=` (a default) is always the name.
+/// is the last word of a parameter, preceded by whitespace and by a type
+/// token in the same parameter; storage classes (`ref`, `const`, ...) are
+/// not types, so `ref int` keeps `int`. Words glued to type punctuation
+/// (`int[]`, `void delegate()`, `int[3]`) are part of the type, and an
+/// unnamed parameter (`void(int, long)`) keeps its type. The last word
+/// before `=` (a default) is always the name.
 private string stripParamNames(string s)
 {
+    import std.algorithm.searching : canFind;
+
+    static immutable storageClasses = ["ref", "out", "in", "lazy", "scope",
+        "return", "const", "immutable", "shared", "inout", "auto", "final"];
     string outp;
     size_t wordStart;
     size_t wordEnd;
     bool inWord;
-    void flushWord(bool isName)
-    {
-        if (!inWord)
-            return;
-        if (!isName)
-            outp ~= s[wordStart .. wordEnd];
-        inWord = false;
-    }
+    bool spaceBefore; // whitespace directly before the current word
+    bool typeSeen; // a type token precedes the current word in its parameter
     int depth;
-    bool lastSpace = true; // a name never leads a parameter
+    bool lastSpace;
     foreach (i, c; s)
     {
         const boundary = depth == 1 && (c == ',' || c == '=');
@@ -175,29 +176,45 @@ private string stripParamNames(string s)
             {
                 wordStart = i;
                 inWord = true;
+                spaceBefore = lastSpace;
             }
             wordEnd = i + 1;
         }
-        if (!isWordChar(c) || boundary)
+        if (inWord && (!isWordChar(c) || boundary))
         {
-            // A word at parameter depth followed by `,` or `=` is a name; so
-            // is a whitespace-preceded word before the closing `)` of the
-            // parameter list (`void(int a)`), unlike a word glued to type
-            // punctuation (`void(int[3])`). A `)` that closes a nested type
-            // (`void delegate()`) never ends a name.
+            const word = s[wordStart .. wordEnd];
+            // A `)` that closes a nested type (`void delegate()`) never
+            // ends a name; only the parameter list's own `)` does.
             const closesParam = c == ')' && depth == 1
                 && (i + 1 >= s.length || s[i + 1] == ' ' || s[i + 1] == ',');
-            flushWord(depth == 1 && (lastSpace || c == '=' || c == ',' || closesParam));
+            const ends = c == ',' || closesParam;
+            const isName = depth == 1
+                && (c == '=' || (ends && spaceBefore && typeSeen));
+            if (!isName)
+                outp ~= word;
+            if (depth >= 1 && !storageClasses.canFind(word))
+                typeSeen = true;
+            inWord = false;
         }
+        else if (depth >= 1 && !isWordChar(c) && c != ' ' && c != ','
+            && c != '(' && c != ')')
+            typeSeen = true;
         if (boundary || !inWord)
             outp ~= c;
         if (c == '(' || c == '[')
+        {
             depth++;
+            if (depth == 1)
+                typeSeen = false;
+        }
         else if (c == ')' || c == ']')
             depth--;
+        if (depth == 1 && c == ',')
+            typeSeen = false;
         lastSpace = c == ' ';
     }
-    flushWord(false);
+    if (inWord)
+        outp ~= s[wordStart .. wordEnd];
     return outp;
 }
 
@@ -1096,6 +1113,20 @@ unittest // parameter names are not part of a signature
     // The type itself is still compared.
     assert(has(diff(q{ mixin template M() { void op(int a) {} } },
             q{ mixin template M() { void op(long a) {} } }), "camunda.t.M.op"));
+    // Unnamed parameters keep their types (a bare type is never a name).
+    assert(has(diff(q{ mixin template M() { void op(int) {} } },
+            q{ mixin template M() { void op(long) {} } }), "camunda.t.M.op"));
+    assert(has(diff(q{ mixin template M() { void op(int, long) {} } },
+            q{ mixin template M() { void op(string, long) {} } }), "camunda.t.M.op"));
+    assert(has(diff(q{ mixin template M() { void op(int, long) {} } },
+            q{ mixin template M() { void op(int, string) {} } }), "camunda.t.M.op"));
+    assert(has(diff(q{ mixin template M() { void op(ref int) {} } },
+            q{ mixin template M() { void op(ref long) {} } }), "camunda.t.M.op"));
+    assert(has(diff(q{ mixin template M() { void op(const int) {} } },
+            q{ mixin template M() { void op(const long) {} } }), "camunda.t.M.op"));
+    // Named storage-class parameters still treat a rename as compatible.
+    assert(diff(q{ mixin template M() { void op(ref int a, const long b) {} } },
+            q{ mixin template M() { void op(ref int c, const long d) {} } }) == []);
 }
 
 unittest // added defaults on required members are compatible
