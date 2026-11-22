@@ -156,6 +156,25 @@ When a change modifies `scripts/generate.d` **and** that change alters
 Conventional Commits. Use `fix` only for user-facing bug fixes; use `chore`
 for review-comment fix-ups and regeneration commits.
 
+## Shared CI (camunda/sdk-infra)
+
+- `ci.yml` runs `sdk-commitlint.yml` (rules from the root `commitlint.config.cjs`) and
+  `sdk-breaking-change-guard.yml` on PRs. A `BREAKING CHANGE:` marker fails the
+  PR unless it carries the `breaking-change-approved` label.
+- `issue-labels.yml` turns `Type:` / `Found-by:` / `Affects:` / `Severity:` body
+  lines into labels.
+- `publish.yml` runs `sdk-spec-ref-guard.yml`: the `SPEC_REF_OVERRIDE` repo
+  variable needs `SPEC_REF_OVERRIDE_ACK=true` and an unexpired
+  `SPEC_REF_OVERRIDE_EXPIRES`.
+
+### Backporting to stable branches
+
+Label a PR `backport stable/<N>` (before or after merge), or comment `/backport`
+on a merged PR. `backport.yml` calls `sdk-backport.yml`, which reads
+`.github/backport.yml` and `.github/actions/codegen-setup` from the **target**
+branch. Keep a copy on `main` and every live `stable/N`, and list a new
+generated `examples/<tag>.d` there before you backport the change that adds it.
+
 ## Releases
 
 `main` publishes **11.x-alpha** via semantic-release (Camunda 8.11 / next).
