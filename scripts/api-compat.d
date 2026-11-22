@@ -20,7 +20,8 @@ current tree. It reports changes that can stop customer code from compiling:
     literals depend on the order); appending fields is fine
   - a changed template parameter list, specialisation or constraint, or a
     removed template default (adding one is fine)
-  - a dropped base class / interface
+  - a dropped base class / interface, a class made `final` or `abstract`, or
+    a new abstract (required) member on an existing interface or class
   - a public import that no longer re-exports a name, or a removed `mixin`
     invocation (which drops the members it mixed in)
 
@@ -77,6 +78,8 @@ struct Sym
     string value;       /// enum members
     string[] fields;    /// structs/unions: public instance fields in layout order
     string[] bases;     /// classes/interfaces: base class + interfaces
+    string[] modifiers; /// classes: `final` / `abstract`
+    string[] required;  /// interfaces/classes: abstract members (name + signature)
     string[string] display; /// overload signature -> source-like text for messages
 }
 
@@ -97,7 +100,11 @@ Api normalise(JSONValue modules)
             continue;
         add(api, Sym("module", name, "public"));
         if (auto mem = "members" in m)
-            walk(api, name, *mem, "module");
+            {
+            const file = str(m, "file");
+            const src = file.length && exists(file) ? readText(file) : "";
+            walk(api, name, *mem, "module", src);
+        }
     }
     return api;
 }
@@ -181,7 +188,38 @@ private string templateSignature(JSONValue t)
     return "template:(" ~ ps.join(",") ~ ") if(" ~ str(t, "constraint") ~ ")|defaults=" ~ mask;
 }
 
-private void walk(ref Api api, string parent, JSONValue members, string parentKind)
+/// `final` / `abstract` on a class declaration. `-X` does not record them, so
+/// read the storage classes written before `class` in the source (back to the
+/// previous `;`, `{` or `}`), which covers `final class C` and `abstract:`
+/// labels in the same scope segment.
+private string[] classModifiers(string src, JSONValue m)
+{
+    import std.regex : regex;
+    if (!src.length || "line" !in m || "char" !in m)
+        return [];
+    const line = m["line"].integer, col = m["char"].integer;
+    size_t off;
+    long cur = 1;
+    while (off < src.length && cur < line)
+        if (src[off++] == '\n')
+            cur++;
+    off = off + (col > 0 ? col - 1 : 0);
+    if (off > src.length)
+        return [];
+    size_t start = off;
+    while (start > 0 && !";{}".canFind(src[start - 1]))
+        start--;
+    import std.regex : replaceAll;
+    // Doc comments may mention the words; drop comments first.
+    const seg = src[start .. off].replaceAll(regex(`//[^\n]*|/\*[\s\S]*?\*/|/\+[\s\S]*?\+/`), " ");
+    string[] mods;
+    foreach (w; ["final", "abstract"])
+        if (!matchFirst(seg, regex(`(^|[^\w])` ~ w ~ `([^\w]|$)`)).empty)
+            mods ~= w;
+    return mods;
+}
+
+private void walk(ref Api api, string parent, JSONValue members, string parentKind, string src)
 {
     string[] fieldOrder;
     long[] fieldOffsets;
@@ -219,7 +257,7 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
         if (kind == "enum" && name.length == 0)
         {
             if (auto mem = "members" in m)
-                walk(api, parent, *mem, parentKind);
+                walk(api, parent, *mem, parentKind, src);
             continue;
         }
         if (name.length == 0 || name.startsWith("__"))
@@ -271,13 +309,26 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
             if (auto ifs = "interfaces" in m)
                 foreach (i; ifs.array)
                     s.bases ~= i.str;
+            if (kind == "class")
+                s.modifiers = classModifiers(src, m);
+            if (auto mem = "members" in m)
+                foreach (f; mem.array)
+                    if (str(f, "kind") == "function" && visible(str(f, "protection")))
+                        if (auto sc = "storageClass" in f)
+                            if (sc.array.any!(x => x.str == "abstract")
+                                    && !sc.array.any!(x => x.str == "final" || x.str == "static"))
+                                s.required ~= str(f, "name") ~ " " ~ signature(f);
+            s.required.sort();
+            if (kind == "class" && s.required.length && !s.modifiers.canFind("abstract"))
+                s.modifiers ~= "abstract";
+            s.modifiers.sort();
             break;
         default:
             break;
         }
         add(api, s);
         if (auto mem = "members" in m)
-            walk(api, path, *mem, kind);
+            walk(api, path, *mem, kind, src);
     }
     if (parentKind == "struct" || parentKind == "union")
     {
@@ -370,6 +421,65 @@ private bool splitFuncDeco(string deco, out string prefix, out string[] attrs, o
     return true;
 }
 
+/// Source-text counterpart of `splitFuncDeco` for template members: pull the
+/// function attributes outside the parameter list (e.g. `nothrow @safe
+/// void(int a)`) into mangle codes and return the remaining text.
+private bool splitTextSig(string text, out string[] attrs, out string rest)
+{
+    immutable string[string] codes = ["pure": "Na", "nothrow": "Nb", "ref": "Nc",
+        "@property": "Nd", "@trusted": "Ne", "@safe": "Nf", "@nogc": "Ni",
+        "return": "Nj", "scope": "Nl", "@live": "Nm", "@system": ""];
+    string[] kept;
+    size_t i;
+    int depth;
+    bool sawParams;
+    while (i < text.length)
+    {
+        const c = text[i];
+        if (c == ' ')
+        {
+            i++;
+            continue;
+        }
+        if (depth == 0 && (c == '@' || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
+        {
+            size_t j = i + 1;
+            while (j < text.length && (text[j] == '_' || (text[j] >= 'a' && text[j] <= 'z')
+                    || (text[j] >= 'A' && text[j] <= 'Z') || (text[j] >= '0' && text[j] <= '9')))
+                j++;
+            const w = text[i .. j];
+            if (auto code = w in codes)
+            {
+                if ((*code).length && !attrs.canFind(*code))
+                    attrs ~= *code;
+            }
+            else
+                kept ~= w;
+            i = j;
+            continue;
+        }
+        size_t j = i;
+        while (j < text.length)
+        {
+            const d = text[j];
+            if (d == '(' || d == '[')
+                depth++;
+            else if (d == ')' || d == ']')
+                depth--;
+            j++;
+            if (depth == 0 && (d == ')' || d == ']' || j >= text.length || text[j] == ' '))
+                break;
+        }
+        if (text[i] == '(')
+            sawParams = true;
+        kept ~= text[i .. j];
+        i = j;
+    }
+    attrs.sort();
+    rest = kept.join(" ");
+    return sawParams;
+}
+
 /// Can callers of `old` keep calling `neu` unchanged?
 bool overloadCompatible(string old, string neu)
 {
@@ -387,7 +497,14 @@ bool overloadCompatible(string old, string neu)
         return true;
     string op, orest, np, nrest;
     string[] oa, na;
-    if (!splitFuncDeco(oCore, op, oa, orest) || !splitFuncDeco(nCore, np, na, nrest))
+    if (oCore.startsWith("text:") && nCore.startsWith("text:"))
+    {
+        // Template members carry source text only: map the outer function
+        // attributes to their mangle codes so the rules below apply.
+        if (!splitTextSig(oCore[5 .. $], oa, orest) || !splitTextSig(nCore[5 .. $], na, nrest))
+            return false;
+    }
+    else if (!splitFuncDeco(oCore, op, oa, orest) || !splitFuncDeco(nCore, np, na, nrest))
         return false;
     if (op != np || orest != nrest)
         return false;
@@ -482,6 +599,14 @@ string[] compare(Api old, Api neu)
             foreach (b; o.bases)
                 if (!n.bases.canFind(b))
                     brk(o.path, format("no longer derives from %s", b));
+            foreach (mod; n.modifiers)
+                if (!o.modifiers.canFind(mod))
+                    brk(o.path, format("class made %s", mod));
+            // Customer implementations of an existing interface / abstract
+            // class do not provide newly required members.
+            foreach (r; n.required)
+                if (!o.required.canFind(r))
+                    brk(o.path, format("new required (abstract) member `%s`", r));
             break;
         default:
             break;
@@ -748,6 +873,53 @@ unittest // removing a mixin invocation while keeping its template
 unittest // Windows-only declarations are compared on the Windows target
 {
     enum before = q{ version (Windows) { struct W { int a; } } };
-    assert(diff(before, "", "") == []);
+    // The host build only sees `version (Windows)` code on Windows.
+    version (Windows)
+        assert(has(diff(before, "", ""), "camunda.t.W: struct removed"));
+    else
+        assert(diff(before, "", "") == []);
     assert(has(diff(before, "", "x86_64-windows-msvc"), "camunda.t.W: struct removed"));
+}
+
+unittest // final / abstract class modifiers
+{
+    assert(has(diff(q{ class C {} }, q{ final class C {} }), "camunda.t.C: class made final"));
+    assert(has(diff(q{ class C {} }, q{ abstract class C {} }), "camunda.t.C: class made abstract"));
+    assert(has(diff(q{ class C {} }, q{ abstract: class C {} }), "camunda.t.C: class made abstract"));
+    // Dropping a modifier, or one only mentioned in a comment, is fine.
+    assert(diff(q{ final class C {} }, q{ class C {} }) == []);
+    assert(diff(q{ abstract class C {} }, q{ class C {} }) == []);
+    assert(diff(q{ class C {} }, q{ /// not final
+        class C {} }) == []);
+}
+
+unittest // new required members on existing interfaces and abstract classes
+{
+    auto d = diff(q{ interface I { void a(); } }, q{ interface I { void a(); void b(); } });
+    assert(has(d, "camunda.t.I: new required (abstract) member `b"), d.join("\n"));
+    assert(has(diff(q{ abstract class A { void a() {} } },
+            q{ abstract class A { void a() {} abstract void b(); } }), "camunda.t.A: new required"));
+    // A class gaining an abstract member becomes abstract.
+    assert(has(diff(q{ class A { } }, q{ class A { abstract void b(); } }), "class made abstract"));
+    // Members with a default implementation require nothing of implementers.
+    assert(diff(q{ interface I { void a(); } },
+            q{ interface I { void a(); final void c() {} static void s() {} } }) == []);
+    assert(diff(q{ abstract class A { abstract void a(); } },
+            q{ abstract class A { abstract void a(); void c() {} } }) == []);
+}
+
+unittest // function attributes in text-only (template member) signatures
+{
+    enum before = q{ mixin template M() { void op(int a) {} } };
+    // Widening attributes is compatible.
+    auto d = diff(before, q{ mixin template M() { void op(int a) @safe pure nothrow @nogc {} } });
+    assert(d == [], d.join("\n"));
+    // Narrowing is not.
+    assert(has(diff(q{ mixin template M() { void op(int a) @safe nothrow {} } },
+            q{ mixin template M() { void op(int a) @safe {} } }), "camunda.t.M.op"));
+    assert(has(diff(q{ mixin template M() { void op(int a) @safe {} } },
+            q{ mixin template M() { void op(int a) @system {} } }), "camunda.t.M.op"));
+    // Attributes inside the parameter list are still part of the type.
+    assert(has(diff(q{ mixin template M() { void op(void delegate() nothrow a) {} } },
+            q{ mixin template M() { void op(void delegate() a) {} } }), "camunda.t.M.op"));
 }

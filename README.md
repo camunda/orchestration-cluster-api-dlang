@@ -412,6 +412,8 @@ These count as breaks:
 - reordered or removed public struct fields (appending is fine), a changed
   template parameter list, specialisation or constraint, or a dropped base
   class or interface
+- a class made `final` or `abstract`, or a new abstract (required) member on
+  an existing interface or abstract class
 - a public import that no longer re-exports a name, or a removed `mixin`
   invocation (its members disappear from the aggregate)
 
