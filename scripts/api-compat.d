@@ -226,13 +226,32 @@ private string stripDefaults(string s)
     string outp;
     int depth;
     bool skipping;
+    char quote = 0; // open literal delimiter inside a skipped default, or 0
+    bool escaped;
     foreach (c; s)
     {
         if (skipping)
         {
-            if (c == '(' || c == '[')
+            // Delimiters, commas and parens inside a string or character
+            // literal (`"a,b)"`, `','`, `` `x,y` ``) are not syntax.
+            if (quote)
+            {
+                if (escaped)
+                    escaped = false;
+                else if (c == '\\' && quote != '`')
+                    escaped = true;
+                else if (c == quote)
+                    quote = 0;
+                continue;
+            }
+            if (c == '"' || c == '\'' || c == '`')
+            {
+                quote = c;
+                continue;
+            }
+            if (c == '(' || c == '[' || c == '{')
                 depth++;
-            else if (c == ')' || c == ']')
+            else if (c == ')' || c == ']' || c == '}')
                 depth--;
             // The default runs to the next parameter or to the closing `)`
             // of the parameter list, which must be kept.
@@ -1154,4 +1173,15 @@ unittest // intentionally changing metadata values are exempt
     assert(has(diff(q{ enum E { x = 1 } }, q{ enum E { x = 2 } }), "camunda.t.E.x: value changed"));
     // Removing the metadata is still a break.
     assert(has(diff(q{ enum generatedOperationCount = 1; }, q{ }), "generatedOperationCount"));
+}
+
+unittest // defaults containing literals with separators/delimiters are stripped whole
+{
+    assert(stripDefaults(`void(string a = "x,y", int b)`) == `void(string a, int b)`);
+    assert(stripDefaults(`void(string a = "x,z")`) == `void(string a)`);
+    assert(stripDefaults(`void(string a = "q\",)", int b)`) == `void(string a, int b)`);
+    assert(stripDefaults(`void(char c = ',', int b)`) == `void(char c, int b)`);
+    assert(stripDefaults(`void(char c = '\'', int b)`) == `void(char c, int b)`);
+    assert(stripDefaults("void(string a = `x,)`, int b)") == `void(string a, int b)`);
+    assert(stripDefaults(`void(int[] a = [1, 2], int b)`) == `void(int[] a, int b)`);
 }
