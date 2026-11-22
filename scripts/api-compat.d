@@ -16,6 +16,9 @@ current tree. It reports changes that can stop customer code from compiling:
   - narrowed function attributes: dropped `@safe`/`@trusted`, `pure`, `nothrow`
     or `@nogc` (adding them is fine)
   - a changed enum member value, enum base type, variable/field type or alias
+    (the generated spec hash/operation count and the release-stamped version
+    constants are exempt: their values intentionally change on regeneration
+    and release)
   - a reordered or removed public struct/union field (positional struct
     literals depend on the order); appending fields is fine
   - a changed template parameter list, specialisation or constraint, or a
@@ -136,24 +139,137 @@ private bool visible(string protection)
         || protection == "export";
 }
 
+/// The word characters D identifiers (and mangle codes) are made of.
+private bool isWordChar(char c)
+{
+    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9');
+}
+
+/// Strip the parameter name that trails a type in a parameter list. A name
+/// is a word preceded by whitespace; words glued to type punctuation
+/// (`int[]`, `void delegate()`, `int[3]`) are part of the type. The last
+/// word before `=` (a default) is always the name.
+private string stripParamNames(string s)
+{
+    string outp;
+    size_t wordStart;
+    size_t wordEnd;
+    bool inWord;
+    void flushWord(bool isName)
+    {
+        if (!inWord)
+            return;
+        if (!isName)
+            outp ~= s[wordStart .. wordEnd];
+        inWord = false;
+    }
+    int depth;
+    bool lastSpace = true; // a name never leads a parameter
+    foreach (i, c; s)
+    {
+        const boundary = depth == 1 && (c == ',' || c == '=');
+        if (isWordChar(c))
+        {
+            if (!inWord)
+            {
+                wordStart = i;
+                inWord = true;
+            }
+            wordEnd = i + 1;
+        }
+        if (!isWordChar(c) || boundary)
+        {
+            // A word at parameter depth followed by `,` or `=` is a name; so
+            // is a whitespace-preceded word before the closing `)` of the
+            // parameter list (`void(int a)`), unlike a word glued to type
+            // punctuation (`void(int[3])`). A `)` that closes a nested type
+            // (`void delegate()`) never ends a name.
+            const closesParam = c == ')' && depth == 1
+                && (i + 1 >= s.length || s[i + 1] == ' ' || s[i + 1] == ',');
+            flushWord(depth == 1 && (lastSpace || c == '=' || c == ',' || closesParam));
+        }
+        if (boundary || !inWord)
+            outp ~= c;
+        if (c == '(' || c == '[')
+            depth++;
+        else if (c == ')' || c == ']')
+            depth--;
+        lastSpace = c == ' ';
+    }
+    flushWord(false);
+    return outp;
+}
+
+/// Remove `= default` expressions at the top level of a parameter list, so
+/// a changed default value is not a signature change (its availability is
+/// tracked in the `|defaults=` mask).
+private string stripDefaults(string s)
+{
+    string outp;
+    int depth;
+    bool skipping;
+    foreach (c; s)
+    {
+        if (skipping)
+        {
+            if (c == '(' || c == '[')
+                depth++;
+            else if (c == ')' || c == ']')
+                depth--;
+            // The default runs to the next parameter or to the closing `)`
+            // of the parameter list, which must be kept.
+            if (depth == 1 && c == ',')
+            {
+                skipping = false;
+                outp ~= c;
+            }
+            else if (depth == 0 && c == ')')
+            {
+                skipping = false;
+                outp ~= c;
+            }
+            continue;
+        }
+        if (depth == 1 && c == '=')
+        {
+            // Drop the space between the name and `=` too, so the name is
+            // still recognisable once the default is gone.
+            if (outp.length && outp[$ - 1] == ' ')
+                outp = outp[0 .. $ - 1];
+            skipping = true;
+            continue;
+        }
+        if (c == '(' || c == '[')
+            depth++;
+        else if (c == ')' || c == ']')
+            depth--;
+        outp ~= c;
+    }
+    return outp;
+}
+
 /// Signature of one function/constructor overload. With semantic info the
-/// mangled type (`deco`) is exact; template members only carry source text.
-/// A trailing `|defaults=` mask records which parameters have defaults.
+/// mangled type (`deco`) is exact; template members only carry source text,
+/// from which parameter names and default values are removed so a rename or
+/// a changed default is not reported as a break. A trailing `|defaults=`
+/// mask records which parameters have defaults.
 private string signature(JSONValue f)
 {
     string mask;
-    string text = str(f, "type");
     if (auto ps = "parameters" in f)
         foreach (p; ps.array)
-        {
-            const d = str(p, "default");
-            mask ~= d.length ? "1" : "0";
-            if (d.length)
-                text = text.replace(" = " ~ d, "");
-        }
+            mask ~= str(p, "default").length ? "1" : "0";
     auto core = str(f, "deco");
     if (core.length == 0)
-        core = "text:" ~ (text.length ? text : str(f, "originalType"));
+    {
+        auto text = str(f, "type");
+        if (!text.length)
+            text = str(f, "originalType");
+        // `extern (C)` etc. sit before the return type; the linkage is part
+        // of the type, so keep the letters and drop the parens.
+        core = "text:" ~ text.replace("extern (", "extern_").stripDefaults.stripParamNames;
+    }
     return core ~ "|defaults=" ~ mask;
 }
 
@@ -272,6 +388,12 @@ private void walk(ref Api api, string parent, JSONValue members, string parentKi
                 auto shown = str(m, "originalType");
                 if (!shown.length)
                     shown = str(m, "type");
+                // The display text keys on the signature, so normalise it
+                // the same way (no parameter names / default values) — a
+                // rename must not orphan the message text.
+                if (shown.length)
+                    shown = shown.replace("extern (", "extern_")
+                        .stripDefaults.stripParamNames;
                 if (!shown.length)
                 {
                     string[] ps;
@@ -535,6 +657,35 @@ private string show(string sig)
     return s.startsWith("text:") ? s[5 .. $] : s;
 }
 
+/// The signature without its `|defaults=` mask. Required-member comparison
+/// uses this: adding a default to an existing abstract/interface method does
+/// not force implementations to change, and a removed default is already
+/// reported by the overload comparison.
+private string withoutDefaults(string sig)
+{
+    import std.string : lastIndexOf;
+    return sig[0 .. sig.lastIndexOf("|defaults=")];
+}
+
+/// Enum members whose *values* are intentionally changing metadata: the
+/// generated spec hash/operation count change on every regeneration, and the
+/// release-stamped SDK version changes on every release. Their presence and
+/// type are still checked; only the value is exempt. Domain enum values stay
+/// strictly checked.
+private bool metadataEnumValue(string path)
+{
+    switch (path)
+    {
+    case "camunda.generated.generatedSpecHash",
+         "camunda.generated.generatedOperationCount",
+         "camunda.version_.sdkVersion",
+         "camunda.version_.sdkUserAgent":
+        return true;
+    default:
+        return false;
+    }
+}
+
 /// All breaking changes from `old` to `neu`, sorted.
 string[] compare(Api old, Api neu)
 {
@@ -587,7 +738,7 @@ string[] compare(Api old, Api neu)
                 brk(o.path, format("base type changed from `%s` to `%s`", o.type, n.type));
             break;
         case "enum member":
-            if (o.value != n.value)
+            if (o.value != n.value && !metadataEnumValue(o.path))
                 brk(o.path, format("value changed from %s to %s", o.value, n.value));
             break;
         case "struct", "union":
@@ -603,9 +754,11 @@ string[] compare(Api old, Api neu)
                 if (!o.modifiers.canFind(mod))
                     brk(o.path, format("class made %s", mod));
             // Customer implementations of an existing interface / abstract
-            // class do not provide newly required members.
+            // class do not provide newly required members. Compare without
+            // the defaults mask: an added default requires nothing of
+            // implementers.
             foreach (r; n.required)
-                if (!o.required.canFind(r))
+                if (!o.required.any!(q => q.withoutDefaults == r.withoutDefaults))
                     brk(o.path, format("new required (abstract) member `%s`", r));
             break;
         default:
@@ -922,4 +1075,52 @@ unittest // function attributes in text-only (template member) signatures
     // Attributes inside the parameter list are still part of the type.
     assert(has(diff(q{ mixin template M() { void op(void delegate() nothrow a) {} } },
             q{ mixin template M() { void op(void delegate() a) {} } }), "camunda.t.M.op"));
+}
+
+unittest // parameter names are not part of a signature
+{
+    // A rename is source-compatible for positional callers (named arguments
+    // are not part of the stability contract), in plain functions and in the
+    // text-only signatures of template members (the generated REST mixin).
+    assert(diff(q{ void op(int a) {} }, q{ void op(int b) {} }) == []);
+    assert(diff(q{ mixin template M() { void op(int a) {} } },
+            q{ mixin template M() { void op(int b) {} } }) == []);
+    // Names glued to type punctuation are part of the type, not a name.
+    assert(diff(q{ mixin template M() { void op(int[] a, int[3] b, void delegate() c) {} } },
+            q{ mixin template M() { void op(int[] d, int[3] e, void delegate() f) {} } }) == []);
+    // A changed default value is not a break; removing one is.
+    assert(diff(q{ mixin template M() { void op(int a = 1 + 1) {} } },
+            q{ mixin template M() { void op(int b = 2) {} } }) == []);
+    assert(has(diff(q{ mixin template M() { void op(int a = f(1, "x")) {} } },
+            q{ mixin template M() { void op(int a) {} } }), "camunda.t.M.op"));
+    // The type itself is still compared.
+    assert(has(diff(q{ mixin template M() { void op(int a) {} } },
+            q{ mixin template M() { void op(long a) {} } }), "camunda.t.M.op"));
+}
+
+unittest // added defaults on required members are compatible
+{
+    // Implementations of `void a(int)` still satisfy `void a(int = 0)`.
+    assert(diff(q{ interface I { void a(int x); } },
+            q{ interface I { void a(int x = 0); } }) == []);
+    assert(diff(q{ abstract class A { abstract void a(int x); } },
+            q{ abstract class A { abstract void a(int x = 0); } }) == []);
+    // A genuinely new abstract member is still a break.
+    assert(has(diff(q{ interface I { void a(int x); } },
+            q{ interface I { void a(int x); void b(int y = 0); } }), "new required"));
+    // A removed default is caught by the overload comparison.
+    assert(has(diff(q{ interface I { void a(int x = 0); } },
+            q{ interface I { void a(int x); } }), "camunda.t.I.a"));
+}
+
+unittest // intentionally changing metadata values are exempt
+{
+    // Regeneration and release stamping change these values; their presence
+    // and type are still checked.
+    assert(diff(q{ enum generatedSpecHash = "sha256:a"; enum generatedOperationCount = 1; },
+            q{ enum generatedSpecHash = "sha256:b"; enum generatedOperationCount = 2; }) == []);
+    // A domain enum value change is still a break.
+    assert(has(diff(q{ enum E { x = 1 } }, q{ enum E { x = 2 } }), "camunda.t.E.x: value changed"));
+    // Removing the metadata is still a break.
+    assert(has(diff(q{ enum generatedOperationCount = 1; }, q{ }), "generatedOperationCount"));
 }
