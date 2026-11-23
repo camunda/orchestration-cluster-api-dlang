@@ -1,3 +1,10 @@
+# [11.0.0-alpha.15](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.14...v11.0.0-alpha.15) (2026-11-23)
+
+
+### Bug Fixes
+
+* do not gate job activation and job commands on backpressure ([#50](https://github.com/camunda/orchestration-cluster-api-dlang/issues/50)) ([2cd8c69](https://github.com/camunda/orchestration-cluster-api-dlang/commit/2cd8c693a7a84e51cea17d8545e2109e6fdafb9c)), closes [#49](https://github.com/camunda/orchestration-cluster-api-dlang/issues/49) [#49](https://github.com/camunda/orchestration-cluster-api-dlang/issues/49)
+
 # [11.0.0-alpha.14](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.13...v11.0.0-alpha.14) (2026-11-22)
 
 
