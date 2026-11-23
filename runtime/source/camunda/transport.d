@@ -561,10 +561,14 @@ unittest
 {
     // #49: with the limiter at its floor and every permit held, job
     // completion is admitted without waiting; initiating operations are not.
+    // Pin BALANCED: under the supported LEGACY profile `recordBackpressure`
+    // is observe-only and the limiter never gates, so the fixture must not
+    // inherit the developer's CAMUNDA_SDK_BACKPRESSURE_PROFILE.
     import camunda.clock : TestClock;
     auto clock = new TestClock;
     auto t = new Transport(CamundaOptions.create
         .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_SDK_BACKPRESSURE_PROFILE", "BALANCED")
         .withClock(clock));
     foreach (_; 0 .. 10) t._bp.recordBackpressure();
     const cap = t.backpressureState.permitsMax;
