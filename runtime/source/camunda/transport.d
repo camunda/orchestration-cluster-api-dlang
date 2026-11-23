@@ -507,7 +507,9 @@ unittest
 bool isBackpressureExempt(string method, string path) pure nothrow @nogc
 {
     import std.algorithm.searching : endsWith, startsWith;
-    enum prefix = "/jobs/";
+    enum prefix = "jobs/";
+    // Request methods accept slashless paths (joinUrl adds the slash).
+    if (path.startsWith("/")) path = path[1 .. $];
     if (!path.startsWith(prefix)) return false;
     const rest = path[prefix.length .. $];
     if (method == "POST" && rest == "activation") return true;
@@ -516,8 +518,9 @@ bool isBackpressureExempt(string method, string path) pure nothrow @nogc
     foreach (i, c; rest)
         if (c == '/') { slash = i; break; }
     const key = rest[0 .. slash];
-    if (key.length == 0) return false;
-    foreach (c; key)
+    const digits = (key.length > 0 && key[0] == '-') ? key[1 .. $] : key;
+    if (digits.length == 0) return false;
+    foreach (c; digits)
         if (c < '0' || c > '9') return false; // `/jobs/search`, `/jobs/batch-update`, …
     const tail = rest[slash .. $];
     if (method == "PATCH" && tail.length == 0) return true;
@@ -540,6 +543,18 @@ unittest
     assert(!isBackpressureExempt("GET", "/jobs/statistics/global"));
     assert(!isBackpressureExempt("POST", "/jobs//completion"));
     assert(!isBackpressureExempt("GET", "/jobs/1/completion"));
+    // Slashless paths and signed keys (JobKey accepts `^-?[0-9]+$`).
+    assert(isBackpressureExempt("POST", "jobs/activation"));
+    assert(isBackpressureExempt("POST", "jobs/1/completion"));
+    assert(isBackpressureExempt("PATCH", "jobs/1"));
+    assert(isBackpressureExempt("POST", "/jobs/-1/completion"));
+    assert(isBackpressureExempt("POST", "/jobs/-42/failure"));
+    assert(isBackpressureExempt("POST", "jobs/-1/error"));
+    assert(isBackpressureExempt("PATCH", "/jobs/-1"));
+    assert(!isBackpressureExempt("POST", "/jobs/-/completion"));
+    assert(!isBackpressureExempt("POST", "/jobs/--1/completion"));
+    assert(!isBackpressureExempt("POST", "jobs/search"));
+    assert(!isBackpressureExempt("POST", "//jobs/1/completion"));
 }
 
 unittest
