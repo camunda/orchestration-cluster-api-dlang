@@ -191,8 +191,8 @@ final class Transport
     HttpResponse requestRaw(string method, string path, string contentType, const(ubyte)[] rawBody,
         ServerBase server = ServerBase.api, string[string] query = null)
     {
-        _bp.acquire();
-        scope (exit) _bp.release();
+        const gated = admit(method, path);
+        scope (exit) if (gated) _bp.release();
         HttpResponse res;
         try
         {
@@ -212,11 +212,21 @@ final class Transport
         return res;
     }
 
+    /// Take a backpressure permit for `method path` unless it is exempt
+    /// (see `isBackpressureExempt`). Returns whether a permit was taken, so
+    /// the caller releases only what it acquired.
+    private bool admit(string method, string path)
+    {
+        if (isBackpressureExempt(method, path)) return false;
+        _bp.acquire();
+        return true;
+    }
+
     private HttpResponse guardedRequest(string method, string path, JSONValue body_, string[string] query,
         ServerBase server)
     {
-        _bp.acquire();
-        scope (exit) _bp.release();
+        const gated = admit(method, path);
+        scope (exit) if (gated) _bp.release();
         HttpResponse res;
         try
         {
@@ -485,6 +495,73 @@ unittest
     int authCount;
     foreach (k; merged.keys) if (k.toLower == "authorization") authCount++;
     assert(authCount == 1);
+}
+
+/// Whether `method path` bypasses the backpressure gate.
+///
+/// Only initiating operations are gated. Job activation is bounded by the
+/// worker's `maxJobs`, and completing, failing, throwing an error on or
+/// updating a job relieves the broker: queuing those behind the gate makes
+/// them miss the job timeout, so the job runs twice and the late completion
+/// fails with 404 (camunda/orchestration-cluster-api-dlang#49).
+bool isBackpressureExempt(string method, string path) pure nothrow @nogc
+{
+    import std.algorithm.searching : endsWith, startsWith;
+    enum prefix = "/jobs/";
+    if (!path.startsWith(prefix)) return false;
+    const rest = path[prefix.length .. $];
+    if (method == "POST" && rest == "activation") return true;
+    // Single-job commands: `/jobs/{jobKey}` and `/jobs/{jobKey}/<command>`.
+    size_t slash = rest.length;
+    foreach (i, c; rest)
+        if (c == '/') { slash = i; break; }
+    const key = rest[0 .. slash];
+    if (key.length == 0) return false;
+    foreach (c; key)
+        if (c < '0' || c > '9') return false; // `/jobs/search`, `/jobs/batch-update`, …
+    const tail = rest[slash .. $];
+    if (method == "PATCH" && tail.length == 0) return true;
+    if (method != "POST") return false;
+    return tail == "/completion" || tail == "/failure" || tail == "/error";
+}
+
+unittest
+{
+    assert(isBackpressureExempt("POST", "/jobs/activation"));
+    assert(isBackpressureExempt("POST", "/jobs/2251799813685249/completion"));
+    assert(isBackpressureExempt("POST", "/jobs/1/failure"));
+    assert(isBackpressureExempt("POST", "/jobs/1/error"));
+    assert(isBackpressureExempt("PATCH", "/jobs/1"));
+    // Initiating and read operations stay gated.
+    assert(!isBackpressureExempt("POST", "/process-instances"));
+    assert(!isBackpressureExempt("POST", "/messages/publication"));
+    assert(!isBackpressureExempt("POST", "/jobs/search"));
+    assert(!isBackpressureExempt("POST", "/jobs/batch-update"));
+    assert(!isBackpressureExempt("GET", "/jobs/statistics/global"));
+    assert(!isBackpressureExempt("POST", "/jobs//completion"));
+    assert(!isBackpressureExempt("GET", "/jobs/1/completion"));
+}
+
+unittest
+{
+    // #49: with the limiter at its floor and every permit held, job
+    // completion is admitted without waiting; initiating operations are not.
+    import camunda.clock : TestClock;
+    auto clock = new TestClock;
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withClock(clock));
+    foreach (_; 0 .. 10) t._bp.recordBackpressure();
+    const cap = t.backpressureState.permitsMax;
+    assert(!t.backpressureState.unlimited);
+    foreach (_; 0 .. cap) t._bp.acquire();
+    const before = clock.nowMs;
+    foreach (path; ["/jobs/1/completion", "/jobs/1/failure", "/jobs/1/error", "/jobs/activation"])
+        assert(!t.admit("POST", path));
+    assert(!t.admit("PATCH", "/jobs/1"));
+    assert(clock.nowMs == before, "exempt job command waited on the gate");
+    assert(t.backpressureState.permitsCurrent == cap);
+    assert(t.backpressureState.waiters == 0);
 }
 
 unittest
