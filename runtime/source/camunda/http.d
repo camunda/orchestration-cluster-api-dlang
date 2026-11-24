@@ -351,6 +351,9 @@ struct Submission
     /// When it was submitted (`monoNowMs`): its timeout runs from here, so
     /// time spent queued for a connection counts against it.
     long submittedMs;
+    /// Identifies a queued ordinary request on Windows, where a request may
+    /// expire in the queue before any pool thread takes it.
+    long id;
 
     /// What is left of the request's timeout; 0 or less when it expired
     /// while queued.
@@ -401,6 +404,14 @@ final class HttpEngine
         /// so they never take an ordinary thread's place or its connection.
         private Chan!Submission pollQueue;
         private int pollThreads, pollIdle, pollWaiting;
+        /// Ordinary requests no pool thread has taken yet, and their ids: the
+        /// reaper thread delivers the timeout of one that expires in the
+        /// queue, and whichever of it and a pool thread removes the id from
+        /// `live` first owns the result, so it is delivered exactly once.
+        private Submission[] pending;
+        private bool[long] live;
+        private long nextId;
+        private bool reaping;
         // `waiting` counts queued requests no thread has taken yet: an idle
         // thread may already hold one it has not reported, so a new request
         // starts a thread unless there are more idle threads than waiting ones.
@@ -479,6 +490,14 @@ final class HttpEngine
                 }
                 else
                 {
+                    s.id = ++nextId;
+                    live[s.id] = true;
+                    pending ~= s;
+                    if (!reaping)
+                    {
+                        reaping = true;
+                        spawnDaemon(&reapLoop, threadSafe);
+                    }
                     queue.put(s);
                     if (++waiting > idle && threads < maxConns)
                     {
@@ -568,6 +587,8 @@ final class HttpEngine
                     return true;
                 });
                 if (exit) return;
+                // The reaper may already have timed it out in the queue.
+                if (!polls && !e.lock.run({ return e.live.remove(s.id); })) continue;
                 import camunda.safeio : monoNowMs;
                 const left = s.remainingMs(monoNowMs);
                 HttpResult r;
@@ -589,6 +610,51 @@ final class HttpEngine
                 e.counted(0);
                 try s.sink.get.deliver(r);
                 catch (Exception) {}
+            }
+        }
+
+        /// Delivers the timeout of every ordinary request that expires while
+        /// queued, without waiting for a pool thread to free up (a busy one
+        /// may hold its connection for a whole 30 s request). Exits when no
+        /// request is queued; `submit` starts it again.
+        private static void reapLoop(ThreadSafe!HttpEngine self)
+        {
+            import camunda.safeio : monoNowMs, sleepMs;
+            auto e = self.get;
+            for (;;)
+            {
+                Submission[] expired;
+                long wait = 50;
+                const stop = e.lock.run({
+                    const now = monoNowMs;
+                    Submission[] keep;
+                    foreach (ref s; e.pending)
+                    {
+                        if (s.id !in e.live) continue; // a pool thread took it
+                        const left = s.remainingMs(now);
+                        if (left <= 0)
+                        {
+                            e.live.remove(s.id);
+                            expired ~= s;
+                        }
+                        else
+                        {
+                            keep ~= s;
+                            if (left < wait) wait = left;
+                        }
+                    }
+                    e.pending = keep;
+                    if (keep.length) return false;
+                    e.reaping = false;
+                    return true;
+                });
+                foreach (ref s; expired)
+                {
+                    try s.sink.get.deliver(queuedTimeout(s));
+                    catch (Exception) {}
+                }
+                if (stop) return;
+                sleepMs(wait);
             }
         }
     }

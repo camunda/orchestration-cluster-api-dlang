@@ -249,6 +249,7 @@ final class Transport
                     req.body_ = body_.toString;
                     req.contentType = "application/json";
                 }
+                req.longPoll = req.longPoll || isLongWait(method, path, req.body_);
                 return send(req);
             });
         }
@@ -280,7 +281,8 @@ final class Transport
         req.method = method;
         req.url = joinUrl(baseAddress(server), path, query);
         // A job activation may wait on the server for its whole request
-        // timeout: it runs outside the connection limit however it is sent.
+        // timeout: it runs outside the connection limit however it is sent
+        // (a JSON body may add an awaited creation: see `isLongWait`).
         req.longPoll = isJobActivation(method, path);
         req.headers = authHeaders;
         req.headers["Accept"] = "application/json, */*";
@@ -349,7 +351,7 @@ final class Transport
             req.body_ = p.jsonBody;
             req.contentType = "application/json";
         }
-        req.longPoll = req.longPoll || p.longPoll;
+        req.longPoll = req.longPoll || p.longPoll || isLongWait(p.method, p.path, req.body_);
         if (p.timeoutMs > 0) req.timeoutMs = p.timeoutMs;
         _engine.submit(req, p.sink, p.tag);
     }
@@ -432,6 +434,29 @@ bool isJobActivation(string method, string path) pure nothrow @nogc
     auto p = path.findSplitBefore("?")[0];
     if (p.length && p[0] == '/') p = p[1 .. $];
     return p == "jobs/activation";
+}
+
+/// A request that may wait on the server for its whole timeout, so it
+/// runs outside the connection limit and never holds a slot a job
+/// completion needs: a job activation (long poll), or a process-instance
+/// creation with `awaitCompletion`, which waits for jobs this same client
+/// may have to complete.
+bool isLongWait(string method, string path, string jsonBody)
+{
+    if (isJobActivation(method, path)) return true;
+    if (method != "POST") return false;
+    import std.algorithm.searching : findSplitBefore, canFind;
+    auto p = path.findSplitBefore("?")[0];
+    if (p.length && p[0] == '/') p = p[1 .. $];
+    if (p != "process-instances" || !jsonBody.canFind("awaitCompletion")) return false;
+    try
+    {
+        auto v = parseJSON(jsonBody);
+        if (v.type != JSONType.object) return false;
+        if (auto a = "awaitCompletion" in v) return a.type == JSONType.true_;
+    }
+    catch (Exception) {}
+    return false;
 }
 
 /// An empty JSON object is a present body (`{}`), not an absent one.
@@ -803,11 +828,17 @@ unittest
     assert(!isJobActivation("GET", "/jobs/activation"));
     assert(!isJobActivation("POST", "/jobs/1/completion"));
     assert(!isJobActivation("POST", "/jobs/activations"));
-    auto t = new Transport(CamundaOptions.create
-        .withKey("CAMUNDA_REST_ADDRESS", "http://localhost:8080")
-        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
-    assert(t.baseRequest("POST", "/jobs/activation", null, ServerBase.api).longPoll);
-    assert(!t.baseRequest("POST", "/jobs/1/completion", null, ServerBase.api).longPoll);
+    // Every request that may wait for its whole timeout stays outside the
+    // connection limit, so it cannot starve the job completions it waits on.
+    assert(isLongWait("POST", "/jobs/activation", `{}`));
+    assert(isLongWait("POST", "/process-instances", `{"processDefinitionId":"p","awaitCompletion":true}`));
+    assert(isLongWait("POST", "process-instances?x=1", `{"awaitCompletion": true}`));
+    assert(!isLongWait("POST", "/process-instances", `{"awaitCompletion":false}`));
+    assert(!isLongWait("POST", "/process-instances", `{"variables":{"awaitCompletion":true}}`));
+    assert(!isLongWait("POST", "/process-instances", `{"processDefinitionId":"p"}`));
+    assert(!isLongWait("POST", "/process-instances", `not json awaitCompletion`));
+    assert(!isLongWait("GET", "/process-instances", `{"awaitCompletion":true}`));
+    assert(!isLongWait("POST", "/jobs/1/completion", `{}`));
 }
 
 unittest

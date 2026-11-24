@@ -96,7 +96,8 @@ struct CamundaConfig
     RetryConfig retry;
     /// Most ordinary requests a client has in flight at once, which bounds
     /// its connections (`CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`). Job activation
-    /// long polls come on top, one per running worker.
+    /// long polls and process creations with `awaitCompletion` come on top,
+    /// so they never hold back a job completion.
     int httpMaxConnections = 16;
     TlsConfig tls;
     WorkerDefaults workerDefaults;
