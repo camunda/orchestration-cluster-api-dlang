@@ -3,14 +3,18 @@
 ///
 /// The model (as in the other Camunda SDKs): `maxJobsActive` caps the jobs
 /// the worker holds at once. The calling thread polls; `handlerThreads`
-/// threads run the handler, so up to that many jobs are handled in parallel;
-/// whenever enough capacity frees up the worker activates more, sized to the
-/// free capacity.
+/// threads at most run the handler, so up to that many jobs are handled in
+/// parallel; whenever enough capacity frees up the worker activates more,
+/// sized to the free capacity. The handler pool is elastic: it starts with
+/// `coreHandlerThreads` threads, adds one whenever a job is dispatched and
+/// none is free, and retires the extra ones after `threadIdleTimeoutMs`
+/// without the pool being fully busy.
 module camunda.worker;
 
 @safe:
 
 import camunda.client : CamundaClient;
+import camunda.clock : Clock;
 import camunda.config : WorkerDefaults;
 import camunda.errors;
 import camunda.generated;
@@ -28,8 +32,13 @@ struct JobWorkerConfig
     /// left). Each activation asks for the free capacity. Default 32
     /// (`CAMUNDA_WORKER_MAX_CONCURRENT_JOBS`).
     int maxJobsActive;
-    /// Threads running the handler; 0 means one per `maxJobsActive`.
+    /// Most threads running the handler; 0 means one per `maxJobsActive`.
     int handlerThreads;
+    /// Handler threads kept even when idle; 0 means `min(2, effectiveThreads)`.
+    int coreHandlerThreads;
+    /// Retire handler threads above the core once the pool has not been
+    /// fully busy for this long. 0 means 30 s.
+    long threadIdleTimeoutMs;
     /// Job lease duration. Default 60 s (`CAMUNDA_WORKER_TIMEOUT`).
     long jobTimeoutMs;
     /// Long-poll timeout of an activation request. Default 10 s
@@ -71,17 +80,42 @@ struct JobWorkerConfig
 
     JobWorkerConfig maxJobs(int n) { maxJobsActive = n; return this; }
     JobWorkerConfig threads(int n) { handlerThreads = n; return this; }
+    JobWorkerConfig coreThreads(int n) { coreHandlerThreads = n; return this; }
+    JobWorkerConfig idleTimeoutMs(long ms) { threadIdleTimeoutMs = ms; return this; }
     JobWorkerConfig timeoutMs(long ms) { jobTimeoutMs = ms; return this; }
     JobWorkerConfig name(string n) { workerName = n; return this; }
     JobWorkerConfig variables(string[] names) { fetchVariables = names; return this; }
     JobWorkerConfig tenants(string[] ids) { tenantIds = ids; return this; }
     JobWorkerConfig lease(bool enabled) { withLease = enabled; return this; }
 
-    /// Handler threads actually started.
+    /// Most handler threads started at once.
     int effectiveThreads() const
     {
         return handlerThreads > 0 ? handlerThreads : maxJobsActive;
     }
+
+    /// Handler threads started up front and kept when idle.
+    int effectiveCoreThreads() const
+    {
+        import std.algorithm.comparison : clamp, max, min;
+        const most = max(1, effectiveThreads);
+        return coreHandlerThreads > 0 ? clamp(coreHandlerThreads, 1, most) : min(2, most);
+    }
+
+    /// Idle time after which extra handler threads retire.
+    long effectiveIdleTimeoutMs() const
+    {
+        return threadIdleTimeoutMs > 0 ? threadIdleTimeoutMs : 30_000;
+    }
+}
+
+/// Handler pool size so far, for tests and tuning.
+struct PoolStats
+{
+    int live;      /// handler threads running now
+    int peak;      /// most handler threads alive at once
+    long spawned;  /// handler threads started
+    long retired;  /// handler threads retired after idling
 }
 
 /// Counters of a worker's activity so far.
@@ -105,6 +139,8 @@ final class WorkerControl
     private shared bool stopping_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures;
+    private shared int poolLive, poolPeak;
+    private shared long poolSpawned, poolRetired;
 
     /// Ask the worker to stop: it activates no more jobs, finishes the ones
     /// it holds, and `run` returns (after at most one activation long poll).
@@ -112,6 +148,30 @@ final class WorkerControl
 
     /// Whether `stop` was called.
     bool stopping() const { return atomicLoad(stopping_); }
+
+    /// A snapshot of the handler pool.
+    PoolStats pool() const
+    {
+        PoolStats p;
+        p.live = atomicLoad(poolLive);
+        p.peak = atomicLoad(poolPeak);
+        p.spawned = atomicLoad(poolSpawned);
+        p.retired = atomicLoad(poolRetired);
+        return p;
+    }
+
+    private void poolGrew(int live)
+    {
+        atomicStore(poolLive, live);
+        if (live > atomicLoad(poolPeak)) atomicStore(poolPeak, live);
+        atomicOp!"+="(poolSpawned, 1);
+    }
+
+    private void poolShrank(int live, long n)
+    {
+        atomicStore(poolLive, live);
+        atomicOp!"+="(poolRetired, n);
+    }
 
     /// A snapshot of the counters.
     WorkerStats stats() const
@@ -252,8 +312,14 @@ final class JobWorker
     /// Counters so far.
     WorkerStats stats() const { return ctl.stats(); }
 
-    /// Run until `stop`: poll on this thread, handle jobs on
-    /// `config.effectiveThreads` threads. A handler that throws fails its
+    /// Handler pool size so far.
+    PoolStats pool() const { return ctl.pool(); }
+
+    /// Run until `stop`: poll on this thread, handle jobs on up to
+    /// `config.effectiveThreads` threads (an elastic pool: it starts with
+    /// `config.effectiveCoreThreads`, grows when a job finds no free
+    /// thread, and shrinks back after `config.effectiveIdleTimeoutMs`
+    /// without being fully busy). A handler that throws fails its
     /// job with one retry fewer. Failed activations back off (50 ms up to
     /// 5 s). Rethrows `LeaseNotHonored`, after the jobs already held finish.
     void run(JobHandler handler)
@@ -280,24 +346,86 @@ final class JobWorker
         auto jobs = Chan!string.make;
         auto freed = Chan!int.make;
         JoinHandle[] handlers;
+        int live;     // threads serving jobs
+        int retiring; // threads sent a retire signal and not yet exited
         scope (exit)
         {
             jobs.close();
             foreach (ref h; handlers) h.join();
+            ctl.poolShrank(0, 0);
         }
-        foreach (_; 0 .. max(1, config.effectiveThreads))
-            handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
-
+        const maxThreads = max(1, config.effectiveThreads);
+        const coreThreads = config.effectiveCoreThreads;
+        const idleTimeout = config.effectiveIdleTimeoutMs;
         int held;
-        long backoff;
         int one;
+        // 1 = a job finished; 0 = a retiree is leaving and frees its slot.
+        void settle()
+        {
+            if (one) held -= one;
+            else retiring--;
+        }
+        void grow()
+        {
+            handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
+            live++;
+            ctl.poolGrew(live + retiring);
+        }
+        // Drain finished jobs, reap exited retirees, then give queued jobs
+        // the slots that became free. Run on every pass and after each
+        // dispatched job, so a slot freed by a retiree is never left idle
+        // while jobs wait in the queue.
+        void reconcile()
+        {
+            const before = retiring;
+            while (freed.tryTake(one)) settle();
+            if (retiring < before) ctl.poolShrank(live + retiring, 0);
+            // Join retirees that have exited (they left their slot already).
+            if (handlers.length > live + retiring) pruneFinished(handlers);
+            // Threads still retiring keep their slot until they exit.
+            while (held > live && live + retiring < maxThreads) grow();
+        }
+        foreach (_; 0 .. coreThreads) grow();
+        // Last time every live thread had a job (or the pool last changed).
+        long lastFullMs = client.clock.nowMs;
+
+        long backoff;
         while (!ctl.stopping)
         {
-            while (freed.tryTake(one)) held--;
-            if (cap - held < threshold)
+            reconcile();
+            const now = client.clock.nowMs;
+            if (held >= live) lastFullMs = now;
+            else if (live > coreThreads && now - lastFullMs >= idleTimeout)
             {
-                freed.take(one); // wait for a handler to finish one
-                held--;
+                // Retire the threads that were not needed for a whole idle
+                // period. An empty job is the retire signal; idle threads
+                // take it, busy ones only after their job.
+                const target = max(coreThreads, held);
+                const n = live - target;
+                foreach (_; 0 .. n) jobs.put("");
+                live = target;
+                retiring += n;
+                ctl.poolShrank(live + retiring, n);
+                lastFullMs = now;
+            }
+            // Wait for a handler to finish a job or a retiree to exit when
+            // there is too little capacity to activate, or when queued jobs
+            // wait for slots that retiring threads still hold (activating
+            // now would park their acknowledgements behind a long poll).
+            if (cap - held < threshold || (held > live && retiring > 0))
+            {
+                // Bound the wait by the next idle-retirement deadline, so
+                // extra idle threads still retire under partial occupancy.
+                // The deadline is on the injected clock, so wait on it too.
+                const retireDue = live > coreThreads && held < live;
+                const got = retireDue
+                    ? takeUntil(freed, one, client.clock, lastFullMs + idleTimeout)
+                    : freed.take(one);
+                if (got)
+                {
+                    settle();
+                    if (!one) ctl.poolShrank(live + retiring, 0);
+                }
                 continue;
             }
             ActivatedJobResult[] batch;
@@ -316,7 +444,10 @@ final class JobWorker
             {
                 held++;
                 jobs.put(raw.raw.toString());
+                // Count finished jobs and exited retirees before growing.
+                reconcile();
             }
+            if (held >= live) lastFullMs = client.clock.nowMs;
             if (!batch.length && config.pollIntervalMs > 0 && !ctl.stopping)
                 client.clock.sleep(config.pollIntervalMs);
         }
@@ -325,6 +456,40 @@ final class JobWorker
     private static JobAction callPlain(Job job, JobHandler handler)
     {
         return handler(job);
+    }
+
+    /// Take from `ch` until `clock` reaches `deadlineMs`. The wait goes
+    /// through `clock.sleep` in short slices, so an injected clock decides
+    /// when the deadline has passed.
+    private static bool takeUntil(T)(Chan!T ch, out T v, Clock clock, long deadlineMs)
+    {
+        enum sliceMs = 5;
+        for (;;)
+        {
+            if (ch.tryTake(v)) return true;
+            const left = deadlineMs - clock.nowMs;
+            if (left <= 0) return false;
+            clock.sleep(left < sliceMs ? left : sliceMs);
+        }
+    }
+
+    /// Join and drop the handles of threads that have retired.
+    /// Returns how many were reaped.
+    private static int pruneFinished(ref JoinHandle[] handlers)
+    {
+        JoinHandle[] keep;
+        int reaped;
+        foreach (ref h; handlers)
+        {
+            if (h.running) keep ~= h;
+            else
+            {
+                h.join();
+                reaped++;
+            }
+        }
+        handlers = keep;
+        return reaped;
     }
 
     private ActivatedJobResult[] activate(int count)
@@ -353,8 +518,9 @@ final class JobWorker
     }
 }
 
-/// One handler thread: take jobs until the channel closes, run the handler,
-/// apply its action, and report each finished job on `freed`.
+/// One handler thread: take jobs until the channel closes or an empty job
+/// retires it, run the handler, apply its action, and report each finished
+/// job on `freed` (a retiring thread posts 0 so the dispatcher wakes).
 private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
@@ -364,6 +530,11 @@ private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     string text;
     while (jobs.take(text))
     {
+        if (!text.length)
+        {
+            freed.put(0); // retired: wake the dispatcher to reuse the slot
+            return;
+        }
         scope (exit) freed.put(1);
         Job job;
         job.raw = ActivatedJobResult.fromJson(parseJSON(text));
@@ -630,4 +801,186 @@ unittest
     assert(fromEnv.config.requestTimeoutMs == 10_000 && fromEnv.config.workerName == "d-sdk-worker");
     auto bare = new JobWorker(client, JobWorkerConfig.create("t"));
     assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == 32);
+}
+
+version (unittest)
+{
+    /// After `done`, wait (up to 5 s) for the pool to shrink back to its
+    /// core, then stop the worker and relay the summary and the pool size.
+    private void stopWhenIdle(Chan!string done, Chan!string relay, ThreadSafe!WorkerControl ctl, int core)
+    {
+        import camunda.clock : LiveClock;
+        import std.format : format;
+        string summary;
+        done.take(summary);
+        auto clock = new LiveClock;
+        const deadline = clock.nowMs + 5_000;
+        while (ctl.get.pool.live > core && clock.nowMs < deadline) clock.sleep(10);
+        const p = ctl.get.pool;
+        ctl.get.stop();
+        relay.put(format("%s|%d", summary, p.live));
+    }
+}
+
+// The handler pool starts at its core, grows to the maximum under load,
+// never exceeds it, and retires the extra threads after idling.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import std.string : split;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto relay = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 200, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(8).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    assert(worker.config.effectiveCoreThreads == 1);
+    auto stopper = spawn(&stopWhenIdle, done, relay, worker.control, 1);
+    // Gauge takes its lock in every method.
+    auto gauge = ThreadSafe!Gauge.assumeThreadSafe(new Gauge);
+    worker.run(&gaugedHandler, gauge);
+    stopper.join();
+    string summary;
+    relay.take(summary);
+    const parts = summary.split("|");
+    const pool = worker.pool;
+    assert(pool.peak == 4, format("pool peaked at %s, want 4: %s", pool, summary));
+    assert(parts[1] == "1", format("pool did not shrink to its core: %s", summary));
+    assert(pool.retired >= 3 && pool.spawned == 1 + pool.retired, format("%s", pool));
+    assert(gauge.get.peak <= 4, format("handler concurrency %d > 4", gauge.get.peak));
+    assert(pool.live == 0, "threads still counted after run returned");
+}
+
+unittest
+{
+    auto cfg = JobWorkerConfig.create("t").maxJobs(32);
+    assert(cfg.effectiveCoreThreads == 2 && cfg.effectiveIdleTimeoutMs == 30_000);
+    assert(cfg.threads(1).effectiveCoreThreads == 1);
+    assert(cfg.threads(8).coreThreads(20).effectiveCoreThreads == 8);
+    assert(cfg.idleTimeoutMs(500).effectiveIdleTimeoutMs == 500);
+}
+
+version (unittest)
+{
+    /// Job "4" finishes at once; the others block until `gate` opens.
+    private JobAction gatedHandler(Job job, Chan!int gate)
+    {
+        if (job.key != "4")
+        {
+            int g;
+            gate.take(g);
+            gate.put(g); // let the next blocked handler through
+        }
+        return JobAction.complete();
+    }
+
+    /// Wait (up to 5 s) for the pool to shrink to `want` while three jobs
+    /// stay blocked, record the size, then open `gate` and stop when done.
+    private void releaseWhenShrunk(Chan!string done, Chan!int gate, Chan!int relay,
+        ThreadSafe!WorkerControl ctl, int want)
+    {
+        import camunda.clock : LiveClock;
+        auto clock = new LiveClock;
+        const deadline = clock.nowMs + 5_000;
+        while (ctl.get.pool.peak < 4 && clock.nowMs < deadline) clock.sleep(5);
+        while (ctl.get.pool.live > want && clock.nowMs < deadline) clock.sleep(10);
+        relay.put(ctl.get.pool.live);
+        gate.put(1);
+        string summary;
+        done.take(summary);
+        ctl.get.stop();
+    }
+}
+
+// An idle thread retires after the idle timeout even while the other
+// threads stay busy and too little capacity is free to activate again.
+unittest
+{
+    import std.conv : to;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto gate = Chan!int.make;
+    auto relay = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 4, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(4).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    auto stopper = spawn(&releaseWhenShrunk, done, gate, relay, worker.control, 3);
+    worker.run(&gatedHandler, gate);
+    stopper.join();
+    int live;
+    relay.take(live);
+    assert(live == 3, "idle thread did not retire under partial occupancy: " ~ live.to!string);
+}
+
+version (unittest)
+{
+    /// A clock that moves only when someone sleeps on it (each sleep also
+    /// yields 1 ms of real time). Safe to share between threads.
+    private final class SleepDrivenClock : Clock
+    {
+        import camunda.safeio : Lock, sleepMs;
+        private Lock lock;
+        private long mono;
+        this() { lock = new Lock; }
+        long nowMs() const { return lock.run(() => mono); }
+        long nowWallMs() const { return nowMs; }
+        void sleep(long durationMs)
+        {
+            const d = durationMs < 0 ? 0 : durationMs;
+            lock.run({ mono += d; });
+            sleepMs(1);
+        }
+    }
+}
+
+// The idle-retirement wait under partial occupancy follows the injected
+// clock: with a clock that only advances on sleep, the idle thread still
+// retires while three jobs stay blocked.
+unittest
+{
+    import camunda.transport : CamundaOptions;
+    import std.conv : to;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto gate = Chan!int.make;
+    auto relay = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 4, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    CamundaOptions o;
+    o.config = [
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ];
+    auto client = CamundaClient.create(o.withClock(new SleepDrivenClock));
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(4).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    auto stopper = spawn(&releaseWhenShrunk, done, gate, relay, worker.control, 3);
+    worker.run(&gatedHandler, gate);
+    stopper.join();
+    int live;
+    relay.take(live);
+    assert(live == 3, "idle thread did not retire on the injected clock: " ~ live.to!string);
 }

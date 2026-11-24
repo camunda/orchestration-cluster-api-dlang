@@ -6,4 +6,4 @@ module camunda;
 public import camunda.client : CamundaClient;
 public import camunda.runtime;
 public import camunda.generated;
-public import camunda.worker : Job, JobAction, JobHandler, JobWorker, JobWorkerConfig, WorkerControl, WorkerStats;
+public import camunda.worker : Job, JobAction, JobHandler, JobWorker, JobWorkerConfig, PoolStats, WorkerControl, WorkerStats;

@@ -230,8 +230,13 @@ auto loose = JobKey.assumeExists("123");
 A worker polls on the thread that calls `run` and hands jobs to a pool of
 handler threads. `maxJobs` caps how many jobs it holds at once (activated and
 not yet completed); it activates more as soon as 30% of that capacity is
-free, asking only for what fits. `threads` sets the pool size (default: one
-thread per job slot). A handler that throws fails its job with one retry
+free, asking only for what fits. `threads` sets the most handler threads
+(default: one per job slot). The pool is elastic: it starts with
+`coreThreads` threads (default `min(2, threads)`), adds one whenever a job
+arrives and no thread is free, and retires the extra threads once the pool
+has not been fully busy for `idleTimeoutMs` (default 30 s). An idle worker
+therefore holds only its core threads; a busy one still runs a job per slot.
+`worker.pool` reports the live, peak, spawned and retired thread counts. A handler that throws fails its job with one retry
 fewer; failed activations back off from 50 ms to 5 s. `stop()` (or
 `job.stopWorker()`, or `worker.control.get.stop()` from another thread) ends
 `run` after the jobs in hand finish; `worker.stats` counts what happened.
@@ -241,7 +246,7 @@ fewer; failed activations back off from 50 ms to 5 s. `stop()` (or
 ```d
 import camunda;
 
-// Holds up to 20 jobs at once and handles them on 20 threads.
+// Holds up to 20 jobs at once and handles them on up to 20 threads.
 auto worker = client.createJobWorker(
     JobWorkerConfig.create("payment-service")
         .maxJobs(20)
@@ -290,6 +295,26 @@ with `select()`, which can't use descriptors numbered 1024 or above:
 requests on those fail with "A libcurl function was given a bad argument".
 Keep a process there to a few hundred request threads. Linux libcurl uses
 `poll()` and is limited only by `ulimit -n`.
+
+### Memory tuning
+
+Each handler thread costs about 0.25 MB of RSS, which the elastic pool only
+pays under load. The D garbage collector's default heap growth adds more. A
+library can't set the runtime's GC options for your program, so set them in
+the application, either in code:
+
+<!-- snippet-exempt: defines the program-wide rt_options symbol -->
+```d
+extern (C) __gshared string[] rt_options = [
+    "gcopt=heapSizeFactor:1.1 minPoolSize:1 incPoolSize:1",
+];
+```
+
+or on the command line with
+`"--DRT-gcopt=heapSizeFactor:1.1 minPoolSize:1 incPoolSize:1"` (requires
+`rt_cmdline_enabled`). In the SDK performance benchmarks (5 workers × 32
+slots) this cut worker RSS from 60 MB to 47 MB with no measurable throughput
+cost. `MALLOC_ARENA_MAX=2` and `gc:precise` made no difference.
 
 ## Eventual consistency
 
