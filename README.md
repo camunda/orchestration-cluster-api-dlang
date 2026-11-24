@@ -311,7 +311,7 @@ extern (C) __gshared string[] rt_options = [
 ```
 
 or on the command line with
-`--DRT-gcopt=heapSizeFactor:1.1 minPoolSize:1 incPoolSize:1` (requires
+`"--DRT-gcopt=heapSizeFactor:1.1 minPoolSize:1 incPoolSize:1"` (requires
 `rt_cmdline_enabled`). In the SDK performance benchmarks (5 workers × 32
 slots) this cut worker RSS from 60 MB to 47 MB with no measurable throughput
 cost. `MALLOC_ARENA_MAX=2` and `gc:precise` made no difference.

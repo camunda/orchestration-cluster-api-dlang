@@ -356,29 +356,42 @@ final class JobWorker
         const maxThreads = max(1, config.effectiveThreads);
         const coreThreads = config.effectiveCoreThreads;
         const idleTimeout = config.effectiveIdleTimeoutMs;
+        int held;
+        int one;
+        // 1 = a job finished; 0 = a retiree is leaving and frees its slot.
+        void settle()
+        {
+            if (one) held -= one;
+            else retiring--;
+        }
         void grow()
         {
             handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
             live++;
             ctl.poolGrew(live + retiring);
         }
+        // Drain finished jobs, reap exited retirees, then give queued jobs
+        // the slots that became free. Run on every pass and after each
+        // dispatched job, so a slot freed by a retiree is never left idle
+        // while jobs wait in the queue.
+        void reconcile()
+        {
+            const before = retiring;
+            while (freed.tryTake(one)) settle();
+            if (retiring < before) ctl.poolShrank(live + retiring, 0);
+            // Join retirees that have exited (they left their slot already).
+            if (handlers.length > live + retiring) pruneFinished(handlers);
+            // Threads still retiring keep their slot until they exit.
+            while (held > live && live + retiring < maxThreads) grow();
+        }
         foreach (_; 0 .. coreThreads) grow();
         // Last time every live thread had a job (or the pool last changed).
         long lastFullMs = client.clock.nowMs;
 
-        int held;
         long backoff;
-        int one;
         while (!ctl.stopping)
         {
-            while (freed.tryTake(one)) held--;
-            if (retiring > 0)
-            {
-                // Reap retired threads on every pass, also at core size,
-                // and only then free their slots and their statistics.
-                retiring -= pruneFinished(handlers);
-                ctl.poolShrank(live + retiring, 0);
-            }
+            reconcile();
             const now = client.clock.nowMs;
             if (held >= live) lastFullMs = now;
             else if (live > coreThreads && now - lastFullMs >= idleTimeout)
@@ -396,8 +409,10 @@ final class JobWorker
             }
             if (cap - held < threshold)
             {
-                freed.take(one); // wait for a handler to finish one
-                held--;
+                // Wait for a handler to finish a job or a retiree to exit.
+                freed.take(one);
+                settle();
+                if (!one) ctl.poolShrank(live + retiring, 0);
                 continue;
             }
             ActivatedJobResult[] batch;
@@ -416,10 +431,8 @@ final class JobWorker
             {
                 held++;
                 jobs.put(raw.raw.toString());
-                // Count jobs finished during activation before growing.
-                while (freed.tryTake(one)) held--;
-                // Threads still retiring keep their slot until they exit.
-                if (held > live && live + retiring < maxThreads) grow();
+                // Count finished jobs and exited retirees before growing.
+                reconcile();
             }
             if (held >= live) lastFullMs = client.clock.nowMs;
             if (!batch.length && config.pollIntervalMs > 0 && !ctl.stopping)
@@ -479,7 +492,7 @@ final class JobWorker
 
 /// One handler thread: take jobs until the channel closes or an empty job
 /// retires it, run the handler, apply its action, and report each finished
-/// job on `freed`.
+/// job on `freed` (a retiring thread posts 0 so the dispatcher wakes).
 private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
@@ -489,7 +502,11 @@ private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     string text;
     while (jobs.take(text))
     {
-        if (!text.length) return; // retired
+        if (!text.length)
+        {
+            freed.put(0); // retired: wake the dispatcher to reuse the slot
+            return;
+        }
         scope (exit) freed.put(1);
         Job job;
         job.raw = ActivatedJobResult.fromJson(parseJSON(text));
