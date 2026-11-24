@@ -2,13 +2,23 @@
 /// threads, apply each result.
 ///
 /// The model (as in the other Camunda SDKs): `maxJobsActive` caps the jobs
-/// the worker holds at once. The calling thread polls; `handlerThreads`
-/// threads at most run the handler, so up to that many jobs are handled in
-/// parallel; whenever enough capacity frees up the worker activates more,
-/// sized to the free capacity. The handler pool is elastic: it starts with
-/// `coreHandlerThreads` threads, adds one whenever a job is dispatched and
-/// none is free, and retires the extra ones after `threadIdleTimeoutMs`
-/// without the pool being fully busy.
+/// the worker holds at once; whenever enough capacity frees up the worker
+/// activates more, sized to the free capacity.
+///
+/// Engine I/O and user code are separate. The thread that calls `run` is
+/// the dispatcher: it sends the activation long poll and every
+/// complete/fail/error call through the client's I/O thread (one libcurl
+/// multi loop over a small keep-alive connection pool, see
+/// `camunda.http.HttpEngine`) and never blocks on one. Handler threads only
+/// run the handler: each gets an already parsed job and hands its
+/// `JobAction` back to the dispatcher. So the engine connections and file
+/// descriptors a worker uses do not grow with `handlerThreads`
+/// (camunda/orchestration-cluster-api-dlang#54).
+///
+/// The handler pool is elastic: it starts with `coreHandlerThreads`
+/// threads, adds one whenever a job is dispatched and none is free, and
+/// retires the extra ones after `threadIdleTimeoutMs` without the pool
+/// being fully busy.
 module camunda.worker;
 
 @safe:
@@ -18,8 +28,9 @@ import camunda.clock : Clock;
 import camunda.config : WorkerDefaults;
 import camunda.errors;
 import camunda.generated;
+import camunda.http : HttpResult, HttpSink;
 import camunda.jsonx;
-import camunda.safeio : Chan, JoinHandle, ThreadSafe, isSendable, spawn;
+import camunda.safeio : Chan, Isolated, JoinHandle, ThreadSafe, assumeIsolated, isSendable, spawn;
 import std.json;
 
 /// Configuration for a `JobWorker`. A zero or null field is unset: the
@@ -32,7 +43,10 @@ struct JobWorkerConfig
     /// left). Each activation asks for the free capacity. Default 32
     /// (`CAMUNDA_WORKER_MAX_CONCURRENT_JOBS`).
     int maxJobsActive;
-    /// Most threads running the handler; 0 means one per `maxJobsActive`.
+    /// Most threads running the handler; 0 means four per CPU core, at
+    /// most `maxJobsActive`. Handler threads only run user code, so this
+    /// sets how many handlers run at once, not how many connections the
+    /// worker opens.
     int handlerThreads;
     /// Handler threads kept even when idle; 0 means `min(2, effectiveThreads)`.
     int coreHandlerThreads;
@@ -88,10 +102,13 @@ struct JobWorkerConfig
     JobWorkerConfig tenants(string[] ids) { tenantIds = ids; return this; }
     JobWorkerConfig lease(bool enabled) { withLease = enabled; return this; }
 
-    /// Most handler threads started at once.
+    /// Most handler threads alive at once.
     int effectiveThreads() const
     {
-        return handlerThreads > 0 ? handlerThreads : maxJobsActive;
+        import std.algorithm.comparison : clamp, max;
+        import std.parallelism : totalCPUs;
+        if (handlerThreads > 0) return handlerThreads;
+        return clamp(4 * totalCPUs, 1, max(1, maxJobsActive));
     }
 
     /// Handler threads started up front and kept when idle.
@@ -287,6 +304,8 @@ final class JobWorker
 
     private enum long backoffMinMs = 50;
     private enum long backoffMaxMs = 5_000;
+    /// The tag of the activation request; commands get 1, 2, ...
+    private enum long activationTag = 0;
 
     this(CamundaClient client, JobWorkerConfig config)
     {
@@ -315,13 +334,17 @@ final class JobWorker
     /// Handler pool size so far.
     PoolStats pool() const { return ctl.pool(); }
 
-    /// Run until `stop`: poll on this thread, handle jobs on up to
-    /// `config.effectiveThreads` threads (an elastic pool: it starts with
-    /// `config.effectiveCoreThreads`, grows when a job finds no free
-    /// thread, and shrinks back after `config.effectiveIdleTimeoutMs`
-    /// without being fully busy). A handler that throws fails its
-    /// job with one retry fewer. Failed activations back off (50 ms up to
-    /// 5 s). Rethrows `LeaseNotHonored`, after the jobs already held finish.
+    /// Run until `stop`. This thread dispatches: it sends the activation
+    /// long poll and the complete/fail/error calls through the client's I/O
+    /// thread without waiting on them, and hands parsed jobs to up to
+    /// `config.effectiveThreads` handler threads (an elastic pool: it
+    /// starts with `config.effectiveCoreThreads`, grows when a job finds no
+    /// free thread, and shrinks back after `config.effectiveIdleTimeoutMs`
+    /// without being fully busy). A handler that throws fails its job with
+    /// one retry fewer. A complete/fail/error call that fails transiently
+    /// is retried per `CAMUNDA_SDK_HTTP_RETRY_*`. Failed activations back
+    /// off (50 ms up to 5 s). Rethrows `LeaseNotHonored`, after the jobs
+    /// already held finish.
     void run(JobHandler handler)
     {
         run(&callPlain, handler);
@@ -331,126 +354,258 @@ final class JobWorker
     void run(Ctx)(JobAction function(Job, Ctx) @safe handler, Ctx context)
         if (isSendable!Ctx)
     {
+        import camunda.retry : backoffDelayMs, isRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
+        auto clock = client.clock;
         if (config.startupJitterMaxSeconds > 0)
         {
             import camunda.safeio : unitRandom;
             auto jitter = cast(long)(config.startupJitterMaxSeconds * 1000 * unitRandom());
-            client.clock.sleep(jitter);
+            clock.sleep(jitter);
         }
+        auto transport = client.transport;
+        const retry = transport.config.retry;
+        const maxAttempts = max(1, retry.maxAttempts);
         const cap = max(1, config.maxJobsActive);
         // Activate again once 30% of the capacity is free, as the Java
         // client does: no tiny one-job activations under load.
         const threshold = max(1, (cap * 3 + 9) / 10);
-        auto jobs = Chan!string.make;
-        auto freed = Chan!int.make;
+        auto tickets = Chan!Ticket.make;
+        auto events = Chan!Event.make;
+        // EventSink only puts on a channel, which is thread-safe.
+        auto sink = ThreadSafe!HttpSink.assumeThreadSafe(new EventSink(events));
         JoinHandle[] handlers;
         int live;     // threads serving jobs
         int retiring; // threads sent a retire signal and not yet exited
         scope (exit)
         {
-            jobs.close();
+            tickets.close();
             foreach (ref h; handlers) h.join();
             ctl.poolShrank(0, 0);
         }
         const maxThreads = max(1, config.effectiveThreads);
         const coreThreads = config.effectiveCoreThreads;
         const idleTimeout = config.effectiveIdleTimeoutMs;
-        int held;
-        int one;
-        // 1 = a job finished; 0 = a retiree is leaving and frees its slot.
-        void settle()
-        {
-            if (one) held -= one;
-            else retiring--;
-        }
+        int held;  // activated and not yet completed, failed, errored or left
+        int busy;  // handed to a handler that has not returned yet
+        bool activating;
+        long nextActivationMs; // no activation before this (backoff, poll interval)
+        long backoff;
+        Exception fatal;
+        Pending[long] inFlight; // sent commands, by tag
+        Pending[long] retrying; // commands waiting to be sent again
+        long nextTag = activationTag + 1;
+
         void grow()
         {
-            handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
+            handlers ~= spawn(&handlerLoop!Ctx, tickets, events, client.threadSafe, control, handler, context);
             live++;
             ctl.poolGrew(live + retiring);
         }
-        // Drain finished jobs, reap exited retirees, then give queued jobs
-        // the slots that became free. Run on every pass and after each
-        // dispatched job, so a slot freed by a retiree is never left idle
-        // while jobs wait in the queue.
-        void reconcile()
+        void settled(JobAction.Kind kind)
         {
-            const before = retiring;
-            while (freed.tryTake(one)) settle();
-            if (retiring < before) ctl.poolShrank(live + retiring, 0);
+            held--;
+            final switch (kind)
+            {
+            case JobAction.Kind.complete: ctl.count!"completed"; break;
+            case JobAction.Kind.fail: ctl.count!"failed"; break;
+            case JobAction.Kind.error: ctl.count!"errored"; break;
+            case JobAction.Kind.leave: ctl.count!"left"; break;
+            }
+        }
+        void send(long tag, Pending p)
+        {
+            p.attempts++;
+            inFlight[tag] = p;
+            try transport.submitJson("POST", p.command.path, p.command.body_, sink, tag);
+            catch (Exception e)
+            {
+                inFlight.remove(tag);
+                ctl.count!"actionFailures";
+                held--;
+            }
+        }
+        void activationFailed()
+        {
+            ctl.count!"activationFailures";
+            backoff = backoff ? min(backoffMaxMs, backoff * 8 / 5) : backoffMinMs;
+            nextActivationMs = clock.nowMs + backoff;
+        }
+        void activate()
+        {
+            try
+            {
+                const timeout = max(30_000, config.requestTimeoutMs + 10_000);
+                transport.submitJson("POST", "/jobs/activation", activationBody(cap - held), sink,
+                    activationTag, true, timeout);
+                activating = true;
+            }
+            catch (Exception e) activationFailed();
+        }
+        void activated(HttpResult r)
+        {
+            activating = false;
+            JSONValue[] jobs;
+            try
+            {
+                auto payload = parseJSON(transport.checked(r).body_);
+                if (payload.type == JSONType.object)
+                    if (auto p = "jobs" in payload)
+                        if (p.type == JSONType.array) jobs = p.arrayNoRef;
+            }
+            catch (Exception e)
+            {
+                activationFailed();
+                return;
+            }
+            backoff = 0;
+            ctl.count!"activated"(jobs.length);
+            if (config.withLease)
+                foreach (j; jobs)
+                {
+                    auto a = ActivatedJobResult.fromJson(j);
+                    if (!a.has_jobLeaseToken || !a.jobLeaseToken.value.length)
+                    {
+                        // The server ignored the lease request: hand out
+                        // nothing and stop, as these jobs cannot be settled
+                        // under the protocol the handler expects.
+                        fatal = new LeaseNotHonored(a.has_jobKey ? a.jobKey.value : "", "withLease");
+                        return;
+                    }
+                }
+            foreach (j; jobs)
+            {
+                held++;
+                busy++;
+                // The parsed response is dropped below; each job subtree
+                // goes to exactly one handler thread.
+                tickets.put(Ticket(false, assumeIsolated(j)));
+            }
+            if (!jobs.length && config.pollIntervalMs > 0)
+                nextActivationMs = clock.nowMs + config.pollIntervalMs;
+        }
+        void handle(ref Event ev)
+        {
+            final switch (ev.kind)
+            {
+            case Event.Kind.retired:
+                retiring--;
+                ctl.poolShrank(live + retiring, 0);
+                return;
+            case Event.Kind.handled:
+                busy--;
+                if (ev.command.kind == JobAction.Kind.leave || !ev.command.path.length)
+                {
+                    if (ev.command.kind == JobAction.Kind.leave) settled(JobAction.Kind.leave);
+                    else held--; // the command could not even be built (counted by the handler)
+                    return;
+                }
+                send(nextTag++, Pending(ev.command));
+                return;
+            case Event.Kind.http:
+                if (ev.http.tag == activationTag)
+                {
+                    activated(ev.http);
+                    return;
+                }
+                auto p = ev.http.tag in inFlight;
+                if (p is null) return;
+                auto pending = *p;
+                inFlight.remove(ev.http.tag);
+                try
+                {
+                    transport.checked(ev.http);
+                    settled(pending.command.kind);
+                }
+                catch (Exception e)
+                {
+                    if (isRetryable(e) && pending.attempts < maxAttempts)
+                    {
+                        pending.dueMs = clock.nowMs + backoffDelayMs(retry, pending.attempts - 1);
+                        retrying[ev.http.tag] = pending;
+                    }
+                    else
+                    {
+                        ctl.count!"actionFailures";
+                        held--;
+                    }
+                }
+                return;
+            }
+        }
+
+        foreach (_; 0 .. coreThreads) grow();
+        // Last time every live thread had a job (or the pool last changed).
+        long lastFullMs = clock.nowMs;
+        for (;;)
+        {
+            Event ev;
+            while (events.tryTake(ev)) handle(ev);
+            const now = clock.nowMs;
+            foreach (tag; retrying.keys)
+                if (retrying[tag].dueMs <= now)
+                {
+                    auto p = retrying[tag];
+                    retrying.remove(tag);
+                    send(tag, p);
+                }
             // Join retirees that have exited (they left their slot already).
             if (handlers.length > live + retiring) pruneFinished(handlers);
             // Threads still retiring keep their slot until they exit.
-            while (held > live && live + retiring < maxThreads) grow();
-        }
-        foreach (_; 0 .. coreThreads) grow();
-        // Last time every live thread had a job (or the pool last changed).
-        long lastFullMs = client.clock.nowMs;
-
-        long backoff;
-        while (!ctl.stopping)
-        {
-            reconcile();
-            const now = client.clock.nowMs;
-            if (held >= live) lastFullMs = now;
+            while (busy > live && live + retiring < maxThreads) grow();
+            if (busy >= live) lastFullMs = now;
             else if (live > coreThreads && now - lastFullMs >= idleTimeout)
             {
                 // Retire the threads that were not needed for a whole idle
-                // period. An empty job is the retire signal; idle threads
-                // take it, busy ones only after their job.
-                const target = max(coreThreads, held);
+                // period. A retire ticket is the signal; idle threads take
+                // it, busy ones only after their job.
+                const target = max(coreThreads, busy);
                 const n = live - target;
-                foreach (_; 0 .. n) jobs.put("");
+                foreach (_; 0 .. n) tickets.put(Ticket(true));
                 live = target;
                 retiring += n;
                 ctl.poolShrank(live + retiring, n);
                 lastFullMs = now;
             }
-            // Wait for a handler to finish a job or a retiree to exit when
-            // there is too little capacity to activate, or when queued jobs
-            // wait for slots that retiring threads still hold (activating
-            // now would park their acknowledgements behind a long poll).
-            if (cap - held < threshold || (held > live && retiring > 0))
-            {
-                // Bound the wait by the next idle-retirement deadline, so
-                // extra idle threads still retire under partial occupancy.
-                // The deadline is on the injected clock, so wait on it too.
-                const retireDue = live > coreThreads && held < live;
-                const got = retireDue
-                    ? takeUntil(freed, one, client.clock, lastFullMs + idleTimeout)
-                    : freed.take(one);
-                if (got)
-                {
-                    settle();
-                    if (!one) ctl.poolShrank(live + retiring, 0);
-                }
-                continue;
-            }
-            ActivatedJobResult[] batch;
-            try batch = activate(cap - held);
-            catch (LeaseNotHonored e) throw e;
-            catch (Exception e)
-            {
-                ctl.count!"activationFailures";
-                backoff = backoff ? min(backoffMaxMs, backoff * 8 / 5) : backoffMinMs;
-                client.clock.sleep(backoff);
-                continue;
-            }
-            backoff = 0;
-            ctl.count!"activated"(batch.length);
-            foreach (raw; batch)
-            {
-                held++;
-                jobs.put(raw.raw.toString());
-                // Count finished jobs and exited retirees before growing.
-                reconcile();
-            }
-            if (held >= live) lastFullMs = client.clock.nowMs;
-            if (!batch.length && config.pollIntervalMs > 0 && !ctl.stopping)
-                client.clock.sleep(config.pollIntervalMs);
+            const stopping = ctl.stopping || fatal !is null;
+            if (stopping && !activating && held == 0) break;
+            // Activate when enough capacity is free, unless queued jobs wait
+            // for slots that retiring threads still hold.
+            const wanted = !stopping && !activating && cap - held >= threshold
+                && !(busy > live && retiring > 0);
+            if (wanted && now >= nextActivationMs) activate();
+
+            // Wait for the next event, bounded by the next deadline on the
+            // injected clock: idle retirement, a command retry, or the
+            // next activation.
+            long deadline = long.max;
+            if (live > coreThreads && busy < live) deadline = min(deadline, lastFullMs + idleTimeout);
+            foreach (p; retrying) deadline = min(deadline, p.dueMs);
+            if (wanted && !activating) deadline = min(deadline, max(now + 1, nextActivationMs));
+            const got = deadline == long.max ? events.take(ev) : takeUntil(events, ev, clock, deadline);
+            if (got) handle(ev);
         }
+        if (fatal !is null) throw fatal;
+    }
+
+    private string activationBody(int count)
+    {
+        auto req = JobActivationRequest.initEmpty();
+        req.type(config.jobType);
+        req.maxJobsToActivate(count);
+        req.timeout(config.jobTimeoutMs);
+        req.requestTimeout(config.requestTimeoutMs);
+        req.worker(config.workerName);
+        if (config.fetchVariables.length) req.fetchVariable(config.fetchVariables);
+        if (config.tenantIds.length)
+        {
+            TenantId[] ids;
+            foreach (t; config.tenantIds) ids ~= TenantId.assumeExists(t);
+            req.tenantIds(ids);
+        }
+        if (config.withLease) req.withLease(true);
+        return client.withDefaultJobTenants(req.toJson()).toString();
     }
 
     private static JobAction callPlain(Job job, JobHandler handler)
@@ -458,18 +613,25 @@ final class JobWorker
         return handler(job);
     }
 
-    /// Take from `ch` until `clock` reaches `deadlineMs`. The wait goes
-    /// through `clock.sleep` in short slices, so an injected clock decides
-    /// when the deadline has passed.
+    /// Take from `ch` until `clock` reaches `deadlineMs`. On the live
+    /// clock this is a plain timed wait; an injected clock is waited on in
+    /// short `clock.sleep` slices, so it decides when the deadline has
+    /// passed.
     private static bool takeUntil(T)(Chan!T ch, out T v, Clock clock, long deadlineMs)
     {
+        import camunda.clock : LiveClock;
         enum sliceMs = 5;
+        const live = cast(LiveClock) clock !is null;
         for (;;)
         {
             if (ch.tryTake(v)) return true;
             const left = deadlineMs - clock.nowMs;
             if (left <= 0) return false;
-            clock.sleep(left < sliceMs ? left : sliceMs);
+            if (live)
+            {
+                if (ch.takeFor(v, left)) return true;
+            }
+            else clock.sleep(left < sliceMs ? left : sliceMs);
         }
     }
 
@@ -491,53 +653,77 @@ final class JobWorker
         handlers = keep;
         return reaped;
     }
+}
 
-    private ActivatedJobResult[] activate(int count)
+/// A job for a handler thread, or the signal to retire.
+private struct Ticket
+{
+    bool retire;
+    Isolated!JSONValue job;
+}
+
+/// The engine call that settles a job once its handler returned (none for
+/// `leave`, or when the call could not be built: `path` is empty then).
+private struct Command
+{
+    JobAction.Kind kind;
+    string path;
+    string body_;
+}
+
+/// What the dispatcher reacts to.
+private struct Event
+{
+    enum Kind { handled, retired, http }
+    Kind kind;
+    Command command; // handled
+    HttpResult http; // http
+}
+
+/// A command and how often it was sent.
+private struct Pending
+{
+    Command command;
+    uint attempts;
+    long dueMs; // when retrying: when to send it again
+}
+
+/// Hands the engine's results to the dispatcher.
+private final class EventSink : HttpSink
+{
+    private Chan!Event events;
+    this(Chan!Event events) { this.events = events; }
+    override void deliver(HttpResult r)
     {
-        auto req = JobActivationRequest.initEmpty();
-        req.type(config.jobType);
-        req.maxJobsToActivate(count);
-        req.timeout(config.jobTimeoutMs);
-        req.requestTimeout(config.requestTimeoutMs);
-        req.worker(config.workerName);
-        if (config.fetchVariables.length) req.fetchVariable(config.fetchVariables);
-        if (config.tenantIds.length)
-        {
-            TenantId[] ids;
-            foreach (t; config.tenantIds) ids ~= TenantId.assumeExists(t);
-            req.tenantIds(ids);
-        }
-        if (config.withLease) req.withLease(true);
-
-        auto jobs = client.activateJobs(req).jobs;
-        if (config.withLease)
-            foreach (raw; jobs)
-                if (!raw.has_jobLeaseToken || !raw.jobLeaseToken.value.length)
-                    throw new LeaseNotHonored(raw.has_jobKey ? raw.jobKey.value : "", "withLease");
-        return jobs;
+        Event e;
+        e.kind = Event.Kind.http;
+        e.http = r;
+        events.put(e);
     }
 }
 
-/// One handler thread: take jobs until the channel closes or an empty job
-/// retires it, run the handler, apply its action, and report each finished
-/// job on `freed` (a retiring thread posts 0 so the dispatcher wakes).
-private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
+/// One handler thread: take parsed jobs until the channel closes or a
+/// retire ticket comes, run the handler, and hand the resulting engine
+/// call back to the dispatcher (which sends it). It makes no engine call
+/// itself.
+private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
     ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
 {
     auto c = client.get;
     auto ctl = control.get;
-    string text;
-    while (jobs.take(text))
+    Ticket t;
+    while (tickets.take(t))
     {
-        if (!text.length)
+        Event done;
+        if (t.retire)
         {
-            freed.put(0); // retired: wake the dispatcher to reuse the slot
+            done.kind = Event.Kind.retired;
+            events.put(done); // wake the dispatcher to reuse the slot
             return;
         }
-        scope (exit) freed.put(1);
         Job job;
-        job.raw = ActivatedJobResult.fromJson(parseJSON(text));
+        job.raw = ActivatedJobResult.fromJson(t.job.take);
         job._clock = c.clock;
         job._client = client;
         job._control = control;
@@ -549,27 +735,37 @@ private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
             action = JobAction.fail(e.msg);
             action.retries = job.retries > 0 ? job.retries - 1 : 0;
         }
-        try apply(c, job, action, ctl);
-        catch (Exception e) ctl.count!"actionFailures";
+        done.kind = Event.Kind.handled;
+        try done.command = command(job, action);
+        catch (Exception e)
+        {
+            ctl.count!"actionFailures";
+            done.command = Command(JobAction.Kind.complete); // no path: the dispatcher drops the job
+        }
+        events.put(done);
     }
 }
 
-private void apply(CamundaClient client, Job job, JobAction action, WorkerControl ctl)
+/// The engine call for `action` on `job`.
+private Command command(const ref Job job, JobAction action)
 {
+    import std.uri : encodeComponent;
+    Command c;
+    c.kind = action.kind;
+    const base = "/jobs/" ~ encodeComponent(job.key) ~ "/";
     final switch (action.kind)
     {
     case JobAction.Kind.leave:
-        ctl.count!"left";
-        return;
+        return c;
     case JobAction.Kind.complete:
         auto req = JobCompletionRequest.initEmpty();
         if (action.variables.type != JSONType.null_)
             req.variables(action.variables);
         if (job.leaseToken.length)
             req.jobLeaseToken(JobLeaseToken.assumeExists(job.leaseToken));
-        client.completeJob(job.raw.jobKey, req);
-        ctl.count!"completed";
-        return;
+        c.path = base ~ "completion";
+        c.body_ = req.toJson().toString();
+        return c;
     case JobAction.Kind.fail:
         auto req = JobFailRequest.initEmpty();
         if (action.errorMessage.length) req.errorMessage(action.errorMessage);
@@ -579,9 +775,9 @@ private void apply(CamundaClient client, Job job, JobAction action, WorkerContro
             req.variables(action.variables);
         if (job.leaseToken.length)
             req.jobLeaseToken(JobLeaseToken.assumeExists(job.leaseToken));
-        client.failJob(job.raw.jobKey, req);
-        ctl.count!"failed";
-        return;
+        c.path = base ~ "failure";
+        c.body_ = req.toJson().toString();
+        return c;
     case JobAction.Kind.error:
         auto req = JobErrorRequest.initEmpty();
         req.errorCode(action.errorCode);
@@ -590,18 +786,22 @@ private void apply(CamundaClient client, Job job, JobAction action, WorkerContro
             req.variables(action.variables);
         if (job.leaseToken.length)
             req.jobLeaseToken(JobLeaseToken.assumeExists(job.leaseToken));
-        client.throwJobError(job.raw.jobKey, req);
-        ctl.count!"errored";
-        return;
+        c.path = base ~ "error";
+        c.body_ = req.toJson().toString();
+        return c;
     }
 }
 
 unittest
 {
+    import std.algorithm.comparison : clamp;
+    import std.parallelism : totalCPUs;
     auto cfg = JobWorkerConfig.create("payment-service").maxJobs(20).name("payment-worker");
     assert(cfg.jobType == "payment-service");
     assert(cfg.maxJobsActive == 20);
-    assert(cfg.effectiveThreads == 20);
+    assert(cfg.effectiveThreads == clamp(4 * totalCPUs, 1, 20));
+    assert(JobWorkerConfig.create("x").maxJobs(1).effectiveThreads == 1);
+    assert(JobWorkerConfig.create("x").maxJobs(10_000).effectiveThreads == 4 * totalCPUs);
     assert(cfg.threads(4).effectiveThreads == 4);
     assert(cfg.workerName == "payment-worker");
     auto a = JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
@@ -618,6 +818,18 @@ version (unittest)
     /// `quit` gets a value. The port goes out first on `port`.
     private void fakeJobServer(int total, Chan!int port, Chan!string done, Chan!int quit)
     {
+        fakeJobServerWith(total, 0, port, done, quit);
+    }
+
+    /// `fakeJobServer` answering every request `latencyMs` late (without
+    /// holding up the others), like an engine behind a slow link. The
+    /// summary gets a fifth field: the connections it accepted.
+    private void fakeJobServerWith(int total, long latencyMs, Chan!int port, Chan!string done, Chan!int quit)
+    {
+        import camunda.safeio : monoNowMs;
+        static struct Reply { size_t conn; long due; string text; }
+        Reply[] replies;
+        int accepted;
         import std.algorithm.comparison : max, min;
         import std.algorithm.searching : canFind, startsWith;
         import std.conv : to;
@@ -642,9 +854,16 @@ version (unittest)
             set.reset();
             set.add(listener);
             foreach (c; conns) set.add(c);
-            if (Socket.select(set, null, null, 50.msecs) <= 0) continue;
+            // Send the replies that are due.
+            Reply[] later;
+            foreach (r; replies)
+                if (r.due <= monoNowMs) conns[r.conn].send(r.text);
+                else later ~= r;
+            replies = later;
+            if (Socket.select(set, null, null, (replies.length ? 1 : 50).msecs) <= 0) continue;
             if (set.isSet(listener))
             {
+                accepted++;
                 conns ~= listener.accept();
                 pending ~= "";
             }
@@ -694,12 +913,13 @@ version (unittest)
                             badFailures++;
                     }
                     maxOutstanding = max(maxOutstanding, handedOut - completed - failed);
-                    c.send(format("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+                    replies ~= Reply(i, monoNowMs + latencyMs,
+                        format("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
                         reply.length, reply));
                     if (!reported && completed + failed == total)
                     {
                         reported = true;
-                        done.put(format("%d %d %d %d", completed, failed, maxOutstanding, badFailures));
+                        done.put(format("%d %d %d %d %d", completed, failed, maxOutstanding, badFailures, accepted));
                     }
                 }
             }
@@ -786,6 +1006,86 @@ unittest
     assert(s.activated == 200 && s.actionFailures == 0, format("%s", s));
 }
 
+version (unittest)
+{
+    private JobAction sleepyHandler(Job job, long sleepMs)
+    {
+        job.clock.sleep(sleepMs);
+        return JobAction.complete();
+    }
+
+    /// Run `total` jobs of `sleepMs` work each through a worker against a
+    /// fake engine answering `latencyMs` late. Returns the elapsed time,
+    /// the connections the engine accepted, the connections the client's
+    /// engine opened, and the handler pool's peak.
+    private long[4] timedRun(int total, long latencyMs, int maxJobs, int threads, long sleepMs,
+        int maxConnections = 16)
+    {
+        import camunda.safeio : monoNowMs;
+        import std.conv : to;
+        import std.format : formattedRead;
+        auto port = Chan!int.make;
+        auto done = Chan!string.make;
+        auto relay = Chan!string.make;
+        auto quit = Chan!int.make;
+        auto server = spawn(&fakeJobServerWith, total, latencyMs, port, done, quit);
+        scope (exit) { quit.put(1); server.join(); }
+        int p;
+        port.take(p);
+        auto client = CamundaClient.fromEnv([
+            "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+            "CAMUNDA_AUTH_STRATEGY": "NONE",
+            "CAMUNDA_SDK_HTTP_MAX_CONNECTIONS": maxConnections.to!string,
+        ]);
+        auto worker = client.createJobWorker(
+            JobWorkerConfig.create("t").maxJobs(maxJobs).threads(threads).coreThreads(threads));
+        worker.config.pollIntervalMs = 10;
+        auto stopper = spawn(&stopWhenDone, done, relay, worker.control);
+        const start = monoNowMs;
+        worker.run(&sleepyHandler, sleepMs);
+        const elapsed = monoNowMs - start;
+        stopper.join();
+        string summary;
+        relay.take(summary);
+        int completed, failed, maxOutstanding, badFailures, accepted;
+        summary.formattedRead("%d %d %d %d %d", completed, failed, maxOutstanding, badFailures, accepted);
+        assert(completed == total && failed == 0, summary);
+        assert(worker.stats.completed == total && worker.stats.actionFailures == 0);
+        return [elapsed, accepted, client.transport.engine.connectionsOpened, worker.pool.peak];
+    }
+}
+
+// A worker with 200+ handler threads keeps its engine connections (and so
+// its file descriptors) bounded by the client's connection limit, not by
+// the thread count (camunda/orchestration-cluster-api-dlang#54).
+unittest
+{
+    import std.format : format;
+    const r = timedRun(2_000, 0, 512, 256, 5);
+    // The connection limit (16, CAMUNDA_SDK_HTTP_MAX_CONNECTIONS) plus the
+    // activation long poll.
+    enum bound = 16 + 1;
+    assert(r[3] >= 200, format("pool peaked at %s threads, want 200+", r[3]));
+    assert(r[1] <= bound, format("engine accepted %s connections from %s handler threads", r[1], r[3]));
+    assert(r[2] <= bound, format("client opened %s connections", r[2]));
+}
+
+// 2 ms of engine latency does not lower the worker's throughput: engine
+// calls overlap on the I/O thread instead of each blocking a handler
+// thread (camunda/orchestration-cluster-api-dlang#54).
+unittest
+{
+    import std.format : format;
+    // Warm up (thread start-up, first connections), then compare.
+    timedRun(200, 0, 64, 16, 5);
+    const fast = timedRun(1_000, 0, 64, 16, 5)[0];
+    const slow = timedRun(1_000, 2, 64, 16, 5)[0];
+    // Handler work bounds both runs (1000 x 5 ms / 16 threads ~ 310 ms);
+    // allow scheduling noise, but not a per-call stall of the handlers
+    // (which alone would add 1000 x 2 ms / 16 ~ 125 ms).
+    assert(slow <= fast + fast / 5 + 75, format("2 ms latency: %s ms, none: %s ms", slow, fast));
+}
+
 // Explicit settings win over CAMUNDA_WORKER_* defaults; unset ones take them.
 unittest
 {
@@ -800,7 +1100,9 @@ unittest
     assert(fromEnv.config.maxJobsActive == 5 && fromEnv.config.jobTimeoutMs == 7000);
     assert(fromEnv.config.requestTimeoutMs == 10_000 && fromEnv.config.workerName == "d-sdk-worker");
     auto bare = new JobWorker(client, JobWorkerConfig.create("t"));
-    assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == 32);
+    import std.algorithm.comparison : min;
+    import std.parallelism : totalCPUs;
+    assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == min(32, 4 * totalCPUs));
 }
 
 version (unittest)

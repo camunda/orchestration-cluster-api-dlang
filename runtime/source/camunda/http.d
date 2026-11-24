@@ -1,15 +1,16 @@
-/// HTTP: libcurl on POSIX, WinHTTP on Windows (`camunda.winhttp`). Auth
-/// headers, mTLS, retries and backpressure sit above this.
+/// HTTP: libcurl's multi interface on POSIX (`camunda.curlio`), WinHTTP on
+/// Windows (`camunda.winhttp`), both behind an `HttpEngine` that runs
+/// requests on its own I/O thread. Auth headers, mTLS, retries and
+/// backpressure sit above this.
 module camunda.http;
 
 @safe:
 
 import camunda.errors;
 import camunda.jsonx;
-import camunda.safeio : Chan, ownText, readBytes, spawn;
+import camunda.safeio : Chan, Lock, ThreadSafe, ownText, readBytes, spawn, spawnDaemon;
 import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
-version (Windows) {} else import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
 
 struct HttpRequest
@@ -42,6 +43,8 @@ struct HttpRequest
     /// PKCS#12 client certificate + key (CAMUNDA_TLS_KEYSTORE_PATH/_PASSWORD).
     string keystorePath;
     string keystorePassword;
+    /// A long poll (job activation): see `WireRequest.longPoll`.
+    bool longPoll;
 }
 
 struct HttpResponse
@@ -50,31 +53,6 @@ struct HttpResponse
     string body_;
     immutable(ubyte)[] bytes;
     string contentType;
-}
-
-/// Send `req` and return the response. Connection failures throw
-/// `NetworkException`; HTTP error statuses are returned, not thrown.
-HttpResponse perform(const ref HttpRequest req)
-{
-    version (Windows)
-    {
-        import camunda.winhttp : winHttpPerform;
-        return winHttpPerform(req);
-    }
-    else
-        return curlPerform(req);
-}
-
-// libcurl >= 7.77 blob options (CURLOPTTYPE_BLOB + n); std.net.curl's
-// CurlOption enum predates them.
-private enum : int { curlOptSslCertBlob = 40_291, curlOptSslKeyBlob = 40_292, curlOptCaInfoBlob = 40_309 }
-
-/// `struct curl_blob`; CURL_BLOB_COPY makes libcurl keep its own copy.
-private struct CurlBlob
-{
-    const(void)* data;
-    size_t len;
-    uint flags;
 }
 
 /// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
@@ -152,8 +130,8 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
 }
 
 /// Thin probe: read the running libcurl's backend + version and decide.
-/// Must run after libcurl is initialized (`HTTP()` construction performs the
-/// synchronized `curl_global_init`); `curl_version_info` is not documented as
+/// Must run after libcurl is initialized (`curlGlobalInitOnce`, which `toWire`
+/// calls first); `curl_version_info` is not documented as
 /// safe to call before that.
 version (Windows) {} else
 private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
@@ -228,175 +206,382 @@ unittest
         == ["CAMUNDA_MTLS_CERT"]);
 }
 
-version (Windows) {} else
+/// A request as handed to an `HttpEngine`'s I/O thread: an immutable copy,
+/// so it may cross threads.
+struct WireRequest
 {
-/// `@trusted`: std.net.curl is `@system` throughout. This only hands it values
-/// it reads or copies, and copies every buffer it hands back before keeping it.
-///
-/// Bodies: std.net.curl's `postData` forces `application/octet-stream`, and
-/// `Method.put` switches curl to upload mode (fed by `onSend`, so the body is
-/// dropped and sent chunked). Instead every request with a body is a curl
-/// POST with `postfields` + the real Content-Type, and PUT/PATCH/DELETE are
-/// sent with CURLOPT_CUSTOMREQUEST. (camunda/orchestration-cluster-api-dlang#5)
-///
-/// Connections: each thread keeps one curl handle per TLS setup
-/// (`tlsHandles`) and reuses it, so libcurl keeps the connection alive
-/// between requests instead of opening a TCP (and TLS) connection per call.
-/// Every request starts from a reset method state and clears what it set
-/// (headers, custom verb, body pointer) on the way out, so nothing leaks into
-/// the next request on the same handle. A handle whose transfer failed is
-/// dropped and rebuilt on next use.
-private HttpResponse curlPerform(const ref HttpRequest req) @trusted
-{
-    import etc.c.curl : CurlOption;
-    // Hand inline PEM to curl as a blob. Throws a CamundaException naming the
-    // setting when this libcurl or its TLS backend cannot take blobs.
-    void setBlob(ref HTTP http, int option, string pem, string setting)
-    {
-        if (!pem.length) return;
-        auto blob = CurlBlob(pem.ptr, pem.length, 1 /* CURL_BLOB_COPY */);
-        try
-            http.handle.set(cast(CurlOption) option, cast(void*) &blob);
-        catch (CurlException e)
-            throw new CamundaException(setting ~ " (inline PEM) needs libcurl 7.77 or later with an"
-                ~ " OpenSSL-compatible TLS backend; set " ~ setting ~ "_PATH to a file instead (" ~ e.msg ~ ")");
-    }
+    string method;
+    string url;
+    /// `name, value` pairs, in no particular order.
+    immutable(string[2])[] headers;
+    immutable(ubyte)[] body_;
+    string contentType;
+    bool suppressExpect;
+    long timeoutMs;
+    string certPath, keyPath, caPath, keyPassphrase;
+    string certPem, keyPem, caPem;
+    string keystorePath, keystorePassword;
+    /// A long poll (job activation): it may wait on the server for a long
+    /// time, so it does not count against the engine's connection limit.
+    bool longPoll;
 
-    const tlsKey = req.caPath ~ "\0" ~ req.certPath ~ "\0" ~ req.keyPath ~ "\0" ~ req.keyPassphrase
-        ~ "\0" ~ req.caPem ~ "\0" ~ req.certPem ~ "\0" ~ req.keyPem
-        ~ "\0" ~ req.keystorePath ~ "\0" ~ req.keystorePassword;
-    HTTP http;
-    if (auto h = tlsKey in tlsHandles) http = *h;
+    /// The request this was made from.
+    HttpRequest toRequest() const
+    {
+        HttpRequest r;
+        r.method = method;
+        r.url = url;
+        foreach (h; headers) r.headers[h[0]] = h[1];
+        r.rawBody = body_;
+        r.contentType = contentType;
+        r.suppressExpect = suppressExpect;
+        r.timeoutMs = timeoutMs;
+        r.certPath = certPath;
+        r.keyPath = keyPath;
+        r.caPath = caPath;
+        r.keyPassphrase = keyPassphrase;
+        r.certPem = certPem;
+        r.keyPem = keyPem;
+        r.caPem = caPem;
+        r.keystorePath = keystorePath;
+        r.keystorePassword = keystorePassword;
+        r.longPoll = longPoll;
+        return r;
+    }
+}
+
+/// Copy `req` for the I/O thread. Throws a `CamundaException` for what can
+/// never be sent (an unsupported method, inline PEM this libcurl would
+/// drop) before anything reaches the network.
+WireRequest toWire(const ref HttpRequest req)
+{
+    switch (req.method)
+    {
+    case "GET", "POST", "PUT", "PATCH", "DELETE": break;
+    default: throw new CamundaException("unsupported HTTP method: " ~ req.method);
+    }
+    version (Windows) {}
     else
     {
-        // Constructing the first `HTTP` runs Phobos' synchronized
-        // `curl_global_init`. Probe the TLS backend only after that:
-        // `curl_version_info` is not documented as safe before global init,
-        // and concurrent first requests would otherwise race on it. The
-        // backend check still throws before any network request is sent.
-        http = HTTP();
-        // Fail closed when this libcurl's TLS backend would silently drop the
-        // inline PEM (curl.se support table).
+        import camunda.curlio : curlGlobalInitOnce;
+        // `curl_version_info` is only documented as safe after global init.
+        curlGlobalInitOnce();
+        // Fail closed when this libcurl's TLS backend would silently drop
+        // the inline PEM (curl.se support table).
         if (const missing = curlTlsBackendMissingBlobs(req))
         {
             import std.array : join;
             throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
                 ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
         }
-        if (req.caPath.length) http.caInfo = req.caPath;
-        // A custom CA replaces system trust: also clear libcurl's default CA
-        // directory, or a server signed by an unrelated system-trusted CA
-        // would still be accepted via CURLOPT_CAPATH. Backends without a CA
-        // directory (e.g. rustls, which does take CAINFO_BLOB) answer even a
-        // null CAPATH with CURLE_NOT_BUILT_IN, so tolerate exactly the
-        // unsupported-option results while preserving other errors.
-        if (req.caPath.length || req.caPem.length)
-            http.handle.clearIfSupported(CurlOption.capath);
-        if (req.certPath.length)
-        {
-            http.handle.set(CurlOption.sslcert, req.certPath);
-            if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
-        }
-        if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
-        if (req.keystorePath.length)
-        {
-            http.handle.set(CurlOption.sslcert, req.keystorePath);
-            http.handle.set(CurlOption.sslcerttype, "P12");
-            // The keystore password always wins, even when empty: a PKCS#12
-            // with an empty password must not be opened with the unrelated
-            // CAMUNDA_MTLS_KEY_PASSPHRASE (which is for the PEM key).
-            http.handle.set(CurlOption.keypasswd, req.keystorePassword);
-        }
-        setBlob(http, curlOptCaInfoBlob, req.caPem, "CAMUNDA_MTLS_CA");
-        setBlob(http, curlOptSslCertBlob, req.certPem, "CAMUNDA_MTLS_CERT");
-        setBlob(http, curlOptSslKeyBlob, req.keyPem, "CAMUNDA_MTLS_KEY");
-        tlsHandles[tlsKey] = http;
     }
-    http.url = req.url;
-    // Reset the method (GET clears POST/upload/nobody) and the verb override.
-    http.handle.set(CurlOption.httpget, 1L);
-    http.handle.clear(CurlOption.customrequest);
-    http.method = HTTP.Method.undefined;
-    http.clearRequestHeaders();
-    scope (exit)
-    {
-        // `setPostData` keeps a pointer to `payload` without copying it:
-        // never leave it on the handle past this call.
-        http.clearRequestHeaders();
-        http.handle.clear(CurlOption.customrequest);
-        http.handle.clear(CurlOption.postfields);
-        http.handle.set(CurlOption.httpget, 1L);
-        http.onReceive = null;
-        http.onReceiveHeader = null;
-    }
-    foreach (k, v; req.headers) http.addRequestHeader(k, v);
-    import core.time : msecs;
-    http.connectTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
-    http.operationTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
-
-    const(void)[] payload;
-    if (req.rawBody.length) payload = req.rawBody;
-    else if (req.body_.length) payload = req.body_;
-    const hasBody = payload.length > 0 && req.method != "GET" && req.method != "HEAD";
-    // Content-Type/Expect defaults are filled in only when the caller's
-    // headers do not already carry the name: an explicit custom header always
-    // wins, for every request shape. (camunda/orchestration-cluster-api-dlang#12)
-    const customContentType = hasHeaderNamed(req.headers, "content-type");
-    const customExpect = hasHeaderNamed(req.headers, "expect");
-    if (hasBody)
-    {
-        http.method = HTTP.Method.post;
-        http.setPostData(payload,
-            customContentType ? "" : req.contentType.length ? req.contentType : "application/json");
-        if (req.suppressExpect && !customExpect) http.addRequestHeader("Expect", "");
-        if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
-    }
-    else switch (req.method)
-    {
-    case "GET": http.method = HTTP.Method.get; break;
-    case "DELETE": http.method = HTTP.Method.del; break;
-    case "POST", "PUT", "PATCH":
-        // Bodiless write: an empty POST (Content-Length: 0), with libcurl's
-        // default form Content-Type removed, and the verb overridden.
-        http.method = HTTP.Method.post;
-        http.handle.set(CurlOption.postfields, "");
-        http.handle.set(CurlOption.postfieldsize, 0L);
-        if (!customContentType) http.addRequestHeader("Content-Type", "");
-        if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
-        break;
-    default:
-        throw new CamundaException("unsupported HTTP method: " ~ req.method);
-    }
-
-    ubyte[] buf;
-    string contentType;
-    http.onReceiveHeader = (in char[] key, in char[] value) {
-        if (key.idup.toLower == "content-type") contentType = value.idup;
-    };
-    http.onReceive = (ubyte[] data) {
-        buf ~= data;
-        return data.length;
-    };
-    try http.perform();
-    catch (CurlException e)
-    {
-        tlsHandles.remove(tlsKey);
-        throw new NetworkException(e.msg, __FILE__, __LINE__, e);
-    }
-
-    HttpResponse res;
-    res.status = http.statusLine.code;
-    res.contentType = contentType;
-    res.bytes = buf.idup;
-    res.body_ = ownText(buf);
-    return res;
+    WireRequest w;
+    w.method = req.method;
+    w.url = req.url;
+    foreach (k, v; req.headers) w.headers ~= [k, v];
+    if (req.rawBody.length) w.body_ = req.rawBody.idup;
+    else if (req.body_.length) w.body_ = cast(immutable(ubyte)[]) req.body_;
+    w.contentType = req.contentType;
+    w.suppressExpect = req.suppressExpect;
+    w.timeoutMs = req.timeoutMs > 0 ? req.timeoutMs : 30_000;
+    w.certPath = req.certPath;
+    w.keyPath = req.keyPath;
+    w.caPath = req.caPath;
+    w.keyPassphrase = req.keyPassphrase;
+    w.certPem = req.certPem;
+    w.keyPem = req.keyPem;
+    w.caPem = req.caPem;
+    w.keystorePath = req.keystorePath;
+    w.keystorePassword = req.keystorePassword;
+    w.longPoll = req.longPoll;
+    return w;
 }
 
-/// This thread's curl handles, one per TLS setup (module variables are
-/// thread-local in D, so no other thread ever sees them). TLS options are
-/// fixed per handle, so a request with a different CA or client certificate
-/// never inherits another's.
-private HTTP[string] tlsHandles;
+/// The outcome of a submitted request.
+struct HttpResult
+{
+    /// The caller's tag, passed through.
+    long tag;
+    /// The response (any HTTP status) when `error` is empty.
+    HttpResponse response;
+    /// Why no response arrived (connection refused, timeout, ...).
+    string error;
+    /// `error` is a configuration problem (a TLS setting libcurl refused),
+    /// not a network one.
+    bool configError;
+
+    /// The response; throws `NetworkException` (or `CamundaException` for
+    /// a configuration problem) when there is none.
+    HttpResponse get() const
+    {
+        if (configError) throw new CamundaException(error);
+        if (error.length) throw new NetworkException(error);
+        return cast(HttpResponse) response;
+    }
+}
+
+/// Where an `HttpEngine` delivers results. `deliver` runs on the I/O
+/// thread: it must be quick, must not throw, and must be thread-safe.
+abstract class HttpSink
+{
+    abstract void deliver(HttpResult result) @safe;
+}
+
+/// An `HttpSink` that puts every result on a channel.
+final class ChanSink : HttpSink
+{
+    private Chan!HttpResult ch;
+    this(Chan!HttpResult ch) { this.ch = ch; }
+    override void deliver(HttpResult result) { ch.put(result); }
+
+    /// A sink for `ch`, as other threads may hold it.
+    static ThreadSafe!HttpSink of(Chan!HttpResult ch)
+    {
+        // `ch` is the only state, and a channel is thread-safe.
+        return ThreadSafe!HttpSink.assumeThreadSafe(new ChanSink(ch));
+    }
+}
+
+/// A submitted request, queued for the I/O thread.
+struct Submission
+{
+    WireRequest req;
+    ThreadSafe!HttpSink sink;
+    long tag;
+}
+
+/// Runs HTTP requests on its own I/O thread over a small pool of keep-alive
+/// connections, for any number of calling threads.
+///
+/// On POSIX one thread drives libcurl's multi interface: every request of
+/// every caller runs there, and at most `maxConnections` ordinary requests
+/// are in flight at once (more wait in a queue), so the number of
+/// connections and file descriptors does not grow with the number of
+/// threads that send requests. Long polls (`HttpRequest.longPoll`, job
+/// activation) do not count against the limit, so a waiting activation
+/// never holds back a completion. On Windows a pool of at most
+/// `maxConnections` threads (plus one per long poll) runs WinHTTP.
+///
+/// The I/O thread starts with the first request and exits after a few
+/// seconds without work (closing its connections); the next request starts
+/// it again.
+final class HttpEngine
+{
+    private Lock lock;
+    private Chan!Submission queue;
+    private int maxConns;
+    private shared long opened, sent;
+    version (Windows)
+    {
+        /// Threads serving ordinary requests (at most `maxConns`), and the
+        /// idle ones among them. Each keeps its own WinHTTP session.
+        private int threads, idle, waiting;
+        /// Long polls wait on their own threads (one per concurrent poll),
+        /// so they never take an ordinary thread's place or its connection.
+        private Chan!Submission pollQueue;
+        private int pollThreads, pollIdle, pollWaiting;
+        // `waiting` counts queued requests no thread has taken yet: an idle
+        // thread may already hold one it has not reported, so a new request
+        // starts a thread unless there are more idle threads than waiting ones.
+    }
+    else
+    {
+        private bool running;
+        /// The I/O thread's multi handle while it runs (only for wakeups).
+        private void* multi;
+    }
+
+    /// Idle time after which the I/O thread exits.
+    enum long idleExitMs = 5_000;
+
+    this(int maxConnections = 16)
+    {
+        lock = new Lock;
+        queue = Chan!Submission.make;
+        version (Windows) pollQueue = Chan!Submission.make;
+        maxConns = maxConnections > 0 ? maxConnections : 16;
+    }
+
+    /// This engine as other threads may hold it.
+    ThreadSafe!HttpEngine threadSafe()
+    {
+        // Every mutable member is behind `lock`, atomic, or a channel.
+        return ThreadSafe!HttpEngine.assumeThreadSafe(this);
+    }
+
+    /// Most ordinary requests in flight at once.
+    int maxConnections() const { return maxConns; }
+
+    /// Connections opened so far (libcurl's count of new connections).
+    long connectionsOpened() const
+    {
+        import core.atomic : atomicLoad;
+        return atomicLoad(opened);
+    }
+
+    /// Requests finished so far.
+    long requestsSent() const
+    {
+        import core.atomic : atomicLoad;
+        return atomicLoad(sent);
+    }
+
+    /// Send `req` and wait for the response. Connection failures throw
+    /// `NetworkException`; HTTP error statuses are returned, not thrown.
+    HttpResponse perform(const ref HttpRequest req)
+    {
+        auto ch = Chan!HttpResult.make;
+        submit(req, ChanSink.of(ch), 0);
+        HttpResult r;
+        ch.take(r);
+        return r.get;
+    }
+
+    /// Queue `req` and return at once; the result goes to `sink` (on the
+    /// I/O thread) carrying `tag`. Throws only for a request that can never
+    /// be sent (see `toWire`).
+    void submit(const ref HttpRequest req, ThreadSafe!HttpSink sink, long tag)
+    {
+        auto s = Submission(toWire(req), sink, tag);
+        version (Windows)
+        {
+            lock.run({
+                if (s.req.longPoll)
+                {
+                    pollQueue.put(s);
+                    if (++pollWaiting > pollIdle)
+                    {
+                        pollThreads++;
+                        spawnDaemon(&poolLoop, threadSafe, true);
+                    }
+                }
+                else
+                {
+                    queue.put(s);
+                    if (++waiting > idle && threads < maxConns)
+                    {
+                        threads++;
+                        spawnDaemon(&poolLoop, threadSafe, false);
+                    }
+                }
+            });
+        }
+        else
+        {
+            lock.run({
+                queue.put(s);
+                if (!running)
+                {
+                    import camunda.curlio : ioLoop;
+                    running = true;
+                    spawnDaemon(&ioLoop, threadSafe);
+                }
+                else if (multi !is null)
+                {
+                    import camunda.curlio : multiWakeup;
+                    multiWakeup(multi);
+                }
+            });
+        }
+    }
+
+    package void counted(long newConnections)
+    {
+        import core.atomic : atomicOp;
+        atomicOp!"+="(opened, newConnections);
+        atomicOp!"+="(sent, 1);
+    }
+
+    package bool next(out Submission s) { return queue.tryTake(s); }
+
+    version (Windows) {} else
+    {
+        /// The I/O thread started with multi handle `m`.
+        package void attach(void* m) { lock.run({ multi = m; }); }
+
+        /// The idle I/O thread asks to exit: true (and the engine is
+        /// stopped) unless a request arrived meanwhile.
+        package bool detach()
+        {
+            return lock.run({
+                if (queue.tryTake(pendingAfterDetach)) return false;
+                running = false;
+                multi = null;
+                return true;
+            });
+        }
+
+        /// A request `detach` found, for the I/O thread to pick up.
+        package Submission pendingAfterDetach;
+
+        /// The I/O thread is dying: the next request starts a new one.
+        package void crashed()
+        {
+            lock.run({
+                running = false;
+                multi = null;
+            });
+        }
+    }
+
+    version (Windows)
+    {
+        private static void poolLoop(ThreadSafe!HttpEngine self, bool polls)
+        {
+            auto e = self.get;
+            auto q = polls ? e.pollQueue : e.queue;
+            for (;;)
+            {
+                Submission s;
+                e.lock.run({ if (polls) e.pollIdle++; else e.idle++; });
+                const got = q.takeFor(s, idleExitMs);
+                const exit = e.lock.run({
+                    if (polls) e.pollIdle--; else e.idle--;
+                    if (got || q.tryTake(s))
+                    {
+                        if (polls) e.pollWaiting--; else e.waiting--;
+                        return false;
+                    }
+                    if (polls) e.pollThreads--; else e.threads--;
+                    return true;
+                });
+                if (exit) return;
+                HttpResult r;
+                r.tag = s.tag;
+                try
+                {
+                    import camunda.winhttp : winHttpPerform;
+                    auto req = s.req.toRequest;
+                    r.response = winHttpPerform(req);
+                }
+                catch (NetworkException ex) r.error = ex.msg;
+                catch (Exception ex)
+                {
+                    r.error = ex.msg;
+                    r.configError = true;
+                }
+                e.counted(0);
+                try s.sink.get.deliver(r);
+                catch (Exception) {}
+            }
+        }
+    }
+}
+
+/// Send `req` and return the response, on the process-wide default engine
+/// (`defaultEngine`). Connection failures throw `NetworkException`; HTTP
+/// error statuses are returned, not thrown.
+HttpResponse perform(const ref HttpRequest req)
+{
+    return defaultEngine().perform(req);
+}
+
+/// The engine `perform` uses: requests sent outside a `Transport` (the
+/// OAuth token fetch, tests). Each `Transport` has its own.
+HttpEngine defaultEngine()
+{
+    import camunda.safeio : liveSingleton;
+    return liveSingleton!HttpEngine;
 }
 
 string encodeQuery(string[string] query)

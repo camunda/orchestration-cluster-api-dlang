@@ -94,6 +94,10 @@ struct CamundaConfig
     string[string] defaultHeaders;
     long eventualPollDefaultMs = 10_000;
     RetryConfig retry;
+    /// Most ordinary requests a client has in flight at once, which bounds
+    /// its connections (`CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`). Job activation
+    /// long polls come on top, one per running worker.
+    int httpMaxConnections = 16;
     TlsConfig tls;
     WorkerDefaults workerDefaults;
     bool restAddressExact;
@@ -177,6 +181,7 @@ struct CamundaConfig
         c.retry.maxAttempts = cast(uint) parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS"), 3);
         c.retry.baseDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS"), 100);
         c.retry.maxDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS"), 2000);
+        c.httpMaxConnections = cast(int) parseLong(get("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS"), 16);
 
         c.tls.cert = get("CAMUNDA_MTLS_CERT");
         c.tls.key = get("CAMUNDA_MTLS_KEY");
@@ -202,6 +207,8 @@ struct CamundaConfig
 
     private void validate() const
     {
+        if (httpMaxConnections < 1)
+            throw new ConfigException("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS must be at least 1");
         if (authStrategy == AuthStrategy.oauth)
         {
             if (!clientId.length || !clientSecret.length || !oauthUrl.length)

@@ -95,7 +95,9 @@ unittest
 
 /// Thread-safe once configured: request methods may run on several threads
 /// at once. `Authentication` and `BackpressureManager` lock their own state,
-/// curl handles are per thread (`camunda.http`), and the configuration and
+/// every request runs on the transport's own `HttpEngine` I/O thread over a
+/// small pool of keep-alive connections (`CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`),
+/// however many threads send them, and the configuration and
 /// headers are fixed at construction. Setters (`userAgent`) are
 /// configuration: call them before sharing. A `TestClock` is not
 /// synchronized, so don't share a transport built with one.
@@ -105,6 +107,7 @@ final class Transport
     private Authentication _auth;
     private Clock _clock;
     private BackpressureManager _bp;
+    private HttpEngine _engine;
     private string _userAgent = sdkUserAgent;
     private string[string] _headers;
 
@@ -124,6 +127,7 @@ final class Transport
         _clock = options.clock is null ? liveClock() : options.clock;
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
+        _engine = new HttpEngine(_config.httpMaxConnections);
         // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
         // (case-insensitive) name. Validate here too: `options.headers` is a
         // public field, so direct assignment bypasses `withHeader`; every
@@ -149,6 +153,8 @@ final class Transport
     Clock clock() { return _clock; }
     Authentication auth() { return _auth; }
     BackpressureState backpressureState() const { return _bp.state(); }
+    /// The engine that runs this transport's requests.
+    HttpEngine engine() { return _engine; }
 
     /// Override the `User-Agent` (e.g. a CLI identifying itself).
     void userAgent(string ua) { _userAgent = ua; }
@@ -288,9 +294,48 @@ final class Transport
         return req;
     }
 
-    private static HttpResponse send(ref HttpRequest req)
+    /// Send a JSON request without waiting, with auth and the custom
+    /// headers but without retry or the backpressure gate (the caller
+    /// decides; job commands are exempt from the gate anyway). The result
+    /// goes to `sink` on the I/O thread, carrying `tag`; read it with
+    /// `checked`. `longPoll` marks a job activation (see
+    /// `HttpRequest.longPoll`); `timeoutMs` 0 keeps the 30 s default.
+    void submitJson(string method, string path, string jsonBody, ThreadSafe!HttpSink sink, long tag,
+        bool longPoll = false, long timeoutMs = 0)
     {
-        auto res = perform(req);
+        HttpRequest req = baseRequest(method, path, null, ServerBase.api);
+        if (jsonBody.length)
+        {
+            req.body_ = jsonBody;
+            req.contentType = "application/json";
+        }
+        req.longPoll = longPoll;
+        if (timeoutMs > 0) req.timeoutMs = timeoutMs;
+        _engine.submit(req, sink, tag);
+    }
+
+    /// The 2xx response of a submitted request; throws `NetworkException`
+    /// or `ApiException` (as the blocking methods do) otherwise. Feeds the
+    /// backpressure state like the blocking methods.
+    HttpResponse checked(const HttpResult result)
+    {
+        try
+        {
+            auto res = result.get;
+            if (res.status < 200 || res.status >= 300) throw new ApiException(res.status, res.body_);
+            _bp.recordHealthyHint();
+            return res;
+        }
+        catch (Exception e)
+        {
+            if (isBackpressureError(e)) _bp.recordBackpressure();
+            throw e;
+        }
+    }
+
+    private HttpResponse send(ref HttpRequest req)
+    {
+        auto res = _engine.perform(req);
         if (res.status >= 200 && res.status < 300) return res;
         throw new ApiException(res.status, res.body_);
     }

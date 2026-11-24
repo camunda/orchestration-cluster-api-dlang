@@ -62,7 +62,8 @@ void jobWorker()
     // region JobWorker
     import camunda;
 
-    // Holds up to 20 jobs at once and handles them on up to 20 threads.
+    // Holds up to 20 jobs at once; handles them on up to 4 x cores threads
+    // (at most 20), while completions go out on the client's I/O thread.
     auto worker = client.createJobWorker(
         JobWorkerConfig.create("payment-service")
             .maxJobs(20)

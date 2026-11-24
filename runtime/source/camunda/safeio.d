@@ -319,6 +319,48 @@ private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, ref Args 
     return h;
 }
 
+/// `spawn` for a background thread the program does not wait for at exit
+/// (an I/O thread that idles until it is needed).
+JoinHandle spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
+    if (allSatisfy!(isSendable, Args))
+{
+    auto h = startSpawned(fn, args);
+    markDaemon(h);
+    return h;
+}
+
+/// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
+/// runtime reads at exit.
+private void markDaemon(ref JoinHandle h) @trusted
+{
+    h.thread.isDaemon = true;
+}
+
+/// A value handed to exactly one other thread: the sender built it, keeps
+/// no reference to it, and the receiver `take`s it once. Use it for parsed
+/// data (a `JSONValue` tree) that would otherwise have to be serialized to
+/// cross a `Chan`.
+struct Isolated(T)
+{
+    private shared T payload;
+
+    /// The value, for the receiving thread.
+    /// `@trusted`: sound by the `assumeIsolated` claim: no other thread
+    /// holds a reference to it.
+    T take() @trusted
+    {
+        return *cast(T*) &payload;
+    }
+}
+
+/// Claim that nothing but the returned `Isolated` references `value` (its
+/// whole graph), so the receiving thread may own it.
+/// `@trusted`: the claim is the caller's; the cast only records it.
+Isolated!T assumeIsolated(T)(T value) @trusted
+{
+    return Isolated!T(cast(shared) value);
+}
+
 private template callArgs(size_t n)
 {
     import std.conv : to;
