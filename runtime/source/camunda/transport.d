@@ -15,7 +15,7 @@ import camunda.errors;
 import camunda.http;
 import camunda.jsonx;
 import camunda.retry;
-import camunda.safeio : ThreadSafe;
+import camunda.safeio : Chan, Lock, ThreadSafe, spawnDaemon;
 import camunda.version_ : sdkUserAgent;
 import std.json;
 
@@ -110,6 +110,10 @@ final class Transport
     private HttpEngine _engine;
     private string _userAgent = sdkUserAgent;
     private string[string] _headers;
+    // Requests waiting for an OAuth token (see `submitJson`).
+    private Lock _prepLock;
+    private Chan!Prepared _prep;
+    private bool _prepRunning;
 
     /// This transport as a value other threads may hold (`spawn` arguments).
     ThreadSafe!Transport threadSafe()
@@ -128,6 +132,8 @@ final class Transport
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
         _engine = new HttpEngine(_config.httpMaxConnections);
+        _prepLock = new Lock;
+        _prep = Chan!Prepared.make;
         // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
         // (case-insensitive) name. Validate here too: `options.headers` is a
         // public field, so direct assignment bypasses `withHeader`; every
@@ -264,10 +270,19 @@ final class Transport
 
     private HttpRequest baseRequest(string method, string path, string[string] query, ServerBase server)
     {
+        return requestWith(_auth.headers(), method, path, query, server);
+    }
+
+    private HttpRequest requestWith(string[string] authHeaders, string method, string path,
+        string[string] query, ServerBase server)
+    {
         HttpRequest req;
         req.method = method;
         req.url = joinUrl(baseAddress(server), path, query);
-        req.headers = _auth.headers();
+        // A job activation may wait on the server for its whole request
+        // timeout: it runs outside the connection limit however it is sent.
+        req.longPoll = isJobActivation(method, path);
+        req.headers = authHeaders;
         req.headers["Accept"] = "application/json, */*";
         req.headers["User-Agent"] = _userAgent;
         // Custom headers go last and merge case-insensitively, so they may
@@ -298,39 +313,96 @@ final class Transport
     /// headers but without retry or the backpressure gate (the caller
     /// decides; job commands are exempt from the gate anyway). The result
     /// goes to `sink` on the I/O thread, carrying `tag`; read it with
-    /// `checked`. `longPoll` marks a job activation (see
-    /// `HttpRequest.longPoll`); `timeoutMs` 0 keeps the 30 s default.
+    /// `checked`, and report the final outcome with `recordOutcome`.
+    /// `longPoll` marks a job activation (see `HttpRequest.longPoll`);
+    /// `timeoutMs` 0 keeps the 30 s default.
+    ///
+    /// Never blocks on authentication: when the OAuth token must first be
+    /// fetched, the request waits for it on this transport's preparation
+    /// thread, and a failure to get one is delivered to `sink` like any
+    /// other failed request.
     void submitJson(string method, string path, string jsonBody, ThreadSafe!HttpSink sink, long tag,
         bool longPoll = false, long timeoutMs = 0)
     {
-        HttpRequest req = baseRequest(method, path, null, ServerBase.api);
-        if (jsonBody.length)
+        auto p = Prepared(method, path, jsonBody, sink, tag, longPoll, timeoutMs);
+        string[string] authHeaders;
+        if (_auth.tryHeaders(authHeaders))
         {
-            req.body_ = jsonBody;
+            dispatch(p, authHeaders);
+            return;
+        }
+        _prepLock.run({
+            _prep.put(p);
+            if (!_prepRunning)
+            {
+                _prepRunning = true;
+                spawnDaemon(&prepLoop, threadSafe);
+            }
+        });
+    }
+
+    private void dispatch(ref Prepared p, string[string] authHeaders)
+    {
+        HttpRequest req = requestWith(authHeaders, p.method, p.path, null, ServerBase.api);
+        if (p.jsonBody.length)
+        {
+            req.body_ = p.jsonBody;
             req.contentType = "application/json";
         }
-        req.longPoll = longPoll;
-        if (timeoutMs > 0) req.timeoutMs = timeoutMs;
-        _engine.submit(req, sink, tag);
+        req.longPoll = req.longPoll || p.longPoll;
+        if (p.timeoutMs > 0) req.timeoutMs = p.timeoutMs;
+        _engine.submit(req, p.sink, p.tag);
+    }
+
+    /// The preparation thread: gets the auth headers (which may fetch a
+    /// token) for the requests `submitJson` could not send at once. Exits
+    /// after a while without work; `submitJson` starts it again.
+    private static void prepLoop(ThreadSafe!Transport self)
+    {
+        auto t = self.get;
+        for (;;)
+        {
+            Prepared p;
+            if (!t._prep.takeFor(p, 5_000))
+            {
+                const exit = t._prepLock.run({
+                    if (t._prep.tryTake(p)) return false;
+                    t._prepRunning = false;
+                    return true;
+                });
+                if (exit) return;
+            }
+            try t.dispatch(p, t._auth.headers());
+            catch (Exception e)
+            {
+                HttpResult r;
+                r.tag = p.tag;
+                r.error = e.msg;
+                r.configError = !isRetryable(e);
+                try p.sink.get.deliver(r);
+                catch (Exception) {}
+            }
+        }
     }
 
     /// The 2xx response of a submitted request; throws `NetworkException`
-    /// or `ApiException` (as the blocking methods do) otherwise. Feeds the
-    /// backpressure state like the blocking methods.
+    /// or `ApiException` (as the blocking methods do) otherwise. Does not
+    /// touch the backpressure state: a caller that retries reports only
+    /// the final outcome, through `recordOutcome`.
     HttpResponse checked(const HttpResult result)
     {
-        try
-        {
-            auto res = result.get;
-            if (res.status < 200 || res.status >= 300) throw new ApiException(res.status, res.body_);
-            _bp.recordHealthyHint();
-            return res;
-        }
-        catch (Exception e)
-        {
-            if (isBackpressureError(e)) _bp.recordBackpressure();
-            throw e;
-        }
+        auto res = result.get;
+        if (res.status < 200 || res.status >= 300) throw new ApiException(res.status, res.body_);
+        return res;
+    }
+
+    /// Feed the final outcome of a submitted request to the backpressure
+    /// state, as the blocking methods do after their retries: `failure` is
+    /// the error the caller gave up on, or null for a success.
+    void recordOutcome(Exception failure)
+    {
+        if (failure is null) _bp.recordHealthyHint();
+        else if (isBackpressureError(failure)) _bp.recordBackpressure();
     }
 
     private HttpResponse send(ref HttpRequest req)
@@ -339,6 +411,27 @@ final class Transport
         if (res.status >= 200 && res.status < 300) return res;
         throw new ApiException(res.status, res.body_);
     }
+}
+
+/// A `submitJson` request waiting for its auth headers.
+private struct Prepared
+{
+    string method, path, jsonBody;
+    ThreadSafe!HttpSink sink;
+    long tag;
+    bool longPoll;
+    long timeoutMs;
+}
+
+/// `POST /jobs/activation` (with or without a leading slash or query): a
+/// long poll that may wait on the server for its whole request timeout.
+bool isJobActivation(string method, string path) pure nothrow @nogc
+{
+    import std.algorithm.searching : findSplitBefore;
+    if (method != "POST") return false;
+    auto p = path.findSplitBefore("?")[0];
+    if (p.length && p[0] == '/') p = p[1 .. $];
+    return p == "jobs/activation";
 }
 
 /// An empty JSON object is a present body (`{}`), not an absent one.
@@ -698,4 +791,70 @@ unittest
         catch (ConfigException e)
             assert(!e.msg.canFind("Injected"), e.msg);
     }
+}
+
+unittest
+{
+    // A job activation is a long poll however it is sent: the blocking
+    // `activateJobs` must not occupy an ordinary connection slot.
+    assert(isJobActivation("POST", "/jobs/activation"));
+    assert(isJobActivation("POST", "jobs/activation"));
+    assert(isJobActivation("POST", "/jobs/activation?x=1"));
+    assert(!isJobActivation("GET", "/jobs/activation"));
+    assert(!isJobActivation("POST", "/jobs/1/completion"));
+    assert(!isJobActivation("POST", "/jobs/activations"));
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_REST_ADDRESS", "http://localhost:8080")
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    assert(t.baseRequest("POST", "/jobs/activation", null, ServerBase.api).longPoll);
+    assert(!t.baseRequest("POST", "/jobs/1/completion", null, ServerBase.api).longPoll);
+}
+
+unittest
+{
+    // Checking a submitted result does not feed backpressure: a retried
+    // command reports only its final outcome (as `withRetry` does).
+    import camunda.clock : TestClock;
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_SDK_BACKPRESSURE_PROFILE", "BALANCED")
+        .withClock(new TestClock));
+    const healthy = t.backpressureState;
+    HttpResult busy;
+    busy.response.status = 503;
+    foreach (_; 0 .. 10)
+    {
+        Exception e;
+        try t.checked(busy);
+        catch (Exception x) e = x;
+        assert(e !is null);
+    }
+    assert(t.backpressureState == healthy, "a retryable attempt reduced the permits");
+    t.recordOutcome(new ApiException(503, ""));
+    assert(t.backpressureState != healthy, "a final 503 was not recorded");
+}
+
+unittest
+{
+    // `submitJson` never blocks on authentication: with no cached OAuth
+    // token (and an unreachable token endpoint), it returns at once and the
+    // failure to get a token arrives through the sink.
+    import camunda.clock : liveClock;
+    import camunda.safeio : monoNowMs;
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_REST_ADDRESS", "http://127.0.0.1:9")
+        .withKey("CAMUNDA_AUTH_STRATEGY", "OAUTH")
+        .withKey("CAMUNDA_CLIENT_ID", "id")
+        .withKey("CAMUNDA_CLIENT_SECRET", "secret")
+        .withKey("CAMUNDA_OAUTH_URL", "http://127.0.0.1:9/token")
+        .withKey("CAMUNDA_OAUTH_CACHE_DIR", ""));
+    auto ch = Chan!HttpResult.make;
+    string[string] none;
+    assert(!t.auth.tryHeaders(none));
+    const start = monoNowMs;
+    t.submitJson("POST", "/jobs/1/completion", "{}", ChanSink.of(ch), 42);
+    assert(monoNowMs - start < 200, "submitJson waited for the token");
+    HttpResult r;
+    ch.take(r);
+    assert(r.tag == 42 && r.error.length, "the token failure was not delivered");
 }

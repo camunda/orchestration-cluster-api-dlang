@@ -456,9 +456,11 @@ final class JobWorker
             }
             catch (Exception e)
             {
+                transport.recordOutcome(e); // activations are not retried
                 activationFailed();
                 return;
             }
+            transport.recordOutcome(null);
             backoff = 0;
             ctl.count!"activated"(jobs.length);
             if (config.withLease)
@@ -516,17 +518,21 @@ final class JobWorker
                 try
                 {
                     transport.checked(ev.http);
+                    transport.recordOutcome(null);
                     settled(pending.command.kind);
                 }
                 catch (Exception e)
                 {
                     if (isRetryable(e) && pending.attempts < maxAttempts)
                     {
+                        // Like the blocking path, only a command given up
+                        // on counts as backpressure.
                         pending.dueMs = clock.nowMs + backoffDelayMs(retry, pending.attempts - 1);
                         retrying[ev.http.tag] = pending;
                     }
                     else
                     {
+                        transport.recordOutcome(e);
                         ctl.count!"actionFailures";
                         held--;
                     }

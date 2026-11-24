@@ -134,15 +134,51 @@ long monoNowMs() @trusted
     return MonoTime.currTime.ticks / (MonoTime.ticksPerSecond / 1000);
 }
 
-/// Process-wide live-clock singleton. Written once, then only read.
-/// `@trusted`: `__gshared` is confined to this file; the object has no
-/// mutable shared state of its own.
+/// Process-wide singleton: the first caller on any thread creates it, and
+/// every thread gets that same object.
+/// `@trusted`: the slot is `shared` and confined to this function; it is
+/// published once with release semantics under the process-wide
+/// `synchronized` section, so concurrent first callers construct and see
+/// exactly one object. `T` is required to be safe to share by its callers
+/// (an immutable clock, an internally locked engine).
 T liveSingleton(T)() @trusted
     if (is(T == class))
 {
-    static __gshared T slot;
-    if (slot is null) slot = new T;
-    return slot;
+    import core.atomic : atomicLoad, atomicStore, MemoryOrder;
+    static shared T slot;
+    T v = cast(T) atomicLoad!(MemoryOrder.acq)(slot);
+    if (v is null)
+        synchronized
+        {
+            v = cast(T) atomicLoad!(MemoryOrder.acq)(slot);
+            if (v is null)
+            {
+                v = new T;
+                atomicStore!(MemoryOrder.rel)(slot, cast(shared) v);
+            }
+        }
+    return v;
+}
+
+@safe unittest // liveSingleton publishes one object to concurrent first callers
+{
+    static final class Probe { }
+    static void grab(Chan!size_t out_)
+    {
+        out_.put(liveSingleton!Probe.toHash);
+    }
+    auto ch = Chan!size_t.make;
+    JoinHandle[] hs;
+    foreach (_; 0 .. 16) hs ~= spawn(&grab, ch);
+    foreach (ref h; hs) h.join();
+    size_t first;
+    foreach (i; 0 .. 16)
+    {
+        size_t v;
+        ch.take(v);
+        if (i == 0) first = v;
+        assert(v == first);
+    }
 }
 
 // ---- Threads and shared state ----------------------------------------------

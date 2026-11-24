@@ -29,7 +29,8 @@ private struct CachedToken
 final class Authentication
 {
     import camunda.safeio : Lock;
-    private Lock lock;
+    private Lock lock;       // serializes token acquisition
+    private Lock cacheLock;  // guards `cached`/`hasCached`, held only briefly
     private AuthStrategy strategy;
     private string oauthUrl;
     private string clientId;
@@ -56,6 +57,7 @@ final class Authentication
         this.oauthCacheDir = config.oauthCacheDir;
         this.clock = clock;
         this.lock = new Lock;
+        this.cacheLock = new Lock;
     }
 
     AuthStrategy authStrategy() const { return strategy; }
@@ -78,21 +80,44 @@ final class Authentication
         return h;
     }
 
+    /// The headers when they are ready without blocking: always for `none`
+    /// and `basic`, and for OAuth while a valid token is cached in memory.
+    /// Returns false when getting them would fetch (or read) a token; call
+    /// `headers` off any latency-sensitive thread then.
+    bool tryHeaders(out string[string] h)
+    {
+        if (strategy != AuthStrategy.oauth)
+        {
+            h = headers();
+            return true;
+        }
+        string token;
+        const now = clock.nowMs();
+        cacheLock.run({
+            if (hasCached && now < cached.refreshAfterMono) token = cached.token;
+        });
+        if (!token.length) return false;
+        h["Authorization"] = "Bearer " ~ token;
+        return true;
+    }
+
     private string accessToken()
     {
-        if (hasCached && clock.nowMs() < cached.refreshAfterMono)
-            return cached.token;
+        const now = clock.nowMs();
+        string token;
+        cacheLock.run({
+            if (hasCached && now < cached.refreshAfterMono) token = cached.token;
+        });
+        if (token.length) return token;
         auto disk = readDiskToken();
         if (disk.token.length && clock.nowMs() < disk.refreshAfterMono)
         {
-            cached = disk;
-            hasCached = true;
+            cacheLock.run({ cached = disk; hasCached = true; });
             return disk.token;
         }
         auto fetched = fetchToken();
         writeDiskToken(fetched);
-        cached = fetched;
-        hasCached = true;
+        cacheLock.run({ cached = fetched; hasCached = true; });
         return fetched.token;
     }
 

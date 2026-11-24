@@ -348,6 +348,27 @@ struct Submission
     WireRequest req;
     ThreadSafe!HttpSink sink;
     long tag;
+    /// When it was submitted (`monoNowMs`): its timeout runs from here, so
+    /// time spent queued for a connection counts against it.
+    long submittedMs;
+
+    /// What is left of the request's timeout; 0 or less when it expired
+    /// while queued.
+    long remainingMs(long nowMs) const
+    {
+        return req.timeoutMs - (nowMs - submittedMs);
+    }
+}
+
+/// The result for a submission whose timeout ran out before it was sent.
+HttpResult queuedTimeout(ref const Submission s)
+{
+    HttpResult r;
+    r.tag = s.tag;
+    import std.conv : to;
+    r.error = "Timeout was reached: queued for a connection for longer than the "
+        ~ s.req.timeoutMs.to!string ~ " ms timeout";
+    return r;
 }
 
 /// Runs HTTP requests on its own I/O thread over a small pool of keep-alive
@@ -442,7 +463,8 @@ final class HttpEngine
     /// be sent (see `toWire`).
     void submit(const ref HttpRequest req, ThreadSafe!HttpSink sink, long tag)
     {
-        auto s = Submission(toWire(req), sink, tag);
+        import camunda.safeio : monoNowMs;
+        auto s = Submission(toWire(req), sink, tag, monoNowMs);
         version (Windows)
         {
             lock.run({
@@ -546,12 +568,16 @@ final class HttpEngine
                     return true;
                 });
                 if (exit) return;
+                import camunda.safeio : monoNowMs;
+                const left = s.remainingMs(monoNowMs);
                 HttpResult r;
                 r.tag = s.tag;
-                try
+                if (left <= 0) r = queuedTimeout(s);
+                else try
                 {
                     import camunda.winhttp : winHttpPerform;
                     auto req = s.req.toRequest;
+                    req.timeoutMs = left;
                     r.response = winHttpPerform(req);
                 }
                 catch (NetworkException ex) r.error = ex.msg;
@@ -1014,4 +1040,40 @@ unittest
     auto e = collectException!NetworkException(perform(req));
     server.join();
     assert(e !is null, "a 1400 ms exchange finished inside a 1000 ms timeout");
+}
+
+// A request queued behind a busy connection limit times out from when it
+// was submitted, not from when a connection frees up: its time in the
+// queue counts against its timeout.
+unittest
+{
+    import std.conv : to;
+    import std.algorithm.searching : canFind;
+    import camunda.safeio : monoNowMs;
+
+    auto port = Chan!int.make;
+    auto server = spawn(&slowServer, port, 600);
+    int p;
+    port.take(p);
+    auto engine = new HttpEngine(1);
+    auto results = Chan!HttpResult.make;
+    HttpRequest slow;
+    slow.method = "GET";
+    slow.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/slow";
+    slow.timeoutMs = 5_000;
+    engine.submit(slow, ChanSink.of(results), 1);
+    HttpRequest queued = slow;
+    queued.timeoutMs = 200;
+    const start = monoNowMs;
+    engine.submit(queued, ChanSink.of(results), 2);
+    HttpResult first;
+    results.take(first);
+    const waited = monoNowMs - start;
+    HttpResult second;
+    results.take(second);
+    server.join();
+    assert(first.tag == 2, "the queued request outlived its timeout: it waited for the busy slot");
+    assert(first.error.canFind("queued"), first.error);
+    assert(waited < 1_000, "queued timeout fired only after " ~ waited.to!string ~ " ms");
+    assert(second.tag == 1 && second.error == "", second.error);
 }

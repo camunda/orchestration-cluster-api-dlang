@@ -18,7 +18,9 @@ import core.stdc.config : c_long;
 private alias CURL = void;
 private alias CURLM = void;
 
-// The multi calls Phobos' `etc.c.curl` binding predates (libcurl >= 7.68).
+// The multi calls Phobos' `etc.c.curl` binding predates. They make
+// libcurl 7.68 (January 2020) the minimum the SDK links against (README,
+// "Requirements").
 private extern (C) @system nothrow @nogc
 {
     int curl_multi_poll(CURLM* multi, void* extraFds, uint extraNfds, int timeoutMs, int* numfds);
@@ -134,6 +136,14 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
         Submission[] later;
         foreach (w; waiting)
         {
+            // Checked first: a request expires while it waits for a slot.
+            const left = w.remainingMs(monoNowMs);
+            if (left <= 0)
+            {
+                engine.counted(0);
+                deliver(w, queuedTimeout(w));
+                continue;
+            }
             if (!w.req.longPoll && ordinary >= engine.maxConnections)
             {
                 later ~= w;
@@ -141,6 +151,7 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
             }
             auto t = new Transfer;
             t.sub = w;
+            t.sub.req.timeoutMs = left;
             HttpResult failed;
             if (!start(multi, t, spare, failed))
             {

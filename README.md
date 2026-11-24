@@ -40,7 +40,9 @@ helps close that gap.
 ## Requirements
 
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
-- libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
+- libcurl 7.68 or later (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`).
+  The I/O thread uses `curl_multi_poll` and `curl_multi_wakeup`, so an older
+  libcurl fails to load the program; every supported distribution ships a newer one
 - Windows: nothing extra. HTTP goes through WinHTTP, the HTTP stack built into
   Windows, so binaries need no libcurl. The proxy is the system's (or `HTTPS_PROXY` /
   `HTTP_PROXY` / `NO_PROXY` when set). TLS settings behave as with curl:
