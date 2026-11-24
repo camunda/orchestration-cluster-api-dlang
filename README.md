@@ -40,7 +40,9 @@ helps close that gap.
 ## Requirements
 
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
-- libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
+- libcurl 7.68 or later (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`).
+  The I/O thread uses `curl_multi_poll` and `curl_multi_wakeup`, so an older
+  libcurl fails to load the program; every supported distribution ships a newer one
 - Windows: nothing extra. HTTP goes through WinHTTP, the HTTP stack built into
   Windows, so binaries need no libcurl. The proxy is the system's (or `HTTPS_PROXY` /
   `HTTP_PROXY` / `NO_PROXY` when set). TLS settings behave as with curl:
@@ -227,15 +229,23 @@ auto loose = JobKey.assumeExists("123");
 
 ## Job workers
 
-A worker polls on the thread that calls `run` and hands jobs to a pool of
-handler threads. `maxJobs` caps how many jobs it holds at once (activated and
-not yet completed); it activates more as soon as 30% of that capacity is
-free, asking only for what fits. `threads` sets the most handler threads
-(default: one per job slot). The pool is elastic: it starts with
-`coreThreads` threads (default `min(2, threads)`), adds one whenever a job
+A worker keeps engine I/O and your code apart. The thread that calls `run`
+dispatches: it sends the activation long poll and every complete, fail and
+error call through the client's I/O thread without waiting on them, and
+hands each job, already parsed, to a pool of handler threads. Handler
+threads only run your handler and hand its `JobAction` back. `maxJobs` caps
+how many jobs the worker holds at once (activated and not yet completed);
+it activates more as soon as 30% of that capacity is free, asking only for
+what fits. `threads` sets the most handler threads (default: 4 per CPU
+core, at most `maxJobs`). That is enough for CPU-bound handlers; a handler
+that blocks on I/O of its own (an HTTP call, a database) needs more, up to
+one per job slot. More threads do not mean more engine connections: those
+stay within the client's limit (`CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`, default
+16, plus one activation long poll per running worker). The pool is elastic: it
+starts with `coreThreads` threads (default `min(2, threads)`), adds one whenever a job
 arrives and no thread is free, and retires the extra threads once the pool
 has not been fully busy for `idleTimeoutMs` (default 30 s). An idle worker
-therefore holds only its core threads; a busy one still runs a job per slot.
+therefore holds only its core threads.
 `worker.pool` reports the live, peak, spawned and retired thread counts. A handler that throws fails its job with one retry
 fewer; failed activations back off from 50 ms to 5 s. `stop()` (or
 `job.stopWorker()`, or `worker.control.get.stop()` from another thread) ends
@@ -246,7 +256,8 @@ fewer; failed activations back off from 50 ms to 5 s. `stop()` (or
 ```d
 import camunda;
 
-// Holds up to 20 jobs at once and handles them on up to 20 threads.
+// Holds up to 20 jobs at once; handles them on up to 4 x cores threads
+// (at most 20), while completions go out on the client's I/O thread.
 auto worker = client.createJobWorker(
     JobWorkerConfig.create("payment-service")
         .maxJobs(20)
@@ -286,15 +297,15 @@ worker.run((Job job, Chan!string log) {
 ```
 
 One `CamundaClient` is safe to use from many threads: authentication and
-backpressure state are locked, and each thread keeps its own keep-alive
-connection. Hand it to threads you `spawn` yourself with `client.threadSafe`.
-
-Each thread that makes requests holds about three file descriptors (its
-connection plus libcurl's internal wake-up pipe). On macOS, libcurl waits
-with `select()`, which can't use descriptors numbered 1024 or above:
-requests on those fail with "A libcurl function was given a bad argument".
-Keep a process there to a few hundred request threads. Linux libcurl uses
-`poll()` and is limited only by `ulimit -n`.
+backpressure state are locked, and every request runs on the client's own
+I/O thread, which drives libcurl's multi interface over a small pool of
+keep-alive connections (at most `CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`
+requests in flight, default 16; more wait in a queue). The connections and
+file descriptors a client uses therefore do not grow with the number of
+threads that send requests, and a slow engine link does not hold up
+threads that are not waiting for a response. Hand the client to threads you
+`spawn` yourself with `client.threadSafe`. The I/O thread starts with the
+first request and exits after 5 s without one.
 
 ### Memory tuning
 
@@ -360,6 +371,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS` | `3` | Total HTTP attempts for transient failures (429, 502, 503, 504, network). |
 | `CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS` | `100` | Base backoff delay, in milliseconds. |
 | `CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS` | `2000` | Backoff cap, in milliseconds. |
+| `CAMUNDA_SDK_HTTP_MAX_CONNECTIONS` | `16` | Most requests a client has in flight at once (they run on its I/O thread), which bounds its connections however many threads use it. Job activation long polls and process creations with `awaitCompletion` come on top, so they never hold back a job completion. |
 | `CAMUNDA_SDK_EVENTUAL_POLL_DEFAULT_MS` | `10000` | Default overall timeout for `eventual` polling, in milliseconds. |
 | `CAMUNDA_SDK_LOG_LEVEL` | `info` | `off`, `error`, `warn`, `info`, `debug`, or `trace`. |
 | `CAMUNDA_WORKER_TIMEOUT` | `60000` | Default job activation timeout, in milliseconds. |

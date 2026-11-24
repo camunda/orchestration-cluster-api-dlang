@@ -134,15 +134,51 @@ long monoNowMs() @trusted
     return MonoTime.currTime.ticks / (MonoTime.ticksPerSecond / 1000);
 }
 
-/// Process-wide live-clock singleton. Written once, then only read.
-/// `@trusted`: `__gshared` is confined to this file; the object has no
-/// mutable shared state of its own.
+/// Process-wide singleton: the first caller on any thread creates it, and
+/// every thread gets that same object.
+/// `@trusted`: the slot is `shared` and confined to this function; it is
+/// published once with release semantics under the process-wide
+/// `synchronized` section, so concurrent first callers construct and see
+/// exactly one object. `T` is required to be safe to share by its callers
+/// (an immutable clock, an internally locked engine).
 T liveSingleton(T)() @trusted
     if (is(T == class))
 {
-    static __gshared T slot;
-    if (slot is null) slot = new T;
-    return slot;
+    import core.atomic : atomicLoad, atomicStore, MemoryOrder;
+    static shared T slot;
+    T v = cast(T) atomicLoad!(MemoryOrder.acq)(slot);
+    if (v is null)
+        synchronized
+        {
+            v = cast(T) atomicLoad!(MemoryOrder.acq)(slot);
+            if (v is null)
+            {
+                v = new T;
+                atomicStore!(MemoryOrder.rel)(slot, cast(shared) v);
+            }
+        }
+    return v;
+}
+
+@safe unittest // liveSingleton publishes one object to concurrent first callers
+{
+    static final class Probe { }
+    static void grab(Chan!size_t out_)
+    {
+        out_.put(liveSingleton!Probe.toHash);
+    }
+    auto ch = Chan!size_t.make;
+    JoinHandle[] hs;
+    foreach (_; 0 .. 16) hs ~= spawn(&grab, ch);
+    foreach (ref h; hs) h.join();
+    size_t first;
+    foreach (i; 0 .. 16)
+    {
+        size_t v;
+        ch.take(v);
+        if (i == 0) first = v;
+        assert(v == first);
+    }
 }
 
 // ---- Threads and shared state ----------------------------------------------
@@ -317,6 +353,48 @@ private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, ref Args 
     JoinHandle h;
     h.thread = t.start();
     return h;
+}
+
+/// `spawn` for a background thread the program does not wait for at exit
+/// (an I/O thread that idles until it is needed).
+JoinHandle spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
+    if (allSatisfy!(isSendable, Args))
+{
+    auto h = startSpawned(fn, args);
+    markDaemon(h);
+    return h;
+}
+
+/// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
+/// runtime reads at exit.
+private void markDaemon(ref JoinHandle h) @trusted
+{
+    h.thread.isDaemon = true;
+}
+
+/// A value handed to exactly one other thread: the sender built it, keeps
+/// no reference to it, and the receiver `take`s it once. Use it for parsed
+/// data (a `JSONValue` tree) that would otherwise have to be serialized to
+/// cross a `Chan`.
+struct Isolated(T)
+{
+    private shared T payload;
+
+    /// The value, for the receiving thread.
+    /// `@trusted`: sound by the `assumeIsolated` claim: no other thread
+    /// holds a reference to it.
+    T take() @trusted
+    {
+        return *cast(T*) &payload;
+    }
+}
+
+/// Claim that nothing but the returned `Isolated` references `value` (its
+/// whole graph), so the receiving thread may own it.
+/// `@trusted`: the claim is the caller's; the cast only records it.
+Isolated!T assumeIsolated(T)(T value) @trusted
+{
+    return Isolated!T(cast(shared) value);
 }
 
 private template callArgs(size_t n)

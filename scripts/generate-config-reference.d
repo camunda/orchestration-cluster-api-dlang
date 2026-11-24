@@ -71,6 +71,9 @@ immutable Var[] CONFIG_REFERENCE = [
         "Total HTTP attempts for transient failures (429, 502, 503, 504, network)."),
     Var("CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS", "100", "Base backoff delay, in milliseconds."),
     Var("CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS", "2000", "Backoff cap, in milliseconds."),
+    Var("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS", "16",
+        "Most requests a client has in flight at once (they run on its I/O thread), which bounds its "
+        ~ "connections however many threads use it. Job activation long polls and process creations with `awaitCompletion` come on top, so they never hold back a job completion."),
     Var("CAMUNDA_SDK_EVENTUAL_POLL_DEFAULT_MS", "10000",
         "Default overall timeout for `eventual` polling, in milliseconds."),
     Var("CAMUNDA_SDK_LOG_LEVEL", "info",
