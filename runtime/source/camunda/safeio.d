@@ -346,6 +346,8 @@ struct Chan(T)
     bool take(out T v) { return atomicLoad(impl).take(v); }
     /// ditto
     bool tryTake(out T v) { return atomicLoad(impl).tryTake(v); }
+    /// ditto
+    bool takeFor(out T v, long ms) { return atomicLoad(impl).takeFor(v, ms); }
 }
 
 /// A blocking FIFO of sendable values between threads, closable. Use it
@@ -395,13 +397,28 @@ final class Channel(T) if (!hasUnsharedAliasing!T)
     /// The next value if one is queued now (never waits); false otherwise.
     bool tryTake(out T v) shared { return takeImpl(v, false); }
 
+    /// Wait up to `ms` milliseconds for the next value; false on timeout
+    /// or once closed and empty.
+    bool takeFor(out T v, long ms) shared { return takeImpl(v, true, ms); }
+
     /// `@trusted`: as for `put`.
-    private bool takeImpl(out T v, bool wait) shared @trusted
+    private bool takeImpl(out T v, bool wait, long ms = -1) shared @trusted
     {
+        import core.time : MonoTime, msecs;
+        const deadline = ms >= 0 ? MonoTime.currTime + ms.msecs : MonoTime.max;
         auto self = cast() this;
         self.lock.lock();
         scope (exit) self.lock.unlock();
-        while (wait && self.head == self.items.length && !self.closed) self.ready.wait();
+        while (wait && self.head == self.items.length && !self.closed)
+        {
+            if (ms < 0) self.ready.wait();
+            else
+            {
+                const left = deadline - MonoTime.currTime;
+                if (left <= left.zero) break;
+                self.ready.wait(left);
+            }
+        }
         if (self.head == self.items.length) return false;
         v = self.items[self.head];
         self.items[self.head] = T.init;
@@ -483,4 +500,13 @@ final class Lock
     foreach (ref h; hs) h = spawn(&hammer, c);
     foreach (ref h; hs) h.join();
     assert(c.get.lock.run(() => c.get.n) == 40_000);
+}
+
+@safe unittest // takeFor times out on an empty channel and returns a queued value
+{
+    auto c = Chan!int.make;
+    int v;
+    assert(!c.takeFor(v, 5));
+    c.put(7);
+    assert(c.takeFor(v, 5) && v == 7);
 }

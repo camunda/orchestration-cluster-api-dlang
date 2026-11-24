@@ -407,12 +407,23 @@ final class JobWorker
                 ctl.poolShrank(live + retiring, n);
                 lastFullMs = now;
             }
-            if (cap - held < threshold)
+            // Wait for a handler to finish a job or a retiree to exit when
+            // there is too little capacity to activate, or when queued jobs
+            // wait for slots that retiring threads still hold (activating
+            // now would park their acknowledgements behind a long poll).
+            if (cap - held < threshold || (held > live && retiring > 0))
             {
-                // Wait for a handler to finish a job or a retiree to exit.
-                freed.take(one);
-                settle();
-                if (!one) ctl.poolShrank(live + retiring, 0);
+                // Bound the wait by the next idle-retirement deadline, so
+                // extra idle threads still retire under partial occupancy.
+                const retireDue = live > coreThreads && held < live;
+                const got = retireDue
+                    ? freed.takeFor(one, max(1, lastFullMs + idleTimeout - now))
+                    : freed.take(one);
+                if (got)
+                {
+                    settle();
+                    if (!one) ctl.poolShrank(live + retiring, 0);
+                }
                 continue;
             }
             ActivatedJobResult[] batch;
@@ -840,4 +851,65 @@ unittest
     assert(cfg.threads(1).effectiveCoreThreads == 1);
     assert(cfg.threads(8).coreThreads(20).effectiveCoreThreads == 8);
     assert(cfg.idleTimeoutMs(500).effectiveIdleTimeoutMs == 500);
+}
+
+version (unittest)
+{
+    /// Job "4" finishes at once; the others block until `gate` opens.
+    private JobAction gatedHandler(Job job, Chan!int gate)
+    {
+        if (job.key != "4")
+        {
+            int g;
+            gate.take(g);
+            gate.put(g); // let the next blocked handler through
+        }
+        return JobAction.complete();
+    }
+
+    /// Wait (up to 5 s) for the pool to shrink to `want` while three jobs
+    /// stay blocked, record the size, then open `gate` and stop when done.
+    private void releaseWhenShrunk(Chan!string done, Chan!int gate, Chan!int relay,
+        ThreadSafe!WorkerControl ctl, int want)
+    {
+        import camunda.clock : LiveClock;
+        auto clock = new LiveClock;
+        const deadline = clock.nowMs + 5_000;
+        while (ctl.get.pool.peak < 4 && clock.nowMs < deadline) clock.sleep(5);
+        while (ctl.get.pool.live > want && clock.nowMs < deadline) clock.sleep(10);
+        relay.put(ctl.get.pool.live);
+        gate.put(1);
+        string summary;
+        done.take(summary);
+        ctl.get.stop();
+    }
+}
+
+// An idle thread retires after the idle timeout even while the other
+// threads stay busy and too little capacity is free to activate again.
+unittest
+{
+    import std.conv : to;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto gate = Chan!int.make;
+    auto relay = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 4, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(4).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    auto stopper = spawn(&releaseWhenShrunk, done, gate, relay, worker.control, 3);
+    worker.run(&gatedHandler, gate);
+    stopper.join();
+    int live;
+    relay.take(live);
+    assert(live == 3, "idle thread did not retire under partial occupancy: " ~ live.to!string);
 }
