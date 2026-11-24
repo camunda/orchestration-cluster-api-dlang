@@ -39,6 +39,8 @@ Each identifier is a distinct D struct in `camunda.generated.keys`. Construct wi
 | `MappingRuleId` | `^[a-zA-Z0-9_~@.+-]+$` | 1–256 | The unique identifier of a mapping rule. |
 | `MessageKey` | `^-?[0-9]+$` | 1–25 | System-generated key for an message. |
 | `MessageSubscriptionKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a message subscription. |
+| `ProbeId` | `^\S+$` | 1–256 | The ID of a probe, as its worker registered it: 1 to 256 characters, without whitespace, and not `*`. The engine matches it to the probe IDs of polling workers by exact equality. |
+| `ProbeKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a probe. |
 | `ProcessDefinitionId` | `^[\p{L}_][\p{L}\p{N}_\-\.]*$` | ≥ 1 | Id of a process definition, from the model. Only ids of process definitions that are deployed are useful. |
 | `ProcessDefinitionKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a deployed process definition. |
 | `ProcessInstanceKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a process instance. |

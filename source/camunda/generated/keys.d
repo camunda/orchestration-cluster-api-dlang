@@ -1240,6 +1240,78 @@ struct MessageSubscriptionKey
     JSONValue toJson() const { return JSONValue(_value); }
 }
 
+/// The ID of a probe, as its worker registered it: 1 to 256 characters, without whitespace, and not `*`. The engine matches it to the probe IDs of polling workers by exact equality.
+/// Example: `validate-configuration/io.camunda:aws-credential:1`
+struct ProbeId
+{
+    private string _value;
+    enum semanticType = "ProbeId";
+    /// Construct without validation.
+    static ProbeId assumeExists(string value) pure nothrow
+    {
+        ProbeId k;
+        k._value = value;
+        return k;
+    }
+    /// Construct with constraint validation.
+    static ProbeId tryNew(string value)
+    {
+        checkConstraints(semanticType, value, "^\\S+$", 1, 256, true);
+        return assumeExists(value);
+    }
+    /// True if `value` satisfies this type's constraints.
+    static bool isValid(string value)
+    {
+        return checkConstraints(semanticType, value, "^\\S+$", 1, 256, false);
+    }
+    string value() const pure nothrow @nogc { return _value; }
+    string toString() const pure nothrow @nogc { return _value; }
+    bool opEquals(const ProbeId other) const pure nothrow @nogc { return _value == other._value; }
+    bool isEmpty() const pure nothrow @nogc { return _value.length == 0; }
+    static ProbeId fromJson(JSONValue v)
+    {
+        auto s = v.type == JSONType.string ? v.str : v.toString;
+        return assumeExists(s);
+    }
+    JSONValue toJson() const { return JSONValue(_value); }
+}
+
+/// System-generated key for a probe.
+/// Example: `2251799813685464`
+struct ProbeKey
+{
+    private string _value;
+    enum semanticType = "ProbeKey";
+    /// Construct without validation.
+    static ProbeKey assumeExists(string value) pure nothrow
+    {
+        ProbeKey k;
+        k._value = value;
+        return k;
+    }
+    /// Construct with constraint validation.
+    static ProbeKey tryNew(string value)
+    {
+        checkConstraints(semanticType, value, "^-?[0-9]+$", 1, 25, true);
+        return assumeExists(value);
+    }
+    /// True if `value` satisfies this type's constraints.
+    static bool isValid(string value)
+    {
+        return checkConstraints(semanticType, value, "^-?[0-9]+$", 1, 25, false);
+    }
+    string value() const pure nothrow @nogc { return _value; }
+    string toString() const pure nothrow @nogc { return _value; }
+    bool opEquals(const ProbeKey other) const pure nothrow @nogc { return _value == other._value; }
+    bool isEmpty() const pure nothrow @nogc { return _value.length == 0; }
+    static ProbeKey fromJson(JSONValue v)
+    {
+        auto s = v.type == JSONType.string ? v.str : v.toString;
+        return assumeExists(s);
+    }
+    JSONValue toJson() const { return JSONValue(_value); }
+}
+
 /// Id of a process definition, from the model. Only ids of process definitions that are deployed are useful.
 /// Example: `new-account-onboarding-workflow`
 struct ProcessDefinitionId

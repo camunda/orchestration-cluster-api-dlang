@@ -13,11 +13,25 @@
       "region": "ActivateJobs"
     }
   ],
+  "activateProbes": [
+    {
+      "file": "probe.d",
+      "label": "Activate probes (alpha)",
+      "region": "ActivateProbes"
+    }
+  ],
   "addClock": [
     {
       "file": "clock.d",
       "label": "Add time to internal clock",
       "region": "AddClock"
+    }
+  ],
+  "answerProbe": [
+    {
+      "file": "probe.d",
+      "label": "Answer probe (alpha)",
+      "region": "AnswerProbe"
     }
   ],
   "assignClientToGroup": [
@@ -270,6 +284,13 @@
       "file": "mapping_rule.d",
       "label": "Create mapping rule",
       "region": "CreateMappingRule"
+    }
+  ],
+  "createProbe": [
+    {
+      "file": "probe.d",
+      "label": "Create probe (alpha)",
+      "region": "CreateProbe"
     }
   ],
   "createProcessInstance": [

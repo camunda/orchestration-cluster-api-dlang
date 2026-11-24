@@ -1047,6 +1047,30 @@ mixin template GeneratedOperations()
         return MessagePublicationResult.fromJson(payload);
     }
 
+    /// Create probe (alpha) (`POST /probes`).
+    ProbeResult createProbe(ProbeCreationRequest body_ = ProbeCreationRequest.init)
+    {
+        const path_ = "/probes";
+        auto payload = this.requestJson("POST", path_, this.withDefaultTenant(body_.toJson()), null);
+        return ProbeResult.fromJson(payload);
+    }
+
+    /// Activate probes (alpha) (`POST /probes/activation`).
+    ProbeActivationResult activateProbes(ProbeActivationRequest body_ = ProbeActivationRequest.init)
+    {
+        const path_ = "/probes/activation";
+        auto payload = this.requestJson("POST", path_, this.withDefaultJobTenants(body_.toJson()), null);
+        return ProbeActivationResult.fromJson(payload);
+    }
+
+    /// Answer probe (alpha) (`POST /probes/{probeKey}/answer`).
+    void answerProbe(ProbeKey probeKey, ProbeAnswerRequest body_ = ProbeAnswerRequest.init)
+    {
+    const probeKeyPath = probeKey.value;
+        const path_ = "/probes/" ~ encodeComponent(probeKeyPath) ~ "/answer";
+        this.requestVoid("POST", path_, body_.toJson(), null);
+    }
+
     /// Resume process definitions (`POST /process-definitions/resumption`).
     ProcessDefinitionResumptionResult resumeProcessDefinitions(ProcessDefinitionResumptionInstruction body_ = ProcessDefinitionResumptionInstruction.init)
     {

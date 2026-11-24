@@ -237,6 +237,98 @@ struct ActivatedJobResult
     }
 
 }
+/// `ActivatedProbeResult`
+struct ActivatedProbeResult
+{
+    JSONValue raw;
+
+    static ActivatedProbeResult fromJson(JSONValue value)
+    {
+        ActivatedProbeResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ActivatedProbeResult initEmpty()
+    {
+        ActivatedProbeResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key to answer the probe with.
+    bool has_probeKey() const { return jsonHas(raw, "probeKey"); }
+    ProbeKey probeKey() const { return ProbeKey.fromJson(jsonGet(raw, "probeKey")); }
+    ref ActivatedProbeResult probeKey(ProbeKey value) return
+    {
+        jsonSet(raw, "probeKey", value.toJson());
+        return this;
+    }
+
+    /// The probe ID, to pick the handler when the worker polls several probe IDs.
+    bool has_probeId() const { return jsonHas(raw, "probeId"); }
+    ProbeId probeId() const { return ProbeId.fromJson(jsonGet(raw, "probeId")); }
+    ref ActivatedProbeResult probeId(ProbeId value) return
+    {
+        jsonSet(raw, "probeId", value.toJson());
+        return this;
+    }
+
+    /// The name of the worker that collected the probe.
+    bool has_worker() const { return jsonHas(raw, "worker"); }
+    string worker() const { return jsonGetString(raw, "worker"); }
+    ref ActivatedProbeResult worker(string value) return
+    {
+        jsonSet(raw, "worker", JSONValue(value));
+        return this;
+    }
+
+    /// The deadline of the probe, as a UNIX epoch timestamp in milliseconds. An answer after it gets 404.
+    bool has_deadline() const { return jsonHas(raw, "deadline"); }
+    long deadline() const { return jsonGetLong(raw, "deadline"); }
+    ref ActivatedProbeResult deadline(long value) return
+    {
+        jsonSet(raw, "deadline", JSONValue(value));
+        return this;
+    }
+
+    /// The ID of the tenant of the probe.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref ActivatedProbeResult tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// The ID of the physical tenant that the activation request was routed to; the default physical tenant when the request did not specify one.
+    bool has_physicalTenantId() const { return jsonHas(raw, "physicalTenantId"); }
+    string physicalTenantId() const { return jsonGetString(raw, "physicalTenantId"); }
+    ref ActivatedProbeResult physicalTenantId(string value) return
+    {
+        jsonSet(raw, "physicalTenantId", JSONValue(value));
+        return this;
+    }
+
+    /// The evaluated input, with the values of its secrets injected.
+    bool has_input() const { return jsonHas(raw, "input"); }
+    JSONValue input() const { return jsonGet(raw, "input"); }
+    ref ActivatedProbeResult input(JSONValue value) return
+    {
+        jsonSet(raw, "input", JSONValue(value));
+        return this;
+    }
+
+    /// The JSON pointers (RFC 6901) of the `input` values into which the engine injected a secret value; empty when none. Remove these values from logs and error messages.
+    bool has_secretPointers() const { return jsonHas(raw, "secretPointers"); }
+    string[] secretPointers() const { return jsonGetStringArray(raw, "secretPointers"); }
+    ref ActivatedProbeResult secretPointers(string[] value) return
+    {
+        jsonSet(raw, "secretPointers", JSONValue(value));
+        return this;
+    }
+
+}
 /// `AdHocSubProcessActivateActivitiesInstruction`
 struct AdHocSubProcessActivateActivitiesInstruction
 {
@@ -23521,6 +23613,452 @@ struct PhysicalTenantTopology
     ref PhysicalTenantTopology brokers(PhysicalTenantBrokerTopology[] value) return
     {
         jsonSet(raw, "brokers", jsonFromMapped(value, (PhysicalTenantBrokerTopology x) => x.toJson()));
+        return this;
+    }
+
+}
+/// `ProbeActivationRequest`
+struct ProbeActivationRequest
+{
+    JSONValue raw;
+
+    static ProbeActivationRequest fromJson(JSONValue value)
+    {
+        ProbeActivationRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeActivationRequest initEmpty()
+    {
+        ProbeActivationRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The probe IDs to collect probes for: 1 to 100 distinct values, each 1 to 256 characters, without whitespace, and not `*`. Probe IDs on which the caller lacks the `ANSWER` permission are skipped.
+    bool has_probeIds() const { return jsonHas(raw, "probeIds"); }
+    ProbeId[] probeIds() const { return jsonMapArray(raw, "probeIds", (JSONValue v) => ProbeId.fromJson(v)); }
+    ref ProbeActivationRequest probeIds(ProbeId[] value) return
+    {
+        jsonSet(raw, "probeIds", jsonFromMapped(value, (ProbeId x) => x.toJson()));
+        return this;
+    }
+
+    /// The name of the worker, returned to the client in the answer.
+    bool has_worker() const { return jsonHas(raw, "worker"); }
+    string worker() const { return jsonGetString(raw, "worker"); }
+    ref ProbeActivationRequest worker(string value) return
+    {
+        jsonSet(raw, "worker", JSONValue(value));
+        return this;
+    }
+
+    /// The maximum number of probes to collect with this request, at least 1.
+    bool has_maxProbesToActivate() const { return jsonHas(raw, "maxProbesToActivate"); }
+    int maxProbesToActivate() const { return cast(int) jsonGetLong(raw, "maxProbesToActivate"); }
+    ref ProbeActivationRequest maxProbesToActivate(int value) return
+    {
+        jsonSet(raw, "maxProbesToActivate", JSONValue(value));
+        return this;
+    }
+
+    /// How long to hold the request until a probe is collected, in milliseconds. With `0` or absent, the cluster's long polling timeout is used. With a value below `0`, long polling is off and the request returns at once, also when it collected no probe.
+    bool has_requestTimeout() const { return jsonHas(raw, "requestTimeout"); }
+    long requestTimeout() const { return jsonGetLong(raw, "requestTimeout"); }
+    ref ProbeActivationRequest requestTimeout(long value) return
+    {
+        jsonSet(raw, "requestTimeout", JSONValue(value));
+        return this;
+    }
+
+    /// A list of IDs of tenants for which to collect probes.
+    bool has_tenantIds() const { return jsonHas(raw, "tenantIds"); }
+    TenantId[] tenantIds() const { return jsonMapArray(raw, "tenantIds", (JSONValue v) => TenantId.fromJson(v)); }
+    ref ProbeActivationRequest tenantIds(TenantId[] value) return
+    {
+        jsonSet(raw, "tenantIds", jsonFromMapped(value, (TenantId x) => x.toJson()));
+        return this;
+    }
+
+    /// The tenant filtering strategy - determines whether to use provided tenant IDs or assigned tenant IDs from the authenticated principal's authorized tenants.
+    bool has_tenantFilter() const { return jsonHas(raw, "tenantFilter"); }
+    TenantFilterEnum tenantFilter() const { return parseTenantFilterEnum(jsonGetString(raw, "tenantFilter")); }
+    ref ProbeActivationRequest tenantFilter(TenantFilterEnum value) return
+    {
+        jsonSet(raw, "tenantFilter", JSONValue(cast(string) value));
+        return this;
+    }
+
+}
+/// The collected probes.
+struct ProbeActivationResult
+{
+    JSONValue raw;
+
+    static ProbeActivationResult fromJson(JSONValue value)
+    {
+        ProbeActivationResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeActivationResult initEmpty()
+    {
+        ProbeActivationResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The collected probes, none when the request timed out.
+    bool has_probes() const { return jsonHas(raw, "probes"); }
+    ActivatedProbeResult[] probes() const { return jsonMapArray(raw, "probes", (JSONValue v) => ActivatedProbeResult.fromJson(v)); }
+    ref ProbeActivationResult probes(ActivatedProbeResult[] value) return
+    {
+        jsonSet(raw, "probes", jsonFromMapped(value, (ActivatedProbeResult x) => x.toJson()));
+        return this;
+    }
+
+}
+/// The answer of the worker, one of three shapes chosen by `outcome`.
+struct ProbeAnswerRequest
+{
+    JSONValue raw;
+
+    static ProbeAnswerRequest fromJson(JSONValue value)
+    {
+        ProbeAnswerRequest m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeAnswerRequest of(JSONValue value) { return fromJson(value); }
+    static ProbeAnswerRequest fromProbeOkAnswerRequest(ProbeOkAnswerRequest value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProbeAnswerRequest fromProbeUnsupportedAnswerRequest(ProbeUnsupportedAnswerRequest value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProbeAnswerRequest fromProbeErrorAnswerRequest(ProbeErrorAnswerRequest value)
+    {
+        return fromJson(value.toJson());
+    }
+    string discriminator() const { return jsonGetString(raw, "outcome"); }
+}
+/// `ProbeCreationRequest`
+struct ProbeCreationRequest
+{
+    JSONValue raw;
+
+    static ProbeCreationRequest fromJson(JSONValue value)
+    {
+        ProbeCreationRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeCreationRequest initEmpty()
+    {
+        ProbeCreationRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The probe ID, as the worker registered it: 1 to 256 characters, without whitespace, and not `*`. The engine matches it to the probe IDs of polling workers by exact equality.
+    bool has_probeId() const { return jsonHas(raw, "probeId"); }
+    ProbeId probeId() const { return ProbeId.fromJson(jsonGet(raw, "probeId")); }
+    ref ProbeCreationRequest probeId(ProbeId value) return
+    {
+        jsonSet(raw, "probeId", value.toJson());
+        return this;
+    }
+
+    /// A FEEL expression that evaluates to a context: the question for the worker, whose shape the worker of the probe ID defines. References to `camunda.vars` and `camunda.secrets` follow the rules of input mappings.
+    bool has_input() const { return jsonHas(raw, "input"); }
+    string input() const { return jsonGetString(raw, "input"); }
+    ref ProbeCreationRequest input(string value) return
+    {
+        jsonSet(raw, "input", JSONValue(value));
+        return this;
+    }
+
+    /// The tenant of the probe. Required with multi-tenancy.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref ProbeCreationRequest tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// How long to wait for an answer, in milliseconds, from 0 to 30000. With `0` or absent, the cluster's request timeout is used, capped at 30000.
+    bool has_requestTimeout() const { return jsonHas(raw, "requestTimeout"); }
+    long requestTimeout() const { return jsonGetLong(raw, "requestTimeout"); }
+    ref ProbeCreationRequest requestTimeout(long value) return
+    {
+        jsonSet(raw, "requestTimeout", JSONValue(value));
+        return this;
+    }
+
+}
+/// The worker failed to produce an answer.
+struct ProbeErrorAnswerRequest
+{
+    JSONValue raw;
+
+    static ProbeErrorAnswerRequest fromJson(JSONValue value)
+    {
+        ProbeErrorAnswerRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeErrorAnswerRequest initEmpty()
+    {
+        ProbeErrorAnswerRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `ERROR`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeErrorAnswerRequest outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+    /// Why the worker failed, 1 to 500 characters.
+    bool has_message() const { return jsonHas(raw, "message"); }
+    string message() const { return jsonGetString(raw, "message"); }
+    ref ProbeErrorAnswerRequest message(string value) return
+    {
+        jsonSet(raw, "message", JSONValue(value));
+        return this;
+    }
+
+}
+/// The worker failed to produce an answer.
+struct ProbeErrorResult
+{
+    JSONValue raw;
+
+    static ProbeErrorResult fromJson(JSONValue value)
+    {
+        ProbeErrorResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeErrorResult initEmpty()
+    {
+        ProbeErrorResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `ERROR`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeErrorResult outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+    /// The name of the worker that answered.
+    bool has_worker() const { return jsonHas(raw, "worker"); }
+    string worker() const { return jsonGetString(raw, "worker"); }
+    ref ProbeErrorResult worker(string value) return
+    {
+        jsonSet(raw, "worker", JSONValue(value));
+        return this;
+    }
+
+    /// Why the worker failed, at most 500 characters.
+    bool has_message() const { return jsonHas(raw, "message"); }
+    string message() const { return jsonGetString(raw, "message"); }
+    ref ProbeErrorResult message(string value) return
+    {
+        jsonSet(raw, "message", JSONValue(value));
+        return this;
+    }
+
+}
+/// The worker produced an answer.
+struct ProbeOkAnswerRequest
+{
+    JSONValue raw;
+
+    static ProbeOkAnswerRequest fromJson(JSONValue value)
+    {
+        ProbeOkAnswerRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeOkAnswerRequest initEmpty()
+    {
+        ProbeOkAnswerRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `OK`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeOkAnswerRequest outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+    /// The answer, whose shape the worker of the probe ID defines.
+    bool has_data() const { return jsonHas(raw, "data"); }
+    JSONValue data() const { return jsonGet(raw, "data"); }
+    ref ProbeOkAnswerRequest data(JSONValue value) return
+    {
+        jsonSet(raw, "data", JSONValue(value));
+        return this;
+    }
+
+}
+/// The worker produced an answer.
+struct ProbeOkResult
+{
+    JSONValue raw;
+
+    static ProbeOkResult fromJson(JSONValue value)
+    {
+        ProbeOkResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeOkResult initEmpty()
+    {
+        ProbeOkResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `OK`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeOkResult outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+    /// The name of the worker that answered.
+    bool has_worker() const { return jsonHas(raw, "worker"); }
+    string worker() const { return jsonGetString(raw, "worker"); }
+    ref ProbeOkResult worker(string value) return
+    {
+        jsonSet(raw, "worker", JSONValue(value));
+        return this;
+    }
+
+    /// The answer, whose shape the worker of the probe ID defines.
+    bool has_data() const { return jsonHas(raw, "data"); }
+    JSONValue data() const { return jsonGet(raw, "data"); }
+    ref ProbeOkResult data(JSONValue value) return
+    {
+        jsonSet(raw, "data", JSONValue(value));
+        return this;
+    }
+
+}
+/// The answer of the worker, one of three shapes chosen by `outcome`.
+struct ProbeResult
+{
+    JSONValue raw;
+
+    static ProbeResult fromJson(JSONValue value)
+    {
+        ProbeResult m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeResult of(JSONValue value) { return fromJson(value); }
+    static ProbeResult fromProbeOkResult(ProbeOkResult value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProbeResult fromProbeUnsupportedResult(ProbeUnsupportedResult value)
+    {
+        return fromJson(value.toJson());
+    }
+    static ProbeResult fromProbeErrorResult(ProbeErrorResult value)
+    {
+        return fromJson(value.toJson());
+    }
+    string discriminator() const { return jsonGetString(raw, "outcome"); }
+}
+/// The worker does not support this probe.
+struct ProbeUnsupportedAnswerRequest
+{
+    JSONValue raw;
+
+    static ProbeUnsupportedAnswerRequest fromJson(JSONValue value)
+    {
+        ProbeUnsupportedAnswerRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeUnsupportedAnswerRequest initEmpty()
+    {
+        ProbeUnsupportedAnswerRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `UNSUPPORTED`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeUnsupportedAnswerRequest outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+}
+/// The worker does not support this probe.
+struct ProbeUnsupportedResult
+{
+    JSONValue raw;
+
+    static ProbeUnsupportedResult fromJson(JSONValue value)
+    {
+        ProbeUnsupportedResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static ProbeUnsupportedResult initEmpty()
+    {
+        ProbeUnsupportedResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The outcome of the probe, `UNSUPPORTED`.
+    bool has_outcome() const { return jsonHas(raw, "outcome"); }
+    string outcome() const { return jsonGetString(raw, "outcome"); }
+    ref ProbeUnsupportedResult outcome(string value) return
+    {
+        jsonSet(raw, "outcome", JSONValue(value));
+        return this;
+    }
+
+    /// The name of the worker that answered.
+    bool has_worker() const { return jsonHas(raw, "worker"); }
+    string worker() const { return jsonGetString(raw, "worker"); }
+    ref ProbeUnsupportedResult worker(string value) return
+    {
+        jsonSet(raw, "worker", JSONValue(value));
         return this;
     }
 
