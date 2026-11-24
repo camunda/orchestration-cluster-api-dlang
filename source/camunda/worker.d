@@ -3,9 +3,12 @@
 ///
 /// The model (as in the other Camunda SDKs): `maxJobsActive` caps the jobs
 /// the worker holds at once. The calling thread polls; `handlerThreads`
-/// threads run the handler, so up to that many jobs are handled in parallel;
-/// whenever enough capacity frees up the worker activates more, sized to the
-/// free capacity.
+/// threads at most run the handler, so up to that many jobs are handled in
+/// parallel; whenever enough capacity frees up the worker activates more,
+/// sized to the free capacity. The handler pool is elastic: it starts with
+/// `coreHandlerThreads` threads, adds one whenever a job is dispatched and
+/// none is free, and retires the extra ones after `threadIdleTimeoutMs`
+/// without the pool being fully busy.
 module camunda.worker;
 
 @safe:
@@ -28,8 +31,13 @@ struct JobWorkerConfig
     /// left). Each activation asks for the free capacity. Default 32
     /// (`CAMUNDA_WORKER_MAX_CONCURRENT_JOBS`).
     int maxJobsActive;
-    /// Threads running the handler; 0 means one per `maxJobsActive`.
+    /// Most threads running the handler; 0 means one per `maxJobsActive`.
     int handlerThreads;
+    /// Handler threads kept even when idle; 0 means `min(2, effectiveThreads)`.
+    int coreHandlerThreads;
+    /// Retire handler threads above the core once the pool has not been
+    /// fully busy for this long. 0 means 30 s.
+    long threadIdleTimeoutMs;
     /// Job lease duration. Default 60 s (`CAMUNDA_WORKER_TIMEOUT`).
     long jobTimeoutMs;
     /// Long-poll timeout of an activation request. Default 10 s
@@ -71,17 +79,42 @@ struct JobWorkerConfig
 
     JobWorkerConfig maxJobs(int n) { maxJobsActive = n; return this; }
     JobWorkerConfig threads(int n) { handlerThreads = n; return this; }
+    JobWorkerConfig coreThreads(int n) { coreHandlerThreads = n; return this; }
+    JobWorkerConfig idleTimeoutMs(long ms) { threadIdleTimeoutMs = ms; return this; }
     JobWorkerConfig timeoutMs(long ms) { jobTimeoutMs = ms; return this; }
     JobWorkerConfig name(string n) { workerName = n; return this; }
     JobWorkerConfig variables(string[] names) { fetchVariables = names; return this; }
     JobWorkerConfig tenants(string[] ids) { tenantIds = ids; return this; }
     JobWorkerConfig lease(bool enabled) { withLease = enabled; return this; }
 
-    /// Handler threads actually started.
+    /// Most handler threads started at once.
     int effectiveThreads() const
     {
         return handlerThreads > 0 ? handlerThreads : maxJobsActive;
     }
+
+    /// Handler threads started up front and kept when idle.
+    int effectiveCoreThreads() const
+    {
+        import std.algorithm.comparison : clamp, max, min;
+        const most = max(1, effectiveThreads);
+        return coreHandlerThreads > 0 ? clamp(coreHandlerThreads, 1, most) : min(2, most);
+    }
+
+    /// Idle time after which extra handler threads retire.
+    long effectiveIdleTimeoutMs() const
+    {
+        return threadIdleTimeoutMs > 0 ? threadIdleTimeoutMs : 30_000;
+    }
+}
+
+/// Handler pool size so far, for tests and tuning.
+struct PoolStats
+{
+    int live;      /// handler threads running now
+    int peak;      /// most handler threads alive at once
+    long spawned;  /// handler threads started
+    long retired;  /// handler threads retired after idling
 }
 
 /// Counters of a worker's activity so far.
@@ -105,6 +138,8 @@ final class WorkerControl
     private shared bool stopping_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures;
+    private shared int poolLive, poolPeak;
+    private shared long poolSpawned, poolRetired;
 
     /// Ask the worker to stop: it activates no more jobs, finishes the ones
     /// it holds, and `run` returns (after at most one activation long poll).
@@ -112,6 +147,30 @@ final class WorkerControl
 
     /// Whether `stop` was called.
     bool stopping() const { return atomicLoad(stopping_); }
+
+    /// A snapshot of the handler pool.
+    PoolStats pool() const
+    {
+        PoolStats p;
+        p.live = atomicLoad(poolLive);
+        p.peak = atomicLoad(poolPeak);
+        p.spawned = atomicLoad(poolSpawned);
+        p.retired = atomicLoad(poolRetired);
+        return p;
+    }
+
+    private void poolGrew(int live)
+    {
+        atomicStore(poolLive, live);
+        if (live > atomicLoad(poolPeak)) atomicStore(poolPeak, live);
+        atomicOp!"+="(poolSpawned, 1);
+    }
+
+    private void poolShrank(int live, long n)
+    {
+        atomicStore(poolLive, live);
+        atomicOp!"+="(poolRetired, n);
+    }
 
     /// A snapshot of the counters.
     WorkerStats stats() const
@@ -252,8 +311,14 @@ final class JobWorker
     /// Counters so far.
     WorkerStats stats() const { return ctl.stats(); }
 
-    /// Run until `stop`: poll on this thread, handle jobs on
-    /// `config.effectiveThreads` threads. A handler that throws fails its
+    /// Handler pool size so far.
+    PoolStats pool() const { return ctl.pool(); }
+
+    /// Run until `stop`: poll on this thread, handle jobs on up to
+    /// `config.effectiveThreads` threads (an elastic pool: it starts with
+    /// `config.effectiveCoreThreads`, grows when a job finds no free
+    /// thread, and shrinks back after `config.effectiveIdleTimeoutMs`
+    /// without being fully busy). A handler that throws fails its
     /// job with one retry fewer. Failed activations back off (50 ms up to
     /// 5 s). Rethrows `LeaseNotHonored`, after the jobs already held finish.
     void run(JobHandler handler)
@@ -280,13 +345,25 @@ final class JobWorker
         auto jobs = Chan!string.make;
         auto freed = Chan!int.make;
         JoinHandle[] handlers;
+        int live;
         scope (exit)
         {
             jobs.close();
             foreach (ref h; handlers) h.join();
+            ctl.poolShrank(0, 0);
         }
-        foreach (_; 0 .. max(1, config.effectiveThreads))
+        const maxThreads = max(1, config.effectiveThreads);
+        const coreThreads = config.effectiveCoreThreads;
+        const idleTimeout = config.effectiveIdleTimeoutMs;
+        void grow()
+        {
             handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
+            live++;
+            ctl.poolGrew(live);
+        }
+        foreach (_; 0 .. coreThreads) grow();
+        // Last time every live thread had a job (or the pool last changed).
+        long lastFullMs = client.clock.nowMs;
 
         int held;
         long backoff;
@@ -294,6 +371,21 @@ final class JobWorker
         while (!ctl.stopping)
         {
             while (freed.tryTake(one)) held--;
+            const now = client.clock.nowMs;
+            if (held >= live) lastFullMs = now;
+            else if (live > coreThreads && now - lastFullMs >= idleTimeout)
+            {
+                // Retire the threads that were not needed for a whole idle
+                // period. An empty job is the retire signal; idle threads
+                // take it, busy ones only after their job.
+                const target = max(coreThreads, held);
+                const n = live - target;
+                foreach (_; 0 .. n) jobs.put("");
+                live = target;
+                ctl.poolShrank(live, n);
+                lastFullMs = now;
+                pruneFinished(handlers);
+            }
             if (cap - held < threshold)
             {
                 freed.take(one); // wait for a handler to finish one
@@ -316,7 +408,9 @@ final class JobWorker
             {
                 held++;
                 jobs.put(raw.raw.toString());
+                if (held > live && live < maxThreads) grow();
             }
+            if (held >= live) lastFullMs = client.clock.nowMs;
             if (!batch.length && config.pollIntervalMs > 0 && !ctl.stopping)
                 client.clock.sleep(config.pollIntervalMs);
         }
@@ -325,6 +419,18 @@ final class JobWorker
     private static JobAction callPlain(Job job, JobHandler handler)
     {
         return handler(job);
+    }
+
+    /// Join and drop the handles of threads that have retired.
+    private static void pruneFinished(ref JoinHandle[] handlers)
+    {
+        JoinHandle[] keep;
+        foreach (ref h; handlers)
+        {
+            if (h.running) keep ~= h;
+            else h.join();
+        }
+        handlers = keep;
     }
 
     private ActivatedJobResult[] activate(int count)
@@ -353,8 +459,9 @@ final class JobWorker
     }
 }
 
-/// One handler thread: take jobs until the channel closes, run the handler,
-/// apply its action, and report each finished job on `freed`.
+/// One handler thread: take jobs until the channel closes or an empty job
+/// retires it, run the handler, apply its action, and report each finished
+/// job on `freed`.
 private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
@@ -364,6 +471,7 @@ private void handlerLoop(Ctx)(Chan!string jobs, Chan!int freed,
     string text;
     while (jobs.take(text))
     {
+        if (!text.length) return; // retired
         scope (exit) freed.put(1);
         Job job;
         job.raw = ActivatedJobResult.fromJson(parseJSON(text));
@@ -630,4 +738,71 @@ unittest
     assert(fromEnv.config.requestTimeoutMs == 10_000 && fromEnv.config.workerName == "d-sdk-worker");
     auto bare = new JobWorker(client, JobWorkerConfig.create("t"));
     assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == 32);
+}
+
+version (unittest)
+{
+    /// After `done`, wait (up to 5 s) for the pool to shrink back to its
+    /// core, then stop the worker and relay the summary and the pool size.
+    private void stopWhenIdle(Chan!string done, Chan!string relay, ThreadSafe!WorkerControl ctl, int core)
+    {
+        import camunda.clock : LiveClock;
+        import std.format : format;
+        string summary;
+        done.take(summary);
+        auto clock = new LiveClock;
+        const deadline = clock.nowMs + 5_000;
+        while (ctl.get.pool.live > core && clock.nowMs < deadline) clock.sleep(10);
+        const p = ctl.get.pool;
+        ctl.get.stop();
+        relay.put(format("%s|%d", summary, p.live));
+    }
+}
+
+// The handler pool starts at its core, grows to the maximum under load,
+// never exceeds it, and retires the extra threads after idling.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import std.string : split;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto relay = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 200, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(8).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    assert(worker.config.effectiveCoreThreads == 1);
+    auto stopper = spawn(&stopWhenIdle, done, relay, worker.control, 1);
+    // Gauge takes its lock in every method.
+    auto gauge = ThreadSafe!Gauge.assumeThreadSafe(new Gauge);
+    worker.run(&gaugedHandler, gauge);
+    stopper.join();
+    string summary;
+    relay.take(summary);
+    const parts = summary.split("|");
+    const pool = worker.pool;
+    assert(pool.peak == 4, format("pool peaked at %s, want 4: %s", pool, summary));
+    assert(parts[1] == "1", format("pool did not shrink to its core: %s", summary));
+    assert(pool.retired >= 3 && pool.spawned == 1 + pool.retired, format("%s", pool));
+    assert(gauge.get.peak <= 4, format("handler concurrency %d > 4", gauge.get.peak));
+    assert(pool.live == 0, "threads still counted after run returned");
+}
+
+unittest
+{
+    auto cfg = JobWorkerConfig.create("t").maxJobs(32);
+    assert(cfg.effectiveCoreThreads == 2 && cfg.effectiveIdleTimeoutMs == 30_000);
+    assert(cfg.threads(1).effectiveCoreThreads == 1);
+    assert(cfg.threads(8).coreThreads(20).effectiveCoreThreads == 8);
+    assert(cfg.idleTimeoutMs(500).effectiveIdleTimeoutMs == 500);
 }

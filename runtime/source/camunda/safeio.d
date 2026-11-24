@@ -284,6 +284,13 @@ struct JoinHandle
     {
         if (thread !is null) thread.join();
     }
+
+    /// Whether the thread is still running (false once it has returned).
+    /// `@trusted`: `Thread.isRunning` is unattributed; it only reads state.
+    bool running() const @trusted
+    {
+        return thread !is null && (cast() thread).isRunning;
+    }
 }
 
 private final class SpawnBox(Args...) { staticMap!(Unqual, Args) args; }
