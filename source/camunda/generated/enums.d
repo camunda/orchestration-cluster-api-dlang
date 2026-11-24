@@ -1346,6 +1346,33 @@ SecretErrorCode fromJson(SecretErrorCode)(JSONValue v)
 }
 JSONValue toJson(SecretErrorCode value) { return JSONValue(cast(string) value); }
 
+/// The state a secret store reports for a secret.  - `ACTIVE`: the store reports the secret as usable. - `DISABLED`: the secret was disabled in its store. - `EXPIRED`: the secret's expiry date has passed. - `NOT_YET_ACTIVE`: the secret's activation date is in the future.  A secret has exactly one status. When several apply, `DISABLED` wins over `EXPIRED`, and `EXPIRED` over `NOT_YET_ACTIVE`: a secret that is both disabled and expired is listed only as `DISABLED`, so an `EXPIRED` filter skips it.  A store that cannot report states reports every secret as `ACTIVE`.
+enum SecretStatusEnum : string
+{
+    ACTIVE = "ACTIVE",
+    DISABLED = "DISABLED",
+    EXPIRED = "EXPIRED",
+    NOT_YET_ACTIVE = "NOT_YET_ACTIVE",
+}
+
+SecretStatusEnum parseSecretStatusEnum(string value)
+{
+    switch (value)
+    {
+    case "ACTIVE": return SecretStatusEnum.ACTIVE;
+    case "DISABLED": return SecretStatusEnum.DISABLED;
+    case "EXPIRED": return SecretStatusEnum.EXPIRED;
+    case "NOT_YET_ACTIVE": return SecretStatusEnum.NOT_YET_ACTIVE;
+    default: throw new EnumDecodeError("SecretStatusEnum", value);
+    }
+}
+
+SecretStatusEnum fromJson(SecretStatusEnum)(JSONValue v)
+{
+    return parseSecretStatusEnum(v.type == JSONType.string ? v.str : v.toString);
+}
+JSONValue toJson(SecretStatusEnum value) { return JSONValue(cast(string) value); }
+
 /// The order in which to sort the related field.
 enum SortOrderEnum : string
 {
@@ -1490,6 +1517,127 @@ UserTaskStateEnum fromJson(UserTaskStateEnum)(JSONValue v)
     return parseUserTaskStateEnum(v.type == JSONType.string ? v.str : v.toString);
 }
 JSONValue toJson(UserTaskStateEnum value) { return JSONValue(cast(string) value); }
+
+/// The type of the actor who performed the operation. Camunda can add values in later versions; clients must handle unknown values gracefully.
+enum VariableHistoryItemActorTypeEnum : string
+{
+    USER = "USER",
+    CLIENT = "CLIENT",
+    ENGINE = "ENGINE",
+    UNKNOWN = "UNKNOWN",
+}
+
+VariableHistoryItemActorTypeEnum parseVariableHistoryItemActorTypeEnum(string value)
+{
+    switch (value)
+    {
+    case "USER": return VariableHistoryItemActorTypeEnum.USER;
+    case "CLIENT": return VariableHistoryItemActorTypeEnum.CLIENT;
+    case "ENGINE": return VariableHistoryItemActorTypeEnum.ENGINE;
+    case "UNKNOWN": return VariableHistoryItemActorTypeEnum.UNKNOWN;
+    default: throw new EnumDecodeError("VariableHistoryItemActorTypeEnum", value);
+    }
+}
+
+VariableHistoryItemActorTypeEnum fromJson(VariableHistoryItemActorTypeEnum)(JSONValue v)
+{
+    return parseVariableHistoryItemActorTypeEnum(v.type == JSONType.string ? v.str : v.toString);
+}
+JSONValue toJson(VariableHistoryItemActorTypeEnum value) { return JSONValue(cast(string) value); }
+
+/// The type of operation that produced this variable change. Camunda can add values in later versions; clients must handle unknown values gracefully.
+enum VariableHistoryItemOperationTypeEnum : string
+{
+    CREATE = "CREATE",
+    UPDATE = "UPDATE",
+}
+
+VariableHistoryItemOperationTypeEnum parseVariableHistoryItemOperationTypeEnum(string value)
+{
+    switch (value)
+    {
+    case "CREATE": return VariableHistoryItemOperationTypeEnum.CREATE;
+    case "UPDATE": return VariableHistoryItemOperationTypeEnum.UPDATE;
+    default: throw new EnumDecodeError("VariableHistoryItemOperationTypeEnum", value);
+    }
+}
+
+VariableHistoryItemOperationTypeEnum fromJson(VariableHistoryItemOperationTypeEnum)(JSONValue v)
+{
+    return parseVariableHistoryItemOperationTypeEnum(v.type == JSONType.string ? v.str : v.toString);
+}
+JSONValue toJson(VariableHistoryItemOperationTypeEnum value) { return JSONValue(cast(string) value); }
+
+/// What wrote this variable value, for example a job completion, a script result, or a multi-instance output collection. Camunda can add values in later versions; clients must handle unknown values gracefully.
+enum VariableHistoryItemVariableOperationTypeEnum : string
+{
+    API = "API",
+    USER_TASK_COMPLETION = "USER_TASK_COMPLETION",
+    PROCESS_INSTANCE_CREATION = "PROCESS_INSTANCE_CREATION",
+    PROCESS_INSTANCE_MODIFICATION = "PROCESS_INSTANCE_MODIFICATION",
+    JOB_COMPLETION = "JOB_COMPLETION",
+    JOB_FAILURE = "JOB_FAILURE",
+    JOB_ERROR = "JOB_ERROR",
+    EXECUTION_LISTENER_COMPLETION = "EXECUTION_LISTENER_COMPLETION",
+    MESSAGE_CORRELATION = "MESSAGE_CORRELATION",
+    SIGNAL_BROADCAST = "SIGNAL_BROADCAST",
+    CONDITIONAL_EVALUATION = "CONDITIONAL_EVALUATION",
+    AD_HOC_SUB_PROCESS_ACTIVATION = "AD_HOC_SUB_PROCESS_ACTIVATION",
+    INPUT_MAPPING = "INPUT_MAPPING",
+    OUTPUT_MAPPING = "OUTPUT_MAPPING",
+    SCRIPT_RESULT = "SCRIPT_RESULT",
+    DECISION_RESULT = "DECISION_RESULT",
+    CALL_ACTIVITY_INPUT = "CALL_ACTIVITY_INPUT",
+    CALL_ACTIVITY_OUTPUT = "CALL_ACTIVITY_OUTPUT",
+    MULTI_INSTANCE_INPUT_ELEMENT = "MULTI_INSTANCE_INPUT_ELEMENT",
+    MULTI_INSTANCE_LOOP_COUNTER = "MULTI_INSTANCE_LOOP_COUNTER",
+    MULTI_INSTANCE_OUTPUT_ELEMENT = "MULTI_INSTANCE_OUTPUT_ELEMENT",
+    MULTI_INSTANCE_OUTPUT_COLLECTION = "MULTI_INSTANCE_OUTPUT_COLLECTION",
+    AD_HOC_SUB_PROCESS_METADATA = "AD_HOC_SUB_PROCESS_METADATA",
+    AD_HOC_SUB_PROCESS_OUTPUT_ELEMENT = "AD_HOC_SUB_PROCESS_OUTPUT_ELEMENT",
+    AD_HOC_SUB_PROCESS_OUTPUT_COLLECTION = "AD_HOC_SUB_PROCESS_OUTPUT_COLLECTION",
+    UNKNOWN = "UNKNOWN",
+}
+
+VariableHistoryItemVariableOperationTypeEnum parseVariableHistoryItemVariableOperationTypeEnum(string value)
+{
+    switch (value)
+    {
+    case "API": return VariableHistoryItemVariableOperationTypeEnum.API;
+    case "USER_TASK_COMPLETION": return VariableHistoryItemVariableOperationTypeEnum.USER_TASK_COMPLETION;
+    case "PROCESS_INSTANCE_CREATION": return VariableHistoryItemVariableOperationTypeEnum.PROCESS_INSTANCE_CREATION;
+    case "PROCESS_INSTANCE_MODIFICATION": return VariableHistoryItemVariableOperationTypeEnum.PROCESS_INSTANCE_MODIFICATION;
+    case "JOB_COMPLETION": return VariableHistoryItemVariableOperationTypeEnum.JOB_COMPLETION;
+    case "JOB_FAILURE": return VariableHistoryItemVariableOperationTypeEnum.JOB_FAILURE;
+    case "JOB_ERROR": return VariableHistoryItemVariableOperationTypeEnum.JOB_ERROR;
+    case "EXECUTION_LISTENER_COMPLETION": return VariableHistoryItemVariableOperationTypeEnum.EXECUTION_LISTENER_COMPLETION;
+    case "MESSAGE_CORRELATION": return VariableHistoryItemVariableOperationTypeEnum.MESSAGE_CORRELATION;
+    case "SIGNAL_BROADCAST": return VariableHistoryItemVariableOperationTypeEnum.SIGNAL_BROADCAST;
+    case "CONDITIONAL_EVALUATION": return VariableHistoryItemVariableOperationTypeEnum.CONDITIONAL_EVALUATION;
+    case "AD_HOC_SUB_PROCESS_ACTIVATION": return VariableHistoryItemVariableOperationTypeEnum.AD_HOC_SUB_PROCESS_ACTIVATION;
+    case "INPUT_MAPPING": return VariableHistoryItemVariableOperationTypeEnum.INPUT_MAPPING;
+    case "OUTPUT_MAPPING": return VariableHistoryItemVariableOperationTypeEnum.OUTPUT_MAPPING;
+    case "SCRIPT_RESULT": return VariableHistoryItemVariableOperationTypeEnum.SCRIPT_RESULT;
+    case "DECISION_RESULT": return VariableHistoryItemVariableOperationTypeEnum.DECISION_RESULT;
+    case "CALL_ACTIVITY_INPUT": return VariableHistoryItemVariableOperationTypeEnum.CALL_ACTIVITY_INPUT;
+    case "CALL_ACTIVITY_OUTPUT": return VariableHistoryItemVariableOperationTypeEnum.CALL_ACTIVITY_OUTPUT;
+    case "MULTI_INSTANCE_INPUT_ELEMENT": return VariableHistoryItemVariableOperationTypeEnum.MULTI_INSTANCE_INPUT_ELEMENT;
+    case "MULTI_INSTANCE_LOOP_COUNTER": return VariableHistoryItemVariableOperationTypeEnum.MULTI_INSTANCE_LOOP_COUNTER;
+    case "MULTI_INSTANCE_OUTPUT_ELEMENT": return VariableHistoryItemVariableOperationTypeEnum.MULTI_INSTANCE_OUTPUT_ELEMENT;
+    case "MULTI_INSTANCE_OUTPUT_COLLECTION": return VariableHistoryItemVariableOperationTypeEnum.MULTI_INSTANCE_OUTPUT_COLLECTION;
+    case "AD_HOC_SUB_PROCESS_METADATA": return VariableHistoryItemVariableOperationTypeEnum.AD_HOC_SUB_PROCESS_METADATA;
+    case "AD_HOC_SUB_PROCESS_OUTPUT_ELEMENT": return VariableHistoryItemVariableOperationTypeEnum.AD_HOC_SUB_PROCESS_OUTPUT_ELEMENT;
+    case "AD_HOC_SUB_PROCESS_OUTPUT_COLLECTION": return VariableHistoryItemVariableOperationTypeEnum.AD_HOC_SUB_PROCESS_OUTPUT_COLLECTION;
+    case "UNKNOWN": return VariableHistoryItemVariableOperationTypeEnum.UNKNOWN;
+    default: throw new EnumDecodeError("VariableHistoryItemVariableOperationTypeEnum", value);
+    }
+}
+
+VariableHistoryItemVariableOperationTypeEnum fromJson(VariableHistoryItemVariableOperationTypeEnum)(JSONValue v)
+{
+    return parseVariableHistoryItemVariableOperationTypeEnum(v.type == JSONType.string ? v.str : v.toString);
+}
+JSONValue toJson(VariableHistoryItemVariableOperationTypeEnum value) { return JSONValue(cast(string) value); }
 
 /// The BPMN element type of a waiting element instance.
 enum WaitStateElementTypeEnum : string

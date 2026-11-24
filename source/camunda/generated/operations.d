@@ -2148,6 +2148,16 @@ mixin template GeneratedOperations()
         return VariableSearchQueryResult.fromJson(payload);
     }
 
+    /// Search variable history (`POST /variables/history/search`).
+    VariableHistoryItemSearchQueryResult searchVariableHistory(VariableHistoryItemSearchQuery body_ = VariableHistoryItemSearchQuery.init, string truncateValues = null)
+    {
+        const path_ = "/variables/history/search";
+        string[string] query;
+        if (truncateValues !is null) query["truncateValues"] = truncateValues;
+        auto payload = this.requestJson("POST", path_, body_.toJson(), query);
+        return VariableHistoryItemSearchQueryResult.fromJson(payload);
+    }
+
     /// Search variables (`POST /variables/search`).
     VariableSearchQueryResult searchVariables(VariableSearchQuery body_ = VariableSearchQuery.init, string truncateValues = null)
     {

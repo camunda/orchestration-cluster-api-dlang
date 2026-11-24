@@ -3597,6 +3597,79 @@ struct AdvancedScopeKeyFilter
     }
 
 }
+/// Advanced SecretStatusEnum filter.
+struct AdvancedSecretStatusFilter
+{
+    JSONValue raw;
+
+    static AdvancedSecretStatusFilter fromJson(JSONValue value)
+    {
+        AdvancedSecretStatusFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static AdvancedSecretStatusFilter initEmpty()
+    {
+        AdvancedSecretStatusFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Checks for equality with the provided value.
+    bool has_eq() const { return jsonHas(raw, "$eq"); }
+    SecretStatusEnum eq() const { return parseSecretStatusEnum(jsonGetString(raw, "$eq")); }
+    ref AdvancedSecretStatusFilter eq(SecretStatusEnum value) return
+    {
+        jsonSet(raw, "$eq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks for inequality with the provided value.
+    bool has_neq() const { return jsonHas(raw, "$neq"); }
+    SecretStatusEnum neq() const { return parseSecretStatusEnum(jsonGetString(raw, "$neq")); }
+    ref AdvancedSecretStatusFilter neq(SecretStatusEnum value) return
+    {
+        jsonSet(raw, "$neq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks if the current property exists. Every listed secret has a status, so `true` matches every secret and `false` matches none.
+    bool has_exists() const { return jsonHas(raw, "$exists"); }
+    bool exists() const { return jsonGetBool(raw, "$exists"); }
+    ref AdvancedSecretStatusFilter exists(bool value) return
+    {
+        jsonSet(raw, "$exists", JSONValue(value));
+        return this;
+    }
+
+    /// Checks if the property matches any of the provided values.
+    bool has_in_() const { return jsonHas(raw, "$in"); }
+    SecretStatusEnum[] in_() const { return jsonMapArray(raw, "$in", (JSONValue v) => parseSecretStatusEnum(v.type == JSONType.string ? v.str : v.toString)); }
+    ref AdvancedSecretStatusFilter in_(SecretStatusEnum[] value) return
+    {
+        jsonSet(raw, "$in", jsonFromMapped(value, (SecretStatusEnum x) => JSONValue(cast(string) x)));
+        return this;
+    }
+
+    /// Checks if the property matches none of the provided values.
+    bool has_notIn() const { return jsonHas(raw, "$notIn"); }
+    SecretStatusEnum[] notIn() const { return jsonMapArray(raw, "$notIn", (JSONValue v) => parseSecretStatusEnum(v.type == JSONType.string ? v.str : v.toString)); }
+    ref AdvancedSecretStatusFilter notIn(SecretStatusEnum[] value) return
+    {
+        jsonSet(raw, "$notIn", jsonFromMapped(value, (SecretStatusEnum x) => JSONValue(cast(string) x)));
+        return this;
+    }
+
+    bool has_like() const { return jsonHas(raw, "$like"); }
+    string like() const { return jsonGetString(raw, "$like"); }
+    ref AdvancedSecretStatusFilter like(string value) return
+    {
+        jsonSet(raw, "$like", JSONValue(value));
+        return this;
+    }
+
+}
 /// Advanced string filter.
 struct AdvancedStringFilter
 {
@@ -3728,6 +3801,263 @@ struct AdvancedUserTaskStateFilter
     bool has_like() const { return jsonHas(raw, "$like"); }
     string like() const { return jsonGetString(raw, "$like"); }
     ref AdvancedUserTaskStateFilter like(string value) return
+    {
+        jsonSet(raw, "$like", JSONValue(value));
+        return this;
+    }
+
+}
+/// Advanced VariableHistoryItemActorTypeEnum filter.
+struct AdvancedVariableHistoryItemActorTypeFilter
+{
+    JSONValue raw;
+
+    static AdvancedVariableHistoryItemActorTypeFilter fromJson(JSONValue value)
+    {
+        AdvancedVariableHistoryItemActorTypeFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static AdvancedVariableHistoryItemActorTypeFilter initEmpty()
+    {
+        AdvancedVariableHistoryItemActorTypeFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Checks for equality with the provided value.
+    bool has_eq() const { return jsonHas(raw, "$eq"); }
+    VariableHistoryItemActorTypeEnum eq() const { return parseVariableHistoryItemActorTypeEnum(jsonGetString(raw, "$eq")); }
+    ref AdvancedVariableHistoryItemActorTypeFilter eq(VariableHistoryItemActorTypeEnum value) return
+    {
+        jsonSet(raw, "$eq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks for inequality with the provided value.
+    bool has_neq() const { return jsonHas(raw, "$neq"); }
+    VariableHistoryItemActorTypeEnum neq() const { return parseVariableHistoryItemActorTypeEnum(jsonGetString(raw, "$neq")); }
+    ref AdvancedVariableHistoryItemActorTypeFilter neq(VariableHistoryItemActorTypeEnum value) return
+    {
+        jsonSet(raw, "$neq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks if the current property exists.
+    bool has_exists() const { return jsonHas(raw, "$exists"); }
+    bool exists() const { return jsonGetBool(raw, "$exists"); }
+    ref AdvancedVariableHistoryItemActorTypeFilter exists(bool value) return
+    {
+        jsonSet(raw, "$exists", JSONValue(value));
+        return this;
+    }
+
+    /// Checks if the property matches any of the provided values.
+    bool has_in_() const { return jsonHas(raw, "$in"); }
+    VariableHistoryItemActorTypeEnum[] in_() const { return jsonMapArray(raw, "$in", (JSONValue v) => parseVariableHistoryItemActorTypeEnum(v.type == JSONType.string ? v.str : v.toString)); }
+    ref AdvancedVariableHistoryItemActorTypeFilter in_(VariableHistoryItemActorTypeEnum[] value) return
+    {
+        jsonSet(raw, "$in", jsonFromMapped(value, (VariableHistoryItemActorTypeEnum x) => JSONValue(cast(string) x)));
+        return this;
+    }
+
+    bool has_like() const { return jsonHas(raw, "$like"); }
+    string like() const { return jsonGetString(raw, "$like"); }
+    ref AdvancedVariableHistoryItemActorTypeFilter like(string value) return
+    {
+        jsonSet(raw, "$like", JSONValue(value));
+        return this;
+    }
+
+}
+/// Advanced VariableHistoryItemKey filter.
+struct AdvancedVariableHistoryItemKeyFilter
+{
+    JSONValue raw;
+
+    static AdvancedVariableHistoryItemKeyFilter fromJson(JSONValue value)
+    {
+        AdvancedVariableHistoryItemKeyFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static AdvancedVariableHistoryItemKeyFilter initEmpty()
+    {
+        AdvancedVariableHistoryItemKeyFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Checks for equality with the provided value.
+    bool has_eq() const { return jsonHas(raw, "$eq"); }
+    VariableHistoryItemKey eq() const { return VariableHistoryItemKey.fromJson(jsonGet(raw, "$eq")); }
+    ref AdvancedVariableHistoryItemKeyFilter eq(VariableHistoryItemKey value) return
+    {
+        jsonSet(raw, "$eq", value.toJson());
+        return this;
+    }
+
+    /// Checks for inequality with the provided value.
+    bool has_neq() const { return jsonHas(raw, "$neq"); }
+    VariableHistoryItemKey neq() const { return VariableHistoryItemKey.fromJson(jsonGet(raw, "$neq")); }
+    ref AdvancedVariableHistoryItemKeyFilter neq(VariableHistoryItemKey value) return
+    {
+        jsonSet(raw, "$neq", value.toJson());
+        return this;
+    }
+
+    /// Checks if the current property exists.
+    bool has_exists() const { return jsonHas(raw, "$exists"); }
+    bool exists() const { return jsonGetBool(raw, "$exists"); }
+    ref AdvancedVariableHistoryItemKeyFilter exists(bool value) return
+    {
+        jsonSet(raw, "$exists", JSONValue(value));
+        return this;
+    }
+
+    /// Checks if the property matches any of the provided values.
+    bool has_in_() const { return jsonHas(raw, "$in"); }
+    VariableHistoryItemKey[] in_() const { return jsonMapArray(raw, "$in", (JSONValue v) => VariableHistoryItemKey.fromJson(v)); }
+    ref AdvancedVariableHistoryItemKeyFilter in_(VariableHistoryItemKey[] value) return
+    {
+        jsonSet(raw, "$in", jsonFromMapped(value, (VariableHistoryItemKey x) => x.toJson()));
+        return this;
+    }
+
+    /// Checks if the property matches none of the provided values.
+    bool has_notIn() const { return jsonHas(raw, "$notIn"); }
+    VariableHistoryItemKey[] notIn() const { return jsonMapArray(raw, "$notIn", (JSONValue v) => VariableHistoryItemKey.fromJson(v)); }
+    ref AdvancedVariableHistoryItemKeyFilter notIn(VariableHistoryItemKey[] value) return
+    {
+        jsonSet(raw, "$notIn", jsonFromMapped(value, (VariableHistoryItemKey x) => x.toJson()));
+        return this;
+    }
+
+}
+/// Advanced VariableHistoryItemOperationTypeEnum filter.
+struct AdvancedVariableHistoryItemOperationTypeFilter
+{
+    JSONValue raw;
+
+    static AdvancedVariableHistoryItemOperationTypeFilter fromJson(JSONValue value)
+    {
+        AdvancedVariableHistoryItemOperationTypeFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static AdvancedVariableHistoryItemOperationTypeFilter initEmpty()
+    {
+        AdvancedVariableHistoryItemOperationTypeFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Checks for equality with the provided value.
+    bool has_eq() const { return jsonHas(raw, "$eq"); }
+    VariableHistoryItemOperationTypeEnum eq() const { return parseVariableHistoryItemOperationTypeEnum(jsonGetString(raw, "$eq")); }
+    ref AdvancedVariableHistoryItemOperationTypeFilter eq(VariableHistoryItemOperationTypeEnum value) return
+    {
+        jsonSet(raw, "$eq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks for inequality with the provided value.
+    bool has_neq() const { return jsonHas(raw, "$neq"); }
+    VariableHistoryItemOperationTypeEnum neq() const { return parseVariableHistoryItemOperationTypeEnum(jsonGetString(raw, "$neq")); }
+    ref AdvancedVariableHistoryItemOperationTypeFilter neq(VariableHistoryItemOperationTypeEnum value) return
+    {
+        jsonSet(raw, "$neq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks if the current property exists.
+    bool has_exists() const { return jsonHas(raw, "$exists"); }
+    bool exists() const { return jsonGetBool(raw, "$exists"); }
+    ref AdvancedVariableHistoryItemOperationTypeFilter exists(bool value) return
+    {
+        jsonSet(raw, "$exists", JSONValue(value));
+        return this;
+    }
+
+    /// Checks if the property matches any of the provided values.
+    bool has_in_() const { return jsonHas(raw, "$in"); }
+    VariableHistoryItemOperationTypeEnum[] in_() const { return jsonMapArray(raw, "$in", (JSONValue v) => parseVariableHistoryItemOperationTypeEnum(v.type == JSONType.string ? v.str : v.toString)); }
+    ref AdvancedVariableHistoryItemOperationTypeFilter in_(VariableHistoryItemOperationTypeEnum[] value) return
+    {
+        jsonSet(raw, "$in", jsonFromMapped(value, (VariableHistoryItemOperationTypeEnum x) => JSONValue(cast(string) x)));
+        return this;
+    }
+
+    bool has_like() const { return jsonHas(raw, "$like"); }
+    string like() const { return jsonGetString(raw, "$like"); }
+    ref AdvancedVariableHistoryItemOperationTypeFilter like(string value) return
+    {
+        jsonSet(raw, "$like", JSONValue(value));
+        return this;
+    }
+
+}
+/// Advanced VariableHistoryItemVariableOperationTypeEnum filter.
+struct AdvancedVariableHistoryItemVariableOperationTypeFilter
+{
+    JSONValue raw;
+
+    static AdvancedVariableHistoryItemVariableOperationTypeFilter fromJson(JSONValue value)
+    {
+        AdvancedVariableHistoryItemVariableOperationTypeFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static AdvancedVariableHistoryItemVariableOperationTypeFilter initEmpty()
+    {
+        AdvancedVariableHistoryItemVariableOperationTypeFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Checks for equality with the provided value.
+    bool has_eq() const { return jsonHas(raw, "$eq"); }
+    VariableHistoryItemVariableOperationTypeEnum eq() const { return parseVariableHistoryItemVariableOperationTypeEnum(jsonGetString(raw, "$eq")); }
+    ref AdvancedVariableHistoryItemVariableOperationTypeFilter eq(VariableHistoryItemVariableOperationTypeEnum value) return
+    {
+        jsonSet(raw, "$eq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks for inequality with the provided value.
+    bool has_neq() const { return jsonHas(raw, "$neq"); }
+    VariableHistoryItemVariableOperationTypeEnum neq() const { return parseVariableHistoryItemVariableOperationTypeEnum(jsonGetString(raw, "$neq")); }
+    ref AdvancedVariableHistoryItemVariableOperationTypeFilter neq(VariableHistoryItemVariableOperationTypeEnum value) return
+    {
+        jsonSet(raw, "$neq", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// Checks if the current property exists.
+    bool has_exists() const { return jsonHas(raw, "$exists"); }
+    bool exists() const { return jsonGetBool(raw, "$exists"); }
+    ref AdvancedVariableHistoryItemVariableOperationTypeFilter exists(bool value) return
+    {
+        jsonSet(raw, "$exists", JSONValue(value));
+        return this;
+    }
+
+    /// Checks if the property matches any of the provided values.
+    bool has_in_() const { return jsonHas(raw, "$in"); }
+    VariableHistoryItemVariableOperationTypeEnum[] in_() const { return jsonMapArray(raw, "$in", (JSONValue v) => parseVariableHistoryItemVariableOperationTypeEnum(v.type == JSONType.string ? v.str : v.toString)); }
+    ref AdvancedVariableHistoryItemVariableOperationTypeFilter in_(VariableHistoryItemVariableOperationTypeEnum[] value) return
+    {
+        jsonSet(raw, "$in", jsonFromMapped(value, (VariableHistoryItemVariableOperationTypeEnum x) => JSONValue(cast(string) x)));
+        return this;
+    }
+
+    bool has_like() const { return jsonHas(raw, "$like"); }
+    string like() const { return jsonGetString(raw, "$like"); }
+    ref AdvancedVariableHistoryItemVariableOperationTypeFilter like(string value) return
     {
         jsonSet(raw, "$like", JSONValue(value));
         return this;
@@ -29202,7 +29532,36 @@ struct SearchQueryResponse
     }
 
 }
-/// Reserved for future filtering options. Currently takes no properties. The request body is optional: omitting it (or sending an empty object) applies no filters.
+/// Secret list filter.
+struct SecretListFilter
+{
+    JSONValue raw;
+
+    static SecretListFilter fromJson(JSONValue value)
+    {
+        SecretListFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static SecretListFilter initEmpty()
+    {
+        SecretListFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Only list secrets in the matching states. Omit it to list secrets in every state.
+    bool has_status() const { return jsonHas(raw, "status"); }
+    SecretStatusFilterProperty status() const { return SecretStatusFilterProperty.fromJson(jsonGet(raw, "status")); }
+    ref SecretListFilter status(SecretStatusFilterProperty value) return
+    {
+        jsonSet(raw, "status", value.toJson());
+        return this;
+    }
+
+}
+/// Options for listing secrets. The request body is optional: omitting it, or sending an empty object, lists every secret the caller may read.
 struct SecretListRequest
 {
     JSONValue raw;
@@ -29219,6 +29578,15 @@ struct SecretListRequest
         SecretListRequest m;
         m.raw = emptyObject();
         return m;
+    }
+
+    /// Narrows the listed secrets. Omit it to list secrets in every state. Clusters before 8.11 reject this property with `400`.
+    bool has_filter() const { return jsonHas(raw, "filter"); }
+    SecretListFilter filter() const { return SecretListFilter.fromJson(jsonGet(raw, "filter")); }
+    ref SecretListRequest filter(SecretListFilter value) return
+    {
+        jsonSet(raw, "filter", value.toJson());
+        return this;
     }
 
 }
@@ -29363,6 +29731,29 @@ struct SecretResolveResult
         return this;
     }
 
+}
+/// Alias of `SecretStatusEnum`.
+alias SecretStatusExactMatch = SecretStatusEnum;
+
+/// SecretStatusEnum property with full advanced search capabilities.
+struct SecretStatusFilterProperty
+{
+    JSONValue raw;
+
+    static SecretStatusFilterProperty fromJson(JSONValue value)
+    {
+        SecretStatusFilterProperty m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static SecretStatusFilterProperty of(JSONValue value) { return fromJson(value); }
+    static SecretStatusFilterProperty fromSecretStatusEnum(SecretStatusEnum value)
+    {
+        return fromJson(value.toJson());
+    }
+    static SecretStatusFilterProperty fromAdvancedSecretStatusFilter(AdvancedSecretStatusFilter value)
+    {
+        return fromJson(value.toJson());
+    }
 }
 /// `SetVariableRequest`
 struct SetVariableRequest
@@ -33353,6 +33744,741 @@ struct VariableFilter
         return this;
     }
 
+}
+/// Alias of `VariableHistoryItemActorTypeEnum`.
+alias VariableHistoryItemActorTypeExactMatch = VariableHistoryItemActorTypeEnum;
+
+/// VariableHistoryItemActorTypeEnum property with full advanced search capabilities.
+struct VariableHistoryItemActorTypeFilterProperty
+{
+    JSONValue raw;
+
+    static VariableHistoryItemActorTypeFilterProperty fromJson(JSONValue value)
+    {
+        VariableHistoryItemActorTypeFilterProperty m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemActorTypeFilterProperty of(JSONValue value) { return fromJson(value); }
+    static VariableHistoryItemActorTypeFilterProperty fromVariableHistoryItemActorTypeEnum(VariableHistoryItemActorTypeEnum value)
+    {
+        return fromJson(value.toJson());
+    }
+    static VariableHistoryItemActorTypeFilterProperty fromAdvancedVariableHistoryItemActorTypeFilter(AdvancedVariableHistoryItemActorTypeFilter value)
+    {
+        return fromJson(value.toJson());
+    }
+}
+/// Variable history item filter request.
+struct VariableHistoryItemFilter
+{
+    JSONValue raw;
+
+    static VariableHistoryItemFilter fromJson(JSONValue value)
+    {
+        VariableHistoryItemFilter m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemFilter initEmpty()
+    {
+        VariableHistoryItemFilter m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The key of the variable this history item belongs to.
+    bool has_variableKey() const { return jsonHas(raw, "variableKey"); }
+    VariableKeyFilterProperty variableKey() const { return VariableKeyFilterProperty.fromJson(jsonGet(raw, "variableKey")); }
+    ref VariableHistoryItemFilter variableKey(VariableKeyFilterProperty value) return
+    {
+        jsonSet(raw, "variableKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the process instance of this variable.
+    bool has_processInstanceKey() const { return jsonHas(raw, "processInstanceKey"); }
+    ProcessInstanceKeyFilterProperty processInstanceKey() const { return ProcessInstanceKeyFilterProperty.fromJson(jsonGet(raw, "processInstanceKey")); }
+    ref VariableHistoryItemFilter processInstanceKey(ProcessInstanceKeyFilterProperty value) return
+    {
+        jsonSet(raw, "processInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// Name of the variable.
+    bool has_name() const { return jsonHas(raw, "name"); }
+    StringFilterProperty name() const { return StringFilterProperty.fromJson(jsonGet(raw, "name")); }
+    ref VariableHistoryItemFilter name(StringFilterProperty value) return
+    {
+        jsonSet(raw, "name", value.toJson());
+        return this;
+    }
+
+    /// The key of the scope that defines where this variable is directly defined. This can be a process instance key (for process-level variables) or an element instance key (for local variables scoped to tasks, sub-processes, gateways, events, etc.).
+    bool has_scopeKey() const { return jsonHas(raw, "scopeKey"); }
+    ScopeKeyFilterProperty scopeKey() const { return ScopeKeyFilterProperty.fromJson(jsonGet(raw, "scopeKey")); }
+    ref VariableHistoryItemFilter scopeKey(ScopeKeyFilterProperty value) return
+    {
+        jsonSet(raw, "scopeKey", value.toJson());
+        return this;
+    }
+
+    /// The model-defined id of the element that caused this change, if any.
+    bool has_elementId() const { return jsonHas(raw, "elementId"); }
+    ElementIdFilterProperty elementId() const { return ElementIdFilterProperty.fromJson(jsonGet(raw, "elementId")); }
+    ref VariableHistoryItemFilter elementId(ElementIdFilterProperty value) return
+    {
+        jsonSet(raw, "elementId", value.toJson());
+        return this;
+    }
+
+    /// The key of the element instance that caused this change, if any.
+    bool has_elementInstanceKey() const { return jsonHas(raw, "elementInstanceKey"); }
+    ElementInstanceKeyFilterProperty elementInstanceKey() const { return ElementInstanceKeyFilterProperty.fromJson(jsonGet(raw, "elementInstanceKey")); }
+    ref VariableHistoryItemFilter elementInstanceKey(ElementInstanceKeyFilterProperty value) return
+    {
+        jsonSet(raw, "elementInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The unique key of this variable history item.
+    bool has_variableHistoryItemKey() const { return jsonHas(raw, "variableHistoryItemKey"); }
+    VariableHistoryItemKeyFilterProperty variableHistoryItemKey() const { return VariableHistoryItemKeyFilterProperty.fromJson(jsonGet(raw, "variableHistoryItemKey")); }
+    ref VariableHistoryItemFilter variableHistoryItemKey(VariableHistoryItemKeyFilterProperty value) return
+    {
+        jsonSet(raw, "variableHistoryItemKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the process definition.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKeyFilterProperty processDefinitionKey() const { return ProcessDefinitionKeyFilterProperty.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref VariableHistoryItemFilter processDefinitionKey(ProcessDefinitionKeyFilterProperty value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// The id of the process definition.
+    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
+    ProcessDefinitionIdFilterProperty processDefinitionId() const { return ProcessDefinitionIdFilterProperty.fromJson(jsonGet(raw, "processDefinitionId")); }
+    ref VariableHistoryItemFilter processDefinitionId(ProcessDefinitionIdFilterProperty value) return
+    {
+        jsonSet(raw, "processDefinitionId", value.toJson());
+        return this;
+    }
+
+    /// The tenant id of this variable.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    StringFilterProperty tenantId() const { return StringFilterProperty.fromJson(jsonGet(raw, "tenantId")); }
+    ref VariableHistoryItemFilter tenantId(StringFilterProperty value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// The timestamp when this change occurred.
+    bool has_timestamp() const { return jsonHas(raw, "timestamp"); }
+    DateTimeFilterProperty timestamp() const { return DateTimeFilterProperty.fromJson(jsonGet(raw, "timestamp")); }
+    ref VariableHistoryItemFilter timestamp(DateTimeFilterProperty value) return
+    {
+        jsonSet(raw, "timestamp", value.toJson());
+        return this;
+    }
+
+    /// The type of operation that produced this variable change.
+    bool has_operationType() const { return jsonHas(raw, "operationType"); }
+    VariableHistoryItemOperationTypeFilterProperty operationType() const { return VariableHistoryItemOperationTypeFilterProperty.fromJson(jsonGet(raw, "operationType")); }
+    ref VariableHistoryItemFilter operationType(VariableHistoryItemOperationTypeFilterProperty value) return
+    {
+        jsonSet(raw, "operationType", value.toJson());
+        return this;
+    }
+
+    /// What wrote this variable value.
+    bool has_variableOperationType() const { return jsonHas(raw, "variableOperationType"); }
+    VariableHistoryItemVariableOperationTypeFilterProperty variableOperationType() const { return VariableHistoryItemVariableOperationTypeFilterProperty.fromJson(jsonGet(raw, "variableOperationType")); }
+    ref VariableHistoryItemFilter variableOperationType(VariableHistoryItemVariableOperationTypeFilterProperty value) return
+    {
+        jsonSet(raw, "variableOperationType", value.toJson());
+        return this;
+    }
+
+    /// The type of the actor who performed the operation.
+    bool has_actorType() const { return jsonHas(raw, "actorType"); }
+    VariableHistoryItemActorTypeFilterProperty actorType() const { return VariableHistoryItemActorTypeFilterProperty.fromJson(jsonGet(raw, "actorType")); }
+    ref VariableHistoryItemFilter actorType(VariableHistoryItemActorTypeFilterProperty value) return
+    {
+        jsonSet(raw, "actorType", value.toJson());
+        return this;
+    }
+
+    /// The id of the user or client that caused this change, if known.
+    bool has_actorId() const { return jsonHas(raw, "actorId"); }
+    StringFilterProperty actorId() const { return StringFilterProperty.fromJson(jsonGet(raw, "actorId")); }
+    ref VariableHistoryItemFilter actorId(StringFilterProperty value) return
+    {
+        jsonSet(raw, "actorId", value.toJson());
+        return this;
+    }
+
+    /// The element id of the agent that caused this change, for example the element id of an ad-hoc sub-process, if any.
+    bool has_agentElementId() const { return jsonHas(raw, "agentElementId"); }
+    ElementIdFilterProperty agentElementId() const { return ElementIdFilterProperty.fromJson(jsonGet(raw, "agentElementId")); }
+    ref VariableHistoryItemFilter agentElementId(ElementIdFilterProperty value) return
+    {
+        jsonSet(raw, "agentElementId", value.toJson());
+        return this;
+    }
+
+}
+/// Alias of `VariableHistoryItemKey`.
+alias VariableHistoryItemKeyExactMatch = VariableHistoryItemKey;
+
+/// VariableHistoryItemKey property with full advanced search capabilities.
+struct VariableHistoryItemKeyFilterProperty
+{
+    JSONValue raw;
+
+    static VariableHistoryItemKeyFilterProperty fromJson(JSONValue value)
+    {
+        VariableHistoryItemKeyFilterProperty m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemKeyFilterProperty of(JSONValue value) { return fromJson(value); }
+    static VariableHistoryItemKeyFilterProperty fromVariableHistoryItemKey(VariableHistoryItemKey value)
+    {
+        return fromJson(value.toJson());
+    }
+    static VariableHistoryItemKeyFilterProperty fromAdvancedVariableHistoryItemKeyFilter(AdvancedVariableHistoryItemKeyFilter value)
+    {
+        return fromJson(value.toJson());
+    }
+}
+/// Alias of `VariableHistoryItemOperationTypeEnum`.
+alias VariableHistoryItemOperationTypeExactMatch = VariableHistoryItemOperationTypeEnum;
+
+/// VariableHistoryItemOperationTypeEnum property with full advanced search capabilities.
+struct VariableHistoryItemOperationTypeFilterProperty
+{
+    JSONValue raw;
+
+    static VariableHistoryItemOperationTypeFilterProperty fromJson(JSONValue value)
+    {
+        VariableHistoryItemOperationTypeFilterProperty m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemOperationTypeFilterProperty of(JSONValue value) { return fromJson(value); }
+    static VariableHistoryItemOperationTypeFilterProperty fromVariableHistoryItemOperationTypeEnum(VariableHistoryItemOperationTypeEnum value)
+    {
+        return fromJson(value.toJson());
+    }
+    static VariableHistoryItemOperationTypeFilterProperty fromAdvancedVariableHistoryItemOperationTypeFilter(AdvancedVariableHistoryItemOperationTypeFilter value)
+    {
+        return fromJson(value.toJson());
+    }
+}
+/// Variable history item response base.
+struct VariableHistoryItemResultBase
+{
+    JSONValue raw;
+
+    static VariableHistoryItemResultBase fromJson(JSONValue value)
+    {
+        VariableHistoryItemResultBase m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemResultBase initEmpty()
+    {
+        VariableHistoryItemResultBase m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The unique key of this variable history item.
+    bool has_variableHistoryItemKey() const { return jsonHas(raw, "variableHistoryItemKey"); }
+    VariableHistoryItemKey variableHistoryItemKey() const { return VariableHistoryItemKey.fromJson(jsonGet(raw, "variableHistoryItemKey")); }
+    ref VariableHistoryItemResultBase variableHistoryItemKey(VariableHistoryItemKey value) return
+    {
+        jsonSet(raw, "variableHistoryItemKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the variable this history item belongs to.
+    bool has_variableKey() const { return jsonHas(raw, "variableKey"); }
+    VariableKey variableKey() const { return VariableKey.fromJson(jsonGet(raw, "variableKey")); }
+    ref VariableHistoryItemResultBase variableKey(VariableKey value) return
+    {
+        jsonSet(raw, "variableKey", value.toJson());
+        return this;
+    }
+
+    /// Name of the variable.
+    bool has_name() const { return jsonHas(raw, "name"); }
+    string name() const { return jsonGetString(raw, "name"); }
+    ref VariableHistoryItemResultBase name(string value) return
+    {
+        jsonSet(raw, "name", JSONValue(value));
+        return this;
+    }
+
+    /// The key of the scope where this variable is directly defined. For process-level variables, this is the process instance key. For local variables, this is the key of the specific element instance where the variable is directly defined.
+    bool has_scopeKey() const { return jsonHas(raw, "scopeKey"); }
+    ScopeKey scopeKey() const { return ScopeKey.fromJson(jsonGet(raw, "scopeKey")); }
+    ref VariableHistoryItemResultBase scopeKey(ScopeKey value) return
+    {
+        jsonSet(raw, "scopeKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the element instance that caused this change, if any.
+    bool has_elementInstanceKey() const { return jsonHas(raw, "elementInstanceKey"); }
+    ElementInstanceKey elementInstanceKey() const { return ElementInstanceKey.fromJson(jsonGet(raw, "elementInstanceKey")); }
+    ref VariableHistoryItemResultBase elementInstanceKey(ElementInstanceKey value) return
+    {
+        jsonSet(raw, "elementInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The model-defined id of the element that caused this change, if any.
+    bool has_elementId() const { return jsonHas(raw, "elementId"); }
+    ElementId elementId() const { return ElementId.fromJson(jsonGet(raw, "elementId")); }
+    ref VariableHistoryItemResultBase elementId(ElementId value) return
+    {
+        jsonSet(raw, "elementId", value.toJson());
+        return this;
+    }
+
+    /// The key of the process instance of this variable.
+    bool has_processInstanceKey() const { return jsonHas(raw, "processInstanceKey"); }
+    ProcessInstanceKey processInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "processInstanceKey")); }
+    ref VariableHistoryItemResultBase processInstanceKey(ProcessInstanceKey value) return
+    {
+        jsonSet(raw, "processInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the root process instance. The root process instance is the top-level ancestor in the process instance hierarchy. This field is only present for data belonging to process instance hierarchies created in version 8.9 or later.
+    bool has_rootProcessInstanceKey() const { return jsonHas(raw, "rootProcessInstanceKey"); }
+    ProcessInstanceKey rootProcessInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "rootProcessInstanceKey")); }
+    ref VariableHistoryItemResultBase rootProcessInstanceKey(ProcessInstanceKey value) return
+    {
+        jsonSet(raw, "rootProcessInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the process definition.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref VariableHistoryItemResultBase processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// The id of the process definition.
+    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
+    ProcessDefinitionId processDefinitionId() const { return ProcessDefinitionId.fromJson(jsonGet(raw, "processDefinitionId")); }
+    ref VariableHistoryItemResultBase processDefinitionId(ProcessDefinitionId value) return
+    {
+        jsonSet(raw, "processDefinitionId", value.toJson());
+        return this;
+    }
+
+    /// The tenant id of this variable.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref VariableHistoryItemResultBase tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// The timestamp when this change occurred.
+    bool has_timestamp() const { return jsonHas(raw, "timestamp"); }
+    string timestamp() const { return jsonGetString(raw, "timestamp"); }
+    ref VariableHistoryItemResultBase timestamp(string value) return
+    {
+        jsonSet(raw, "timestamp", JSONValue(value));
+        return this;
+    }
+
+    bool has_operationType() const { return jsonHas(raw, "operationType"); }
+    VariableHistoryItemOperationTypeEnum operationType() const { return parseVariableHistoryItemOperationTypeEnum(jsonGetString(raw, "operationType")); }
+    ref VariableHistoryItemResultBase operationType(VariableHistoryItemOperationTypeEnum value) return
+    {
+        jsonSet(raw, "operationType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    bool has_variableOperationType() const { return jsonHas(raw, "variableOperationType"); }
+    VariableHistoryItemVariableOperationTypeEnum variableOperationType() const { return parseVariableHistoryItemVariableOperationTypeEnum(jsonGetString(raw, "variableOperationType")); }
+    ref VariableHistoryItemResultBase variableOperationType(VariableHistoryItemVariableOperationTypeEnum value) return
+    {
+        jsonSet(raw, "variableOperationType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    bool has_actorType() const { return jsonHas(raw, "actorType"); }
+    VariableHistoryItemActorTypeEnum actorType() const { return parseVariableHistoryItemActorTypeEnum(jsonGetString(raw, "actorType")); }
+    ref VariableHistoryItemResultBase actorType(VariableHistoryItemActorTypeEnum value) return
+    {
+        jsonSet(raw, "actorType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// The id of the user or client that caused this change, if known.
+    bool has_actorId() const { return jsonHas(raw, "actorId"); }
+    string actorId() const { return jsonGetString(raw, "actorId"); }
+    ref VariableHistoryItemResultBase actorId(string value) return
+    {
+        jsonSet(raw, "actorId", JSONValue(value));
+        return this;
+    }
+
+    /// The element id of the agent that caused this change, for example the element id of an ad-hoc sub-process, if any.
+    bool has_agentElementId() const { return jsonHas(raw, "agentElementId"); }
+    ElementId agentElementId() const { return ElementId.fromJson(jsonGet(raw, "agentElementId")); }
+    ref VariableHistoryItemResultBase agentElementId(ElementId value) return
+    {
+        jsonSet(raw, "agentElementId", value.toJson());
+        return this;
+    }
+
+}
+/// Variable history item search query request.
+struct VariableHistoryItemSearchQuery
+{
+    JSONValue raw;
+
+    static VariableHistoryItemSearchQuery fromJson(JSONValue value)
+    {
+        VariableHistoryItemSearchQuery m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemSearchQuery initEmpty()
+    {
+        VariableHistoryItemSearchQuery m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// Pagination criteria.
+    bool has_page() const { return jsonHas(raw, "page"); }
+    SearchQueryPageRequest page() const { return SearchQueryPageRequest.fromJson(jsonGet(raw, "page")); }
+    ref VariableHistoryItemSearchQuery page(SearchQueryPageRequest value) return
+    {
+        jsonSet(raw, "page", value.toJson());
+        return this;
+    }
+
+    /// Sort field criteria.
+    bool has_sort() const { return jsonHas(raw, "sort"); }
+    VariableHistoryItemSearchQuerySortRequest[] sort() const { return jsonMapArray(raw, "sort", (JSONValue v) => VariableHistoryItemSearchQuerySortRequest.fromJson(v)); }
+    ref VariableHistoryItemSearchQuery sort(VariableHistoryItemSearchQuerySortRequest[] value) return
+    {
+        jsonSet(raw, "sort", jsonFromMapped(value, (VariableHistoryItemSearchQuerySortRequest x) => x.toJson()));
+        return this;
+    }
+
+    /// The variable history item search filters.
+    bool has_filter() const { return jsonHas(raw, "filter"); }
+    VariableHistoryItemFilter filter() const { return VariableHistoryItemFilter.fromJson(jsonGet(raw, "filter")); }
+    ref VariableHistoryItemSearchQuery filter(VariableHistoryItemFilter value) return
+    {
+        jsonSet(raw, "filter", value.toJson());
+        return this;
+    }
+
+}
+/// Variable history item search query response.
+struct VariableHistoryItemSearchQueryResult
+{
+    JSONValue raw;
+
+    static VariableHistoryItemSearchQueryResult fromJson(JSONValue value)
+    {
+        VariableHistoryItemSearchQueryResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemSearchQueryResult initEmpty()
+    {
+        VariableHistoryItemSearchQueryResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    bool has_page() const { return jsonHas(raw, "page"); }
+    SearchQueryPageResponse page() const { return SearchQueryPageResponse.fromJson(jsonGet(raw, "page")); }
+    ref VariableHistoryItemSearchQueryResult page(SearchQueryPageResponse value) return
+    {
+        jsonSet(raw, "page", value.toJson());
+        return this;
+    }
+
+    /// The matching variable history items.
+    bool has_items() const { return jsonHas(raw, "items"); }
+    VariableHistoryItemSearchResult[] items() const { return jsonMapArray(raw, "items", (JSONValue v) => VariableHistoryItemSearchResult.fromJson(v)); }
+    ref VariableHistoryItemSearchQueryResult items(VariableHistoryItemSearchResult[] value) return
+    {
+        jsonSet(raw, "items", jsonFromMapped(value, (VariableHistoryItemSearchResult x) => x.toJson()));
+        return this;
+    }
+
+}
+/// `VariableHistoryItemSearchQuerySortRequest`
+struct VariableHistoryItemSearchQuerySortRequest
+{
+    JSONValue raw;
+
+    static VariableHistoryItemSearchQuerySortRequest fromJson(JSONValue value)
+    {
+        VariableHistoryItemSearchQuerySortRequest m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemSearchQuerySortRequest initEmpty()
+    {
+        VariableHistoryItemSearchQuerySortRequest m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The field to sort by.
+    bool has_field() const { return jsonHas(raw, "field"); }
+    string field() const { return jsonGetString(raw, "field"); }
+    ref VariableHistoryItemSearchQuerySortRequest field(string value) return
+    {
+        jsonSet(raw, "field", JSONValue(value));
+        return this;
+    }
+
+    bool has_order() const { return jsonHas(raw, "order"); }
+    SortOrderEnum order() const { return parseSortOrderEnum(jsonGetString(raw, "order")); }
+    ref VariableHistoryItemSearchQuerySortRequest order(SortOrderEnum value) return
+    {
+        jsonSet(raw, "order", JSONValue(cast(string) value));
+        return this;
+    }
+
+}
+/// Variable history item search response item.
+struct VariableHistoryItemSearchResult
+{
+    JSONValue raw;
+
+    static VariableHistoryItemSearchResult fromJson(JSONValue value)
+    {
+        VariableHistoryItemSearchResult m;
+        m.raw = value.type == JSONType.null_ ? emptyObject() : value;
+        return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemSearchResult initEmpty()
+    {
+        VariableHistoryItemSearchResult m;
+        m.raw = emptyObject();
+        return m;
+    }
+
+    /// The unique key of this variable history item.
+    bool has_variableHistoryItemKey() const { return jsonHas(raw, "variableHistoryItemKey"); }
+    VariableHistoryItemKey variableHistoryItemKey() const { return VariableHistoryItemKey.fromJson(jsonGet(raw, "variableHistoryItemKey")); }
+    ref VariableHistoryItemSearchResult variableHistoryItemKey(VariableHistoryItemKey value) return
+    {
+        jsonSet(raw, "variableHistoryItemKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the variable this history item belongs to.
+    bool has_variableKey() const { return jsonHas(raw, "variableKey"); }
+    VariableKey variableKey() const { return VariableKey.fromJson(jsonGet(raw, "variableKey")); }
+    ref VariableHistoryItemSearchResult variableKey(VariableKey value) return
+    {
+        jsonSet(raw, "variableKey", value.toJson());
+        return this;
+    }
+
+    /// Name of the variable.
+    bool has_name() const { return jsonHas(raw, "name"); }
+    string name() const { return jsonGetString(raw, "name"); }
+    ref VariableHistoryItemSearchResult name(string value) return
+    {
+        jsonSet(raw, "name", JSONValue(value));
+        return this;
+    }
+
+    /// The key of the scope where this variable is directly defined. For process-level variables, this is the process instance key. For local variables, this is the key of the specific element instance where the variable is directly defined.
+    bool has_scopeKey() const { return jsonHas(raw, "scopeKey"); }
+    ScopeKey scopeKey() const { return ScopeKey.fromJson(jsonGet(raw, "scopeKey")); }
+    ref VariableHistoryItemSearchResult scopeKey(ScopeKey value) return
+    {
+        jsonSet(raw, "scopeKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the element instance that caused this change, if any.
+    bool has_elementInstanceKey() const { return jsonHas(raw, "elementInstanceKey"); }
+    ElementInstanceKey elementInstanceKey() const { return ElementInstanceKey.fromJson(jsonGet(raw, "elementInstanceKey")); }
+    ref VariableHistoryItemSearchResult elementInstanceKey(ElementInstanceKey value) return
+    {
+        jsonSet(raw, "elementInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The model-defined id of the element that caused this change, if any.
+    bool has_elementId() const { return jsonHas(raw, "elementId"); }
+    ElementId elementId() const { return ElementId.fromJson(jsonGet(raw, "elementId")); }
+    ref VariableHistoryItemSearchResult elementId(ElementId value) return
+    {
+        jsonSet(raw, "elementId", value.toJson());
+        return this;
+    }
+
+    /// The key of the process instance of this variable.
+    bool has_processInstanceKey() const { return jsonHas(raw, "processInstanceKey"); }
+    ProcessInstanceKey processInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "processInstanceKey")); }
+    ref VariableHistoryItemSearchResult processInstanceKey(ProcessInstanceKey value) return
+    {
+        jsonSet(raw, "processInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the root process instance. The root process instance is the top-level ancestor in the process instance hierarchy. This field is only present for data belonging to process instance hierarchies created in version 8.9 or later.
+    bool has_rootProcessInstanceKey() const { return jsonHas(raw, "rootProcessInstanceKey"); }
+    ProcessInstanceKey rootProcessInstanceKey() const { return ProcessInstanceKey.fromJson(jsonGet(raw, "rootProcessInstanceKey")); }
+    ref VariableHistoryItemSearchResult rootProcessInstanceKey(ProcessInstanceKey value) return
+    {
+        jsonSet(raw, "rootProcessInstanceKey", value.toJson());
+        return this;
+    }
+
+    /// The key of the process definition.
+    bool has_processDefinitionKey() const { return jsonHas(raw, "processDefinitionKey"); }
+    ProcessDefinitionKey processDefinitionKey() const { return ProcessDefinitionKey.fromJson(jsonGet(raw, "processDefinitionKey")); }
+    ref VariableHistoryItemSearchResult processDefinitionKey(ProcessDefinitionKey value) return
+    {
+        jsonSet(raw, "processDefinitionKey", value.toJson());
+        return this;
+    }
+
+    /// The id of the process definition.
+    bool has_processDefinitionId() const { return jsonHas(raw, "processDefinitionId"); }
+    ProcessDefinitionId processDefinitionId() const { return ProcessDefinitionId.fromJson(jsonGet(raw, "processDefinitionId")); }
+    ref VariableHistoryItemSearchResult processDefinitionId(ProcessDefinitionId value) return
+    {
+        jsonSet(raw, "processDefinitionId", value.toJson());
+        return this;
+    }
+
+    /// The tenant id of this variable.
+    bool has_tenantId() const { return jsonHas(raw, "tenantId"); }
+    TenantId tenantId() const { return TenantId.fromJson(jsonGet(raw, "tenantId")); }
+    ref VariableHistoryItemSearchResult tenantId(TenantId value) return
+    {
+        jsonSet(raw, "tenantId", value.toJson());
+        return this;
+    }
+
+    /// The timestamp when this change occurred.
+    bool has_timestamp() const { return jsonHas(raw, "timestamp"); }
+    string timestamp() const { return jsonGetString(raw, "timestamp"); }
+    ref VariableHistoryItemSearchResult timestamp(string value) return
+    {
+        jsonSet(raw, "timestamp", JSONValue(value));
+        return this;
+    }
+
+    bool has_operationType() const { return jsonHas(raw, "operationType"); }
+    VariableHistoryItemOperationTypeEnum operationType() const { return parseVariableHistoryItemOperationTypeEnum(jsonGetString(raw, "operationType")); }
+    ref VariableHistoryItemSearchResult operationType(VariableHistoryItemOperationTypeEnum value) return
+    {
+        jsonSet(raw, "operationType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    bool has_variableOperationType() const { return jsonHas(raw, "variableOperationType"); }
+    VariableHistoryItemVariableOperationTypeEnum variableOperationType() const { return parseVariableHistoryItemVariableOperationTypeEnum(jsonGetString(raw, "variableOperationType")); }
+    ref VariableHistoryItemSearchResult variableOperationType(VariableHistoryItemVariableOperationTypeEnum value) return
+    {
+        jsonSet(raw, "variableOperationType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    bool has_actorType() const { return jsonHas(raw, "actorType"); }
+    VariableHistoryItemActorTypeEnum actorType() const { return parseVariableHistoryItemActorTypeEnum(jsonGetString(raw, "actorType")); }
+    ref VariableHistoryItemSearchResult actorType(VariableHistoryItemActorTypeEnum value) return
+    {
+        jsonSet(raw, "actorType", JSONValue(cast(string) value));
+        return this;
+    }
+
+    /// The id of the user or client that caused this change, if known.
+    bool has_actorId() const { return jsonHas(raw, "actorId"); }
+    string actorId() const { return jsonGetString(raw, "actorId"); }
+    ref VariableHistoryItemSearchResult actorId(string value) return
+    {
+        jsonSet(raw, "actorId", JSONValue(value));
+        return this;
+    }
+
+    /// The element id of the agent that caused this change, for example the element id of an ad-hoc sub-process, if any.
+    bool has_agentElementId() const { return jsonHas(raw, "agentElementId"); }
+    ElementId agentElementId() const { return ElementId.fromJson(jsonGet(raw, "agentElementId")); }
+    ref VariableHistoryItemSearchResult agentElementId(ElementId value) return
+    {
+        jsonSet(raw, "agentElementId", value.toJson());
+        return this;
+    }
+
+    /// Value of this variable change. Can be truncated, also when `truncateValues` is false, for the output collection of a multi-instance element or an ad-hoc sub-process.
+    bool has_value() const { return jsonHas(raw, "value"); }
+    string value() const { return jsonGetString(raw, "value"); }
+    ref VariableHistoryItemSearchResult value(string value) return
+    {
+        jsonSet(raw, "value", JSONValue(value));
+        return this;
+    }
+
+    /// Indicates if the value is truncated.
+    bool has_isTruncated() const { return jsonHas(raw, "isTruncated"); }
+    bool isTruncated() const { return jsonGetBool(raw, "isTruncated"); }
+    ref VariableHistoryItemSearchResult isTruncated(bool value) return
+    {
+        jsonSet(raw, "isTruncated", JSONValue(value));
+        return this;
+    }
+
+}
+/// Alias of `VariableHistoryItemVariableOperationTypeEnum`.
+alias VariableHistoryItemVariableOperationTypeExactMatch = VariableHistoryItemVariableOperationTypeEnum;
+
+/// VariableHistoryItemVariableOperationTypeEnum property with full advanced search capabilities.
+struct VariableHistoryItemVariableOperationTypeFilterProperty
+{
+    JSONValue raw;
+
+    static VariableHistoryItemVariableOperationTypeFilterProperty fromJson(JSONValue value)
+    {
+        VariableHistoryItemVariableOperationTypeFilterProperty m; m.raw = value; return m;
+    }
+    JSONValue toJson() const { return raw; }
+    static VariableHistoryItemVariableOperationTypeFilterProperty of(JSONValue value) { return fromJson(value); }
+    static VariableHistoryItemVariableOperationTypeFilterProperty fromVariableHistoryItemVariableOperationTypeEnum(VariableHistoryItemVariableOperationTypeEnum value)
+    {
+        return fromJson(value.toJson());
+    }
+    static VariableHistoryItemVariableOperationTypeFilterProperty fromAdvancedVariableHistoryItemVariableOperationTypeFilter(AdvancedVariableHistoryItemVariableOperationTypeFilter value)
+    {
+        return fromJson(value.toJson());
+    }
 }
 /// Alias of `VariableKey`.
 alias VariableKeyExactMatch = VariableKey;

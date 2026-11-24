@@ -1599,6 +1599,42 @@ struct UserTaskKey
     JSONValue toJson() const { return JSONValue(_value); }
 }
 
+/// System-generated key for a variable history item.
+/// Example: `2251799813683999`
+struct VariableHistoryItemKey
+{
+    private string _value;
+    enum semanticType = "VariableHistoryItemKey";
+    /// Construct without validation.
+    static VariableHistoryItemKey assumeExists(string value) pure nothrow
+    {
+        VariableHistoryItemKey k;
+        k._value = value;
+        return k;
+    }
+    /// Construct with constraint validation.
+    static VariableHistoryItemKey tryNew(string value)
+    {
+        checkConstraints(semanticType, value, "^-?[0-9]+$", 1, 25, true);
+        return assumeExists(value);
+    }
+    /// True if `value` satisfies this type's constraints.
+    static bool isValid(string value)
+    {
+        return checkConstraints(semanticType, value, "^-?[0-9]+$", 1, 25, false);
+    }
+    string value() const pure nothrow @nogc { return _value; }
+    string toString() const pure nothrow @nogc { return _value; }
+    bool opEquals(const VariableHistoryItemKey other) const pure nothrow @nogc { return _value == other._value; }
+    bool isEmpty() const pure nothrow @nogc { return _value.length == 0; }
+    static VariableHistoryItemKey fromJson(JSONValue v)
+    {
+        auto s = v.type == JSONType.string ? v.str : v.toString;
+        return assumeExists(s);
+    }
+    JSONValue toJson() const { return JSONValue(_value); }
+}
+
 /// System-generated key for a variable.
 /// Example: `2251799813683287`
 struct VariableKey

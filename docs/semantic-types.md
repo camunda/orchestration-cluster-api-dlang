@@ -49,6 +49,7 @@ Each identifier is a distinct D struct in `camunda.generated.keys`. Construct wi
 | `TenantId` | `^(<default>|[\w\.\-]{1,31})$` | 1–31 | The unique identifier of the tenant. |
 | `Username` | `^[a-zA-Z0-9_~@.+-]+$` | 1–256 | The unique name of a user. |
 | `UserTaskKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a user task. |
+| `VariableHistoryItemKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a variable history item. |
 | `VariableKey` | `^-?[0-9]+$` | 1–25 | System-generated key for a variable. |
 | `ResourceKey` | — | — | The system-assigned key for this resource. |
 | `ScopeKey` | — | — | System-generated key for a scope. A scope can hold variables and represents either an element instance in a BPMN process or the process instance itself. |

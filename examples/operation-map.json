@@ -1469,6 +1469,13 @@
       "region": "SearchUsersForTenant"
     }
   ],
+  "searchVariableHistory": [
+    {
+      "file": "variable.d",
+      "label": "Search variable history",
+      "region": "SearchVariableHistory"
+    }
+  ],
   "searchVariables": [
     {
       "file": "variable.d",

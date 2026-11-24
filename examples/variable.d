@@ -9,6 +9,15 @@ module example_variable;
 import camunda;
 import std.json;
 
+// region SearchVariableHistory
+/// Search variable history (`POST /variables/history/search`).
+void search_variable_history(CamundaClient client, VariableHistoryItemSearchQuery body_, string truncateValues = null)
+{
+    auto result = client.searchVariableHistory(body_, truncateValues);
+    cast(void) result;
+}
+// endregion SearchVariableHistory
+
 // region SearchVariables
 /// Search variables (`POST /variables/search`).
 void search_variables(CamundaClient client, VariableSearchQuery body_, string truncateValues = null)
