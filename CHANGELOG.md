@@ -1,3 +1,15 @@
+# [11.0.0-alpha.17](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.16...v11.0.0-alpha.17) (2026-11-24)
+
+
+### Bug Fixes
+
+* **gen:** regenerate artifacts ([743c31d](https://github.com/camunda/orchestration-cluster-api-dlang/commit/743c31d1ac5cf18f03ff491b431cb02abb194dae))
+
+
+### Features
+
+* **worker:** run engine I/O on a per-client curl-multi I/O thread ([#55](https://github.com/camunda/orchestration-cluster-api-dlang/issues/55)) ([031bfe4](https://github.com/camunda/orchestration-cluster-api-dlang/commit/031bfe4288394f3de7210621592e7c5f5821fcda)), closes [#54](https://github.com/camunda/orchestration-cluster-api-dlang/issues/54)
+
 # [11.0.0-alpha.16](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.15...v11.0.0-alpha.16) (2026-11-24)
 
 
