@@ -345,7 +345,8 @@ final class JobWorker
         auto jobs = Chan!string.make;
         auto freed = Chan!int.make;
         JoinHandle[] handlers;
-        int live;
+        int live;     // threads serving jobs
+        int retiring; // threads sent a retire signal and not yet exited
         scope (exit)
         {
             jobs.close();
@@ -359,7 +360,7 @@ final class JobWorker
         {
             handlers ~= spawn(&handlerLoop!Ctx, jobs, freed, client.threadSafe, control, handler, context);
             live++;
-            ctl.poolGrew(live);
+            ctl.poolGrew(live + retiring);
         }
         foreach (_; 0 .. coreThreads) grow();
         // Last time every live thread had a job (or the pool last changed).
@@ -371,6 +372,13 @@ final class JobWorker
         while (!ctl.stopping)
         {
             while (freed.tryTake(one)) held--;
+            if (retiring > 0)
+            {
+                // Reap retired threads on every pass, also at core size,
+                // and only then free their slots and their statistics.
+                retiring -= pruneFinished(handlers);
+                ctl.poolShrank(live + retiring, 0);
+            }
             const now = client.clock.nowMs;
             if (held >= live) lastFullMs = now;
             else if (live > coreThreads && now - lastFullMs >= idleTimeout)
@@ -382,9 +390,9 @@ final class JobWorker
                 const n = live - target;
                 foreach (_; 0 .. n) jobs.put("");
                 live = target;
-                ctl.poolShrank(live, n);
+                retiring += n;
+                ctl.poolShrank(live + retiring, n);
                 lastFullMs = now;
-                pruneFinished(handlers);
             }
             if (cap - held < threshold)
             {
@@ -408,7 +416,10 @@ final class JobWorker
             {
                 held++;
                 jobs.put(raw.raw.toString());
-                if (held > live && live < maxThreads) grow();
+                // Count jobs finished during activation before growing.
+                while (freed.tryTake(one)) held--;
+                // Threads still retiring keep their slot until they exit.
+                if (held > live && live + retiring < maxThreads) grow();
             }
             if (held >= live) lastFullMs = client.clock.nowMs;
             if (!batch.length && config.pollIntervalMs > 0 && !ctl.stopping)
@@ -422,15 +433,22 @@ final class JobWorker
     }
 
     /// Join and drop the handles of threads that have retired.
-    private static void pruneFinished(ref JoinHandle[] handlers)
+    /// Returns how many were reaped.
+    private static int pruneFinished(ref JoinHandle[] handlers)
     {
         JoinHandle[] keep;
+        int reaped;
         foreach (ref h; handlers)
         {
             if (h.running) keep ~= h;
-            else h.join();
+            else
+            {
+                h.join();
+                reaped++;
+            }
         }
         handlers = keep;
+        return reaped;
     }
 
     private ActivatedJobResult[] activate(int count)
