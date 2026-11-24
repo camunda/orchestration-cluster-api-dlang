@@ -14,6 +14,7 @@ module camunda.worker;
 @safe:
 
 import camunda.client : CamundaClient;
+import camunda.clock : Clock;
 import camunda.config : WorkerDefaults;
 import camunda.errors;
 import camunda.generated;
@@ -415,9 +416,10 @@ final class JobWorker
             {
                 // Bound the wait by the next idle-retirement deadline, so
                 // extra idle threads still retire under partial occupancy.
+                // The deadline is on the injected clock, so wait on it too.
                 const retireDue = live > coreThreads && held < live;
                 const got = retireDue
-                    ? freed.takeFor(one, max(1, lastFullMs + idleTimeout - now))
+                    ? takeUntil(freed, one, client.clock, lastFullMs + idleTimeout)
                     : freed.take(one);
                 if (got)
                 {
@@ -454,6 +456,21 @@ final class JobWorker
     private static JobAction callPlain(Job job, JobHandler handler)
     {
         return handler(job);
+    }
+
+    /// Take from `ch` until `clock` reaches `deadlineMs`. The wait goes
+    /// through `clock.sleep` in short slices, so an injected clock decides
+    /// when the deadline has passed.
+    private static bool takeUntil(T)(Chan!T ch, out T v, Clock clock, long deadlineMs)
+    {
+        enum sliceMs = 5;
+        for (;;)
+        {
+            if (ch.tryTake(v)) return true;
+            const left = deadlineMs - clock.nowMs;
+            if (left <= 0) return false;
+            clock.sleep(left < sliceMs ? left : sliceMs);
+        }
     }
 
     /// Join and drop the handles of threads that have retired.
@@ -912,4 +929,58 @@ unittest
     int live;
     relay.take(live);
     assert(live == 3, "idle thread did not retire under partial occupancy: " ~ live.to!string);
+}
+
+version (unittest)
+{
+    /// A clock that moves only when someone sleeps on it (each sleep also
+    /// yields 1 ms of real time). Safe to share between threads.
+    private final class SleepDrivenClock : Clock
+    {
+        import camunda.safeio : Lock, sleepMs;
+        private Lock lock;
+        private long mono;
+        this() { lock = new Lock; }
+        long nowMs() const { return lock.run(() => mono); }
+        long nowWallMs() const { return nowMs; }
+        void sleep(long durationMs)
+        {
+            const d = durationMs < 0 ? 0 : durationMs;
+            lock.run({ mono += d; });
+            sleepMs(1);
+        }
+    }
+}
+
+// The idle-retirement wait under partial occupancy follows the injected
+// clock: with a clock that only advances on sleep, the idle thread still
+// retires while three jobs stay blocked.
+unittest
+{
+    import camunda.transport : CamundaOptions;
+    import std.conv : to;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto gate = Chan!int.make;
+    auto relay = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 4, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    CamundaOptions o;
+    o.config = [
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ];
+    auto client = CamundaClient.create(o.withClock(new SleepDrivenClock));
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(4).threads(4).coreThreads(1).idleTimeoutMs(100));
+    worker.config.pollIntervalMs = 10;
+    auto stopper = spawn(&releaseWhenShrunk, done, gate, relay, worker.control, 3);
+    worker.run(&gatedHandler, gate);
+    stopper.join();
+    int live;
+    relay.take(live);
+    assert(live == 3, "idle thread did not retire on the injected clock: " ~ live.to!string);
 }
