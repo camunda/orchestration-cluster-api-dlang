@@ -309,11 +309,19 @@ struct HttpResult
     /// `error` is a configuration problem (a TLS setting libcurl refused),
     /// not a network one.
     bool configError;
+    /// `error` is an authentication failure (the token request failed):
+    /// `get` throws `AuthException`, as the blocking transport does.
+    bool authError;
 
-    /// The response; throws `NetworkException` (or `CamundaException` for
-    /// a configuration problem) when there is none.
+    /// The response; throws `AuthException` for an authentication
+    /// failure, `CamundaException` for a configuration problem, or
+    /// `NetworkException` when there is none.
     HttpResponse get() const
     {
+        import std.algorithm.searching : startsWith;
+        enum authPrefix = "authentication error: ";
+        if (authError)
+            throw new AuthException(error.startsWith(authPrefix) ? error[authPrefix.length .. $] : error);
         if (configError) throw new CamundaException(error);
         if (error.length) throw new NetworkException(error);
         return cast(HttpResponse) response;

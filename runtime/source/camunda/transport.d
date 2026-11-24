@@ -380,7 +380,8 @@ final class Transport
                 HttpResult r;
                 r.tag = p.tag;
                 r.error = e.msg;
-                r.configError = !isRetryable(e);
+                r.authError = (cast(AuthException) e) !is null;
+                r.configError = !r.authError && !isRetryable(e);
                 try p.sink.get.deliver(r);
                 catch (Exception) {}
             }
@@ -888,4 +889,26 @@ unittest
     HttpResult r;
     ch.take(r);
     assert(r.tag == 42 && r.error.length, "the token failure was not delivered");
+    // The delivered failure keeps the type the blocking path throws, so a
+    // typed `catch (AuthException)` works for both.
+    Exception blocking, delivered;
+    try t.auth.headers();
+    catch (Exception e) blocking = e;
+    try t.checked(r);
+    catch (Exception e) delivered = e;
+    assert(blocking !is null && delivered !is null);
+    assert(typeid(blocking) == typeid(delivered),
+        typeid(blocking).toString ~ " became " ~ typeid(delivered).toString);
+    assert(blocking.msg == delivered.msg, delivered.msg);
+}
+
+unittest
+{
+    // An authentication failure in a result is rethrown as `AuthException`
+    // with its message intact (no doubled prefix).
+    HttpResult r;
+    r.error = new AuthException("token endpoint returned 401").msg;
+    r.authError = true;
+    try { r.get; assert(false); }
+    catch (AuthException e) assert(e.msg == "authentication error: token endpoint returned 401", e.msg);
 }
