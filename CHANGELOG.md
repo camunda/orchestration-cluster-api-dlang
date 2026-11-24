@@ -1,3 +1,15 @@
+# [11.0.0-alpha.16](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.15...v11.0.0-alpha.16) (2026-11-24)
+
+
+### Bug Fixes
+
+* **gen:** regenerate artifacts ([546d5cc](https://github.com/camunda/orchestration-cluster-api-dlang/commit/546d5ccb543b06ebb1d69c694476b93d711f0368))
+
+
+### Features
+
+* elastic JobWorker handler pool and GC tuning guidance ([#53](https://github.com/camunda/orchestration-cluster-api-dlang/issues/53)) ([9db920c](https://github.com/camunda/orchestration-cluster-api-dlang/commit/9db920ca48de0f6b3c37db9d25f81d9202b8ed92)), closes [#52](https://github.com/camunda/orchestration-cluster-api-dlang/issues/52)
+
 # [11.0.0-alpha.15](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.14...v11.0.0-alpha.15) (2026-11-23)
 
 
