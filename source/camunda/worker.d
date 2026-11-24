@@ -1076,14 +1076,18 @@ unittest
 unittest
 {
     import std.format : format;
-    // Warm up (thread start-up, first connections), then compare.
-    timedRun(200, 0, 64, 16, 5);
-    const fast = timedRun(1_000, 0, 64, 16, 5)[0];
-    const slow = timedRun(1_000, 2, 64, 16, 5)[0];
-    // Handler work bounds both runs (1000 x 5 ms / 16 threads ~ 310 ms);
-    // allow scheduling noise, but not a per-call stall of the handlers
-    // (which alone would add 1000 x 2 ms / 16 ~ 125 ms).
-    assert(slow <= fast + fast / 5 + 75, format("2 ms latency: %s ms, none: %s ms", slow, fast));
+    // Handler work (1 ms) is smaller than the engine latency, so a design
+    // where each completion blocks a handler thread would pay the latency
+    // on every job: 2_000 x 2 ms / 16 threads = 250 ms extra. The
+    // tolerance below sits well under that penalty, so the test goes red
+    // if completions block handler threads. HTTP/1.1 answers one request
+    // per connection at a time, so the pool (32 connections) must cover
+    // the request rate times the latency; maxJobs covers the jobs held
+    // while their completion is in flight.
+    timedRun(200, 0, 512, 16, 1, 32);
+    const fast = timedRun(2_000, 0, 512, 16, 1, 32)[0];
+    const slow = timedRun(2_000, 2, 512, 16, 1, 32)[0];
+    assert(slow <= fast + fast / 4 + 60, format("2 ms latency: %s ms, none: %s ms", slow, fast));
 }
 
 // Explicit settings win over CAMUNDA_WORKER_* defaults; unset ones take them.

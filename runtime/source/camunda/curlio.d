@@ -113,7 +113,7 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
 {
     curlGlobalInitOnce();
     auto engine = engineRef.get;
-    auto multi = newMulti();
+    auto multi = newMulti(engine.maxConnections);
     engine.attach(multi);
     // A dying I/O thread must not leave the engine marked running.
     scope (failure) engine.crashed();
@@ -197,11 +197,18 @@ private struct Done
 
 /// A new multi handle.
 /// `@trusted`: `curl_multi_init` takes no arguments.
-private CURLM* newMulti() @trusted
+/// Its connection cache keeps `maxConnections` plus a few long-poll
+/// connections alive: libcurl's default (four per handle currently added)
+/// shrinks as transfers finish, closing pooled connections only for the
+/// next burst to reopen them.
+/// `@trusted`: `curl_multi_init` takes no arguments; CURLMOPT_MAXCONNECTS
+/// takes a long.
+private CURLM* newMulti(int maxConnections) @trusted
 {
-    import etc.c.curl : curl_multi_init;
+    import etc.c.curl : curl_multi_init, curl_multi_setopt, CurlMOption;
     auto m = curl_multi_init();
     if (m is null) assert(0, "curl_multi_init failed");
+    curl_multi_setopt(m, CurlMOption.maxconnects, cast(c_long) (maxConnections + 8));
     return m;
 }
 
