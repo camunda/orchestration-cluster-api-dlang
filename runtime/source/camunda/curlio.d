@@ -261,8 +261,12 @@ private CURLM* newMulti(int maxConnections) @trusted
 private Done[] step(CURLM* multi, int timeoutMs) @trusted
 {
     import etc.c.curl : CURLMsg, CurlMsg, curl_multi_info_read, curl_multi_perform;
+    import std.conv : to;
     int running;
-    curl_multi_perform(multi, &running);
+    const prc = curl_multi_perform(multi, &running);
+    // A failed multi operation cannot continue: throw so ioLoop fails every
+    // pending submission and rebuilds the multi handle.
+    if (prc != 0) throw new Exception("curl_multi_perform failed: error " ~ (cast(int) prc).to!string);
     Done[] done;
     int left;
     for (CURLMsg* m = curl_multi_info_read(multi, &left); m !is null; m = curl_multi_info_read(multi, &left))
@@ -404,12 +408,43 @@ private bool start(CURLM* multi, Transfer t, ref CURL*[] spare, out HttpResult f
         if (req.method != "POST") str(CurlOption.customrequest, req.method);
         break;
     }
+    import etc.c.curl : curl_slist_free_all;
     curl_slist* list;
-    foreach (l; lines) list = curl_slist_append(list, l.toStringz);
-    t.headers = list;
+    foreach (l; lines)
+    {
+        // Keep the list on allocation failure; never send a partial header set.
+        auto next = curl_slist_append(list, l.toStringz);
+        if (next is null)
+        {
+            curl_slist_free_all(list);
+            failed.error = "curl_slist_append failed (out of memory)";
+            spare ~= e;
+            t.easy = null;
+            return false;
+        }
+        list = next;
+    }
     curl_easy_setopt(e, CurlOption.httpheader, list);
-    curl_multi_add_handle(multi, e);
+    const arc = curl_multi_add_handle(multi, e);
+    if (arc != 0)
+    {
+        // Not registered: deliver an error instead of a transfer that never completes.
+        curl_easy_setopt(e, CurlOption.httpheader, null);
+        curl_slist_free_all(list);
+        failed.error = "curl_multi_add_handle failed: error " ~ multiRcText(arc);
+        spare ~= e;
+        t.easy = null;
+        return false;
+    }
+    t.headers = list;
     return true;
+}
+
+/// The numeric multi-interface error `rc` as text.
+private string multiRcText(int rc)
+{
+    import std.conv : to;
+    return rc.to!string;
 }
 
 /// libcurl's text for `rc`.

@@ -178,7 +178,14 @@ struct CamundaConfig
         c.retry.maxAttempts = cast(uint) parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS"), 3);
         c.retry.baseDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS"), 100);
         c.retry.maxDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS"), 2000);
-        c.httpMaxConnections = cast(int) parseLong(get("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS"), 16);
+        {
+            // Validate before narrowing: a bare cast would wrap 4294967297 to 1.
+            const mc = parseLong(get("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS"), 16);
+            if (mc < 1 || mc > int.max)
+                throw new ConfigException("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS must be between 1 and "
+                    ~ int.max.to!string ~ ", got " ~ mc.to!string);
+            c.httpMaxConnections = cast(int) mc;
+        }
 
         c.tls.cert = get("CAMUNDA_MTLS_CERT");
         c.tls.key = get("CAMUNDA_MTLS_KEY");
@@ -523,4 +530,13 @@ unittest
         assert(false, "expected ConfigException");
     }
     catch (ConfigException) {}
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+    // Out-of-int-range values must be rejected, not wrapped to a valid count.
+    foreach (v; ["4294967297", "-4294967295", "0"])
+        assertThrown!ConfigException(CamundaConfig.fromEnv(["CAMUNDA_SDK_HTTP_MAX_CONNECTIONS": v]));
+    assert(CamundaConfig.fromEnv(["CAMUNDA_SDK_HTTP_MAX_CONNECTIONS": "7"]).httpMaxConnections == 7);
 }
