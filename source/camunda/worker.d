@@ -63,8 +63,10 @@ struct JobWorkerConfig
     long pollIntervalMs = 250;
     /// How long `run` waits, once stopping, for the jobs it holds to be
     /// settled. Jobs still held then are counted in `WorkerStats.unaccounted`
-    /// and `run` returns without waiting for their handler threads.
-    /// 0 means 30 s.
+    /// and `run` returns without waiting for their handler threads. An
+    /// activation request still in flight then is not waited for either and
+    /// is counted in `WorkerStats.abandonedActivations`: jobs it activates
+    /// stay locked on the engine until `jobTimeoutMs`. 0 means 30 s.
     long shutdownTimeoutMs;
     /// Default "d-sdk-worker" (`CAMUNDA_WORKER_NAME`).
     string workerName;
@@ -160,6 +162,10 @@ struct WorkerStats
     long activationFailures; /// activation requests that failed (then backed off)
     long handlerAborts;      /// a handler thread died (an `Error`) holding a job; the job is counted as left
     long unaccounted;        /// jobs still held when the shutdown timeout ran out
+    /// Activation requests still in flight when the shutdown timeout ran
+    /// out. Jobs such a request activates are never seen by the worker and
+    /// stay locked on the engine until their job timeout.
+    long abandonedActivations;
 }
 
 /// A worker's run state, shared by its poller, its handler threads and
@@ -170,12 +176,12 @@ final class WorkerControl
     private shared bool stopping_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures,
-        handlerAborts, unaccounted;
+        handlerAborts, unaccounted, abandonedActivations;
     private shared int poolLive, poolPeak;
     private shared long poolSpawned, poolRetired;
 
     /// Ask the worker to stop: it activates no more jobs, finishes the ones
-    /// it holds, and `run` returns (after at most one activation long poll).
+    /// it holds, and `run` returns (within the shutdown timeout).
     void stop() { atomicStore(stopping_, true); }
 
     /// Whether `stop` was called.
@@ -219,6 +225,7 @@ final class WorkerControl
         s.activationFailures = atomicLoad(activationFailures);
         s.handlerAborts = atomicLoad(handlerAborts);
         s.unaccounted = atomicLoad(unaccounted);
+        s.abandonedActivations = atomicLoad(abandonedActivations);
         return s;
     }
 
@@ -615,6 +622,9 @@ final class JobWorker
             {
                 // Bounded drain: report what is still held, do not hang.
                 if (held > 0) ctl.count!"unaccounted"(held);
+                // An activation long poll may outlast the timeout; the jobs
+                // it returns are not seen here, so record the request.
+                if (activating) ctl.count!"abandonedActivations";
                 abandoned = true;
                 break;
             }
@@ -631,9 +641,10 @@ final class JobWorker
             if (live > coreThreads && busy < live) deadline = min(deadline, lastFullMs + idleTimeout);
             foreach (p; retrying) deadline = min(deadline, p.dueMs);
             deadline = min(deadline, stopDeadlineMs);
-            // `stop` sends no event: while jobs are held, look for it
+            // `stop` sends no event: while jobs are held or an activation
+            // is in flight, look for it
             // now and then, so the shutdown timeout starts on time.
-            if (!stopping && held > 0) deadline = min(deadline, now + stopPollMs);
+            if (!stopping && (held > 0 || activating)) deadline = min(deadline, now + stopPollMs);
             if (wanted && !activating) deadline = min(deadline, max(now + 1, nextActivationMs));
             const got = deadline == long.max ? events.take(ev) : takeUntil(events, ev, clock, deadline);
             if (got) handle(ev);
@@ -1387,6 +1398,15 @@ version (unittest)
     }
 
     /// Stop the worker once it activated a job.
+    private void stopAfter(ThreadSafe!WorkerControl ctl, long ms)
+    {
+        import camunda.safeio : sleepMs;
+        sleepMs(ms);
+        ctl.get.stop();
+    }
+
+    private JobAction slowActivationHandler(Job job) { return JobAction.complete(); }
+
     private void stopWhenActivated(ThreadSafe!WorkerControl ctl)
     {
         import camunda.safeio : sleepMs;
@@ -1456,4 +1476,33 @@ unittest
     stopper.join();
     const s = worker.stats;
     assert(s.activated == 1 && s.unaccounted == 1, format("%s", s));
+}
+
+// A shutdown timeout that runs out during an activation long poll does not
+// wait for it, and the request is counted, not silently dropped.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : monoNowMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServerWith, 0, 3_000L, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(100));
+    auto stopper = spawn(&stopAfter, worker.control, 200L);
+    const started = monoNowMs;
+    worker.run(&slowActivationHandler);
+    stopper.join();
+    const s = worker.stats;
+    assert(monoNowMs - started < 2_500, format("run waited for the activation: %s", s));
+    assert(s.activated == 0 && s.abandonedActivations == 1 && s.unaccounted == 0, format("%s", s));
 }
