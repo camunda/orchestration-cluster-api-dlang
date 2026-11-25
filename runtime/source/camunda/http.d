@@ -1,15 +1,17 @@
-/// HTTP over libcurl. Auth headers, mTLS, retries and backpressure sit above this.
+/// HTTP: libcurl's multi interface (`camunda.curlio`) behind an `HttpEngine`
+/// that runs requests on its own I/O thread. Auth headers, mTLS, retries and
+/// backpressure sit above this.
 module camunda.http;
 
 @safe:
 
 import camunda.errors;
 import camunda.jsonx;
-import camunda.safeio : ownText, readBytes;
+import camunda.safeio : Chan, Lock, ThreadSafe, ownText, readBytes, spawnDaemon;
 import camunda.transport : hasHeaderNamed, mergeHeadersCaseInsensitive;
 import std.json;
-import std.net.curl : HTTP, CurlException;
 import std.string : toLower;
+version (unittest) import camunda.safeio : spawn;
 
 struct HttpRequest
 {
@@ -33,6 +35,13 @@ struct HttpRequest
     string keyPath;
     string caPath;
     string keyPassphrase;
+    /// Inline PEM (CAMUNDA_MTLS_CERT / _KEY / _CA). Never written to disk:
+    /// curl gets them as blobs. At most one of `x` and `xPath` is set.
+    string certPem;
+    string keyPem;
+    string caPem;
+    /// A long poll (job activation): see `WireRequest.longPoll`.
+    bool longPoll;
 }
 
 struct HttpResponse
@@ -43,104 +52,461 @@ struct HttpResponse
     string contentType;
 }
 
-/// `@trusted`: std.net.curl is `@system` throughout. This only hands it values
-/// it reads or copies, and copies every buffer it hands back before keeping it.
+/// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
+/// consume, decided purely from the reported TLS backend and libcurl version.
+/// Setting a blob option successfully is not proof of support: several
+/// backends accept the option and then silently ignore the blob
+/// (<https://curl.se/libcurl/c/tls-options.html>). Inline credentials that
+/// never reach the TLS handshake would let a server with optional client
+/// authentication accept the request without mTLS, so unsupported
+/// combinations must fail closed before any request is sent.
 ///
-/// Bodies: std.net.curl's `postData` forces `application/octet-stream`, and
-/// `Method.put` switches curl to upload mode (fed by `onSend`, so the body is
-/// dropped and sent chunked). Instead every request with a body is a curl
-/// POST with `postfields` + the real Content-Type, and PUT/PATCH/DELETE are
-/// sent with CURLOPT_CUSTOMREQUEST. (camunda/orchestration-cluster-api-dlang#5)
-HttpResponse perform(const ref HttpRequest req) @trusted
+/// `sslVersion` is libcurl's `ssl_version` string and `versionNum` its
+/// `version_num`. Per-backend minimums from the upstream history
+/// (<https://curl.se/libcurl/c/CURLOPT_CAINFO_BLOB.html>): the client
+/// certificate/key blobs are OpenSSL-family only (GnuTLS, mbedTLS, wolfSSL
+/// and Schannel ignore them); the CA blob is supported by the OpenSSL family
+/// from 7.77, by rustls from 7.82, mbedTLS from 7.81, wolfSSL from 8.2 and
+/// GnuTLS from 8.18, and never by Schannel.
+private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
+    bool caPem, bool certPem, bool keyPem)
 {
-    import etc.c.curl : CurlOption, curl_slist, curl_slist_append, curl_slist_free_all;
-    import std.string : toStringz;
-    auto http = HTTP(req.url);
-    // Header lines are built here and handed to curl as one list, instead of
-    // via std.net.curl's addRequestHeader, which always writes "Name: value":
-    // for an empty value curl reads that as "remove this header". An empty
-    // caller value is sent with curl's "Name;" form; "Name:" is used only for
-    // the SDK's own suppression of curl defaults (Expect, Content-Type).
-    string[] lines;
-    foreach (k, v; req.headers) lines ~= v.length ? k ~ ": " ~ v : k ~ ";";
-    import core.time : msecs;
-    http.connectTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
-    http.operationTimeout = (req.timeoutMs > 0 ? req.timeoutMs : 30_000).msecs;
+    import std.algorithm.searching : canFind;
+    import std.string : indexOf, strip;
 
-    if (req.caPath.length) http.caInfo = req.caPath;
-    if (req.certPath.length)
+    // MultiSSL builds list the inactive backends in parentheses, before or
+    // after the active one: `OpenSSL/3.0.8 (GnuTLS/3.7.9)` or
+    // `(SecureTransport) LibreSSL/3.3.6`. Remove every parenthesized segment
+    // wherever it occurs so only the active backend decides blob support.
+    // An unbalanced `(` drops the rest (fail closed: unknown => unsupported).
+    string ssl;
     {
-        http.handle.set(CurlOption.sslcert, req.certPath);
-        if (req.keyPath.length) http.handle.set(CurlOption.sslkey, req.keyPath);
-        if (req.keyPassphrase.length) http.handle.set(CurlOption.keypasswd, req.keyPassphrase);
+        string rest = sslVersion;
+        for (;;)
+        {
+            const open = rest.indexOf('(');
+            if (open < 0) { ssl ~= rest; break; }
+            ssl ~= rest[0 .. open];
+            const close = rest[open .. $].indexOf(')');
+            if (close < 0) break;
+            rest = rest[open + close + 1 .. $];
+        }
     }
+    ssl = ssl.strip;
 
-    const(void)[] payload;
-    if (req.rawBody.length) payload = req.rawBody;
-    else if (req.body_.length) payload = req.body_;
-    const hasBody = payload.length > 0 && req.method != "GET" && req.method != "HEAD";
-    // Content-Type/Expect defaults are filled in only when the caller's
-    // headers do not already carry the name: an explicit custom header always
-    // wins, for every request shape. (camunda/orchestration-cluster-api-dlang#12)
-    const customContentType = hasHeaderNamed(req.headers, "content-type");
-    const customExpect = hasHeaderNamed(req.headers, "expect");
-    if (hasBody)
-    {
-        http.method = HTTP.Method.post;
-        http.handle.clear(CurlOption.readfunction);
-        http.handle.set(CurlOption.postfields, cast(void*) payload.ptr);
-        http.handle.set(CurlOption.postfieldsize, payload.length);
-        if (!customContentType)
-            lines ~= "Content-Type: " ~ (req.contentType.length ? req.contentType : "application/json");
-        if (req.suppressExpect && !customExpect) lines ~= "Expect:";
-        if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
-    }
-    else switch (req.method)
-    {
-    case "GET": http.method = HTTP.Method.get; break;
-    case "DELETE": http.method = HTTP.Method.del; break;
-    case "POST", "PUT", "PATCH":
-        // Bodiless write: an empty POST (Content-Length: 0), with libcurl's
-        // default form Content-Type removed, and the verb overridden.
-        http.method = HTTP.Method.post;
-        http.handle.set(CurlOption.postfields, "");
-        http.handle.set(CurlOption.postfieldsize, 0L);
-        if (!customContentType) lines ~= "Content-Type:";
-        if (req.method != "POST") http.handle.set(CurlOption.customrequest, req.method);
-        break;
-    default:
-        throw new CamundaException("unsupported HTTP method: " ~ req.method);
-    }
+    const v = versionNum;
+    const opensslFamily = ssl.canFind("OpenSSL") || ssl.canFind("LibreSSL")
+        || ssl.canFind("BoringSSL") || ssl.canFind("AWS-LC") || ssl.canFind("quictls");
+    const gnutls = ssl.canFind("GnuTLS");
+    const mbedtls = ssl.canFind("mbedTLS");
+    const wolfssl = ssl.canFind("wolfSSL");
+    const rustls = ssl.canFind("rustls");
+    const schannel = ssl.canFind("Schannel");
 
-    curl_slist* slist;
-    scope (exit) if (slist !is null) curl_slist_free_all(slist);
-    foreach (line; lines)
+    string[] missing;
+    if (certPem || keyPem)
     {
-        auto next = curl_slist_append(slist, line.toStringz);
-        if (next is null) throw new CamundaException("out of memory building request headers");
-        slist = next;
+        // Client cert/key blobs: OpenSSL family only, from 7.77.
+        const certKeyOk = opensslFamily && v >= 0x07_4D_00; // 7.77.0
+        if (!certKeyOk)
+        {
+            if (certPem) missing ~= "CAMUNDA_MTLS_CERT";
+            if (keyPem) missing ~= "CAMUNDA_MTLS_KEY";
+        }
     }
-    if (slist !is null) http.handle.set(CurlOption.httpheader, slist);
+    if (caPem)
+    {
+        const caOk = (opensslFamily && v >= 0x07_4D_00) // 7.77.0
+            || (rustls && v >= 0x07_52_00)   // 7.82.0
+            || (mbedtls && v >= 0x07_51_00)  // 7.81.0
+            || (wolfssl && v >= 0x08_02_00)  // 8.2.0
+            || (gnutls && v >= 0x08_12_00);  // 8.18.0
+        if (!caOk) missing ~= "CAMUNDA_MTLS_CA";
+    }
+    return missing;
+}
 
-    ubyte[] buf;
+/// Thin probe: read the running libcurl's backend + version and decide.
+/// Must run after libcurl is initialized (`curlGlobalInitOnce`, which `toWire`
+/// calls first); `curl_version_info` is not documented as
+/// safe to call before that.
+package(camunda) string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
+{
+    import etc.c.curl : CURLVERSION_NOW, curl_version_info;
+    import std.string : fromStringz;
+
+    // `@trusted`: `curl_version_info` returns a pointer to libcurl's own
+    // static, never-freed info struct; `ssl_version` is a static
+    // NUL-terminated string and `version_num` a plain integer. All read-only.
+    const probe = () @trusted {
+        auto i = curl_version_info(CURLVERSION_NOW);
+        static struct Probe { string ssl; uint num; }
+        return i is null ? Probe("", 0)
+            : Probe(i.ssl_version is null ? "" : fromStringz(i.ssl_version).idup, i.version_num);
+    }();
+    return missingInlinePemSupport(probe.ssl, probe.num,
+        req.caPem.length != 0, req.certPem.length != 0, req.keyPem.length != 0);
+}
+
+unittest
+{
+    // cert/key blobs: OpenSSL family only, from 7.77.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4D_00, false, true, true).length == 0);
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4C_00, false, true, true)
+        == ["CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"]);
+    // GnuTLS / mbedTLS / Schannel ignore client cert/key blobs.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_12_00, false, true, true).length == 2);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_51_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
+    assert(missingInlinePemSupport("Schannel", 0x08_00_00, false, false, true)
+        == ["CAMUNDA_MTLS_KEY"]);
+    // rustls ignores the client cert/key blobs too.
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_52_00, false, true, true).length == 2);
+
+    // CA blob per-backend minimum versions.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4D_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_52_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("rustls/1.0", 0x07_51_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_51_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_50_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("wolfSSL/5.6", 0x08_02_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("wolfSSL/5.6", 0x08_01_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_12_00, true, false, false).length == 0);
+    assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_11_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    // Schannel never takes the CA blob.
+    assert(missingInlinePemSupport("Schannel", 0x08_12_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+
+    // MultiSSL: only the active backend (before the parenthesized list) decides.
+    // Active OpenSSL must not be rejected because an inactive GnuTLS is listed.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8 (GnuTLS/3.7.9)", 0x08_12_00, true, true, true)
+        .length == 0);
+    // Active GnuTLS must not be authorized by an inactive supported name.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (OpenSSL/3.0.8)", 0x08_12_00, false, true, true)
+        .length == 2);
+    // Inactive rustls must not authorize the CA blob for active GnuTLS < 8.18.
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (rustls/1.0)", 0x08_11_00, true, false, false)
+        == ["CAMUNDA_MTLS_CA"]);
+    // Leading inactive backend (macOS: `(SecureTransport) LibreSSL/3.3.6`).
+    assert(missingInlinePemSupport("(SecureTransport) LibreSSL/3.3.6", 0x08_07_01, true, true, true)
+        .length == 0);
+    // A leading inactive supported name must not authorize the active backend.
+    assert(missingInlinePemSupport("(OpenSSL/3.0.8) GnuTLS/3.7.9", 0x08_12_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
+    // Unbalanced parenthesis: everything after `(` is ignored (fail closed).
+    assert(missingInlinePemSupport("GnuTLS/3.7.9 (OpenSSL/3.0.8", 0x08_12_00, false, true, false)
+        == ["CAMUNDA_MTLS_CERT"]);
+}
+
+/// A request as handed to an `HttpEngine`'s I/O thread: an immutable copy,
+/// so it may cross threads.
+package(camunda) struct WireRequest
+{
+    string method;
+    string url;
+    /// `name, value` pairs, in no particular order.
+    immutable(string[2])[] headers;
+    immutable(ubyte)[] body_;
     string contentType;
-    http.onReceiveHeader = (in char[] key, in char[] value) {
-        if (key.idup.toLower == "content-type") contentType = value.idup;
-    };
-    http.onReceive = (ubyte[] data) {
-        buf ~= data;
-        return data.length;
-    };
-    try http.perform();
-    catch (CurlException e)
-        throw new NetworkException(e.msg, __FILE__, __LINE__, e);
+    bool suppressExpect;
+    long timeoutMs;
+    string certPath, keyPath, caPath, keyPassphrase;
+    string certPem, keyPem, caPem;
+    /// A long poll (job activation): it may wait on the server for a long
+    /// time, so it does not count against the engine's connection limit.
+    bool longPoll;
 
-    HttpResponse res;
-    res.status = http.statusLine.code;
-    res.contentType = contentType;
-    res.bytes = buf.idup;
-    res.body_ = ownText(buf);
-    return res;
+    /// The request this was made from.
+    HttpRequest toRequest() const
+    {
+        HttpRequest r;
+        r.method = method;
+        r.url = url;
+        foreach (h; headers) r.headers[h[0]] = h[1];
+        r.rawBody = body_;
+        r.contentType = contentType;
+        r.suppressExpect = suppressExpect;
+        r.timeoutMs = timeoutMs;
+        r.certPath = certPath;
+        r.keyPath = keyPath;
+        r.caPath = caPath;
+        r.keyPassphrase = keyPassphrase;
+        r.certPem = certPem;
+        r.keyPem = keyPem;
+        r.caPem = caPem;
+        r.longPoll = longPoll;
+        return r;
+    }
+}
+
+/// Copy `req` for the I/O thread. Throws a `CamundaException` for what can
+/// never be sent (an unsupported method, inline PEM this libcurl would
+/// drop) before anything reaches the network.
+package(camunda) WireRequest toWire(const ref HttpRequest req)
+{
+    switch (req.method)
+    {
+    case "GET", "POST", "PUT", "PATCH", "DELETE": break;
+    default: throw new CamundaException("unsupported HTTP method: " ~ req.method);
+    }
+    import camunda.curlio : curlGlobalInitOnce;
+    // `curl_version_info` is only documented as safe after global init.
+    curlGlobalInitOnce();
+    // Fail closed when this libcurl's TLS backend would silently drop
+    // the inline PEM (curl.se support table).
+    if (const missing = curlTlsBackendMissingBlobs(req))
+    {
+        import std.array : join;
+        throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
+            ~ " this libcurl's TLS backend; set the matching *_PATH file settings instead");
+    }
+    WireRequest w;
+    w.method = req.method;
+    w.url = req.url;
+    foreach (k, v; req.headers) w.headers ~= [k, v];
+    if (req.rawBody.length) w.body_ = req.rawBody.idup;
+    else if (req.body_.length) w.body_ = cast(immutable(ubyte)[]) req.body_;
+    w.contentType = req.contentType;
+    w.suppressExpect = req.suppressExpect;
+    w.timeoutMs = req.timeoutMs > 0 ? req.timeoutMs : 30_000;
+    w.certPath = req.certPath;
+    w.keyPath = req.keyPath;
+    w.caPath = req.caPath;
+    w.keyPassphrase = req.keyPassphrase;
+    w.certPem = req.certPem;
+    w.keyPem = req.keyPem;
+    w.caPem = req.caPem;
+    w.longPoll = req.longPoll;
+    return w;
+}
+
+/// The outcome of a submitted request.
+package(camunda) struct HttpResult
+{
+    /// The caller's tag, passed through.
+    long tag;
+    /// The response (any HTTP status) when `error` is empty.
+    HttpResponse response;
+    /// Why no response arrived (connection refused, timeout, ...).
+    string error;
+    /// `error` is a configuration problem (a TLS setting libcurl refused),
+    /// not a network one.
+    bool configError;
+    /// `error` is an authentication failure (the token request failed):
+    /// `get` throws `AuthException`, as the blocking transport does.
+    bool authError;
+
+    /// The response; throws `AuthException` for an authentication
+    /// failure, `CamundaException` for a configuration problem, or
+    /// `NetworkException` when there is none.
+    HttpResponse get() const
+    {
+        import std.algorithm.searching : startsWith;
+        enum authPrefix = "authentication error: ";
+        if (authError)
+            throw new AuthException(error.startsWith(authPrefix) ? error[authPrefix.length .. $] : error);
+        if (configError) throw new CamundaException(error);
+        if (error.length) throw new NetworkException(error);
+        return cast(HttpResponse) response;
+    }
+}
+
+/// Where an `HttpEngine` delivers results. `deliver` runs on the I/O
+/// thread: it must be quick, must not throw, and must be thread-safe.
+package(camunda) abstract class HttpSink
+{
+    abstract void deliver(HttpResult result) @safe;
+}
+
+/// An `HttpSink` that puts every result on a channel.
+package(camunda) final class ChanSink : HttpSink
+{
+    private Chan!HttpResult ch;
+    this(Chan!HttpResult ch) { this.ch = ch; }
+    override void deliver(HttpResult result) { ch.put(result); }
+
+    /// A sink for `ch`, as other threads may hold it.
+    static ThreadSafe!HttpSink of(Chan!HttpResult ch)
+    {
+        // `ch` is the only state, and a channel is thread-safe.
+        return ThreadSafe!HttpSink.assumeThreadSafe(new ChanSink(ch));
+    }
+}
+
+/// A submitted request, queued for the I/O thread.
+package(camunda) struct Submission
+{
+    WireRequest req;
+    ThreadSafe!HttpSink sink;
+    long tag;
+    /// When it was submitted (`monoNowMs`): its timeout runs from here, so
+    /// time spent queued for a connection counts against it.
+    long submittedMs;
+
+    /// What is left of the request's timeout; 0 or less when it expired
+    /// while queued.
+    long remainingMs(long nowMs) const
+    {
+        return req.timeoutMs - (nowMs - submittedMs);
+    }
+}
+
+/// The result for a submission whose timeout ran out before it was sent.
+package(camunda) HttpResult queuedTimeout(ref const Submission s)
+{
+    HttpResult r;
+    r.tag = s.tag;
+    import std.conv : to;
+    r.error = "Timeout was reached: queued for a connection for longer than the "
+        ~ s.req.timeoutMs.to!string ~ " ms timeout";
+    return r;
+}
+
+/// Runs HTTP requests on its own I/O thread over a small pool of keep-alive
+/// connections.
+///
+/// One thread drives libcurl's multi interface: every request runs there,
+/// and at most `maxConnections` ordinary requests are in flight at once
+/// (more wait in a queue), so connections are reused between requests
+/// instead of opened per request. Long polls (`HttpRequest.longPoll`, job
+/// activation) do not count against the limit.
+///
+/// The I/O thread starts with the first request and exits after a few
+/// seconds without work (closing its connections); the next request starts
+/// it again.
+final class HttpEngine
+{
+    private Lock lock;
+    private Chan!Submission queue;
+    private int maxConns;
+    private shared long opened, sent;
+    private bool running;
+    /// The I/O thread's multi handle while it runs (only for wakeups).
+    private void* multi;
+
+    /// Idle time after which the I/O thread exits.
+    enum long idleExitMs = 5_000;
+
+    this(int maxConnections = 16)
+    {
+        lock = new Lock;
+        queue = Chan!Submission.make;
+        maxConns = maxConnections > 0 ? maxConnections : 16;
+    }
+
+    /// This engine as other threads may hold it.
+    package(camunda) ThreadSafe!HttpEngine threadSafe()
+    {
+        // Every mutable member is behind `lock`, atomic, or a channel.
+        return ThreadSafe!HttpEngine.assumeThreadSafe(this);
+    }
+
+    /// Most ordinary requests in flight at once.
+    int maxConnections() const { return maxConns; }
+
+    /// Connections opened so far (libcurl's count of new connections).
+    long connectionsOpened() const
+    {
+        import core.atomic : atomicLoad;
+        return atomicLoad(opened);
+    }
+
+    /// Requests finished so far.
+    long requestsSent() const
+    {
+        import core.atomic : atomicLoad;
+        return atomicLoad(sent);
+    }
+
+    /// Send `req` and wait for the response. Connection failures throw
+    /// `NetworkException`; HTTP error statuses are returned, not thrown.
+    HttpResponse perform(const ref HttpRequest req)
+    {
+        auto ch = Chan!HttpResult.make;
+        submit(req, ChanSink.of(ch), 0);
+        HttpResult r;
+        ch.take(r);
+        return r.get;
+    }
+
+    /// Queue `req` and return at once; the result goes to `sink` (on the
+    /// I/O thread) carrying `tag`. Throws only for a request that can never
+    /// be sent (see `toWire`).
+    package(camunda) void submit(const ref HttpRequest req, ThreadSafe!HttpSink sink, long tag)
+    {
+        import camunda.safeio : monoNowMs;
+        auto s = Submission(toWire(req), sink, tag, monoNowMs);
+        lock.run({
+            queue.put(s);
+            if (!running)
+            {
+                import camunda.curlio : ioLoop;
+                running = true;
+                spawnDaemon(&ioLoop, threadSafe);
+            }
+            else if (multi !is null)
+            {
+                import camunda.curlio : multiWakeup;
+                multiWakeup(multi);
+            }
+        });
+    }
+
+    package void counted(long newConnections)
+    {
+        import core.atomic : atomicOp;
+        atomicOp!"+="(opened, newConnections);
+        atomicOp!"+="(sent, 1);
+    }
+
+    package bool next(out Submission s) { return queue.tryTake(s); }
+
+    /// The I/O thread started with multi handle `m`.
+    package void attach(void* m) { lock.run({ multi = m; }); }
+
+    /// The idle I/O thread asks to exit: true (and the engine is
+    /// stopped) unless a request arrived meanwhile.
+    package bool detach()
+    {
+        return lock.run({
+            if (queue.tryTake(pendingAfterDetach)) return false;
+            running = false;
+            multi = null;
+            return true;
+        });
+    }
+
+    /// A request `detach` found, for the I/O thread to pick up.
+    package Submission pendingAfterDetach;
+
+    /// The I/O thread is dying: the next request starts a new one.
+    package void crashed()
+    {
+        lock.run({
+            running = false;
+            multi = null;
+        });
+    }
+}
+
+/// Send `req` and return the response, on the process-wide default engine
+/// (`defaultEngine`). Connection failures throw `NetworkException`; HTTP
+/// error statuses are returned, not thrown.
+HttpResponse perform(const ref HttpRequest req)
+{
+    return defaultEngine().perform(req);
+}
+
+/// The engine `perform` uses: requests sent outside a `Transport` (the
+/// OAuth token fetch, tests). Each `Transport` has its own.
+HttpEngine defaultEngine()
+{
+    import camunda.safeio : liveSingleton;
+    return liveSingleton!HttpEngine;
 }
 
 string encodeQuery(string[string] query)
@@ -179,34 +545,67 @@ unittest
 
 version (unittest)
 {
-    /// Send `req` at a listener that never answers, then read what curl wrote.
-    /// Single-threaded: the kernel completes the TCP handshake from the listen
-    /// backlog, curl writes the whole request and times out waiting for a
-    /// response, and only then is the queued connection accepted and drained.
-    private string captureRequest(HttpRequest req)
+    /// One-shot server for `captureRequest`: sends its port on `port`, reads
+    /// one whole request (head, then a Content-Length body), sends it on
+    /// `seen`, and answers `200 {}`.
+    private void captureServer(Chan!int port, Chan!string seen)
     {
-        import std.socket : TcpSocket, InternetAddress, SocketShutdown;
+        import std.socket : TcpSocket, InternetAddress;
         import std.conv : to;
+        import std.string : indexOf, strip, toLower;
         auto listener = new TcpSocket();
         scope (exit) listener.close();
         listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
         listener.listen(4);
-        const port = (cast(InternetAddress) listener.localAddress).port;
-        req.url = "http://127.0.0.1:" ~ port.to!string ~ "/v2/things";
-        req.timeoutMs = 400;
-        try { perform(req); assert(false, "expected a timeout"); }
-        catch (NetworkException) {}
+        port.put((cast(InternetAddress) listener.localAddress).port);
         auto conn = listener.accept();
         scope (exit) conn.close();
-        conn.blocking = false;
         string got;
         ubyte[4096] chunk;
         for (;;)
         {
+            const end = got.indexOf("\r\n\r\n");
+            if (end >= 0)
+            {
+                size_t bodyLen;
+                const head = got[0 .. end + 4];
+                const cl = head.toLower.indexOf("\r\ncontent-length:");
+                if (cl >= 0)
+                {
+                    auto rest = head[cl + 17 .. $];
+                    bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                }
+                // `Expect: 100-continue`: say continue, or the body waits.
+                if (got.length == head.length && bodyLen && head.toLower.indexOf("\r\nexpect: 100-continue") >= 0)
+                    conn.send("HTTP/1.1 100 Continue\r\n\r\n");
+                if (got.length >= head.length + bodyLen) break;
+            }
             const n = conn.receive(chunk[]);
             if (n <= 0) break;
             got ~= cast(const(char)[]) chunk[0 .. n];
         }
+        seen.put(got);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+    }
+
+    /// Send `req` to a one-shot local server and return the raw request it
+    /// received. Works the same for every backend (curl, WinHTTP), because
+    /// the server reads on its own thread while the client sends.
+    private string captureRequest(HttpRequest req)
+    {
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto seen = Chan!string.make;
+        auto server = spawn(&captureServer, port, seen);
+        int p;
+        port.take(p);
+        req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/things";
+        req.timeoutMs = 10_000;
+        auto res = perform(req);
+        assert(res.status == 200, "capture server answered " ~ res.status.to!string);
+        string got;
+        seen.take(got);
+        server.join();
         return got;
     }
 
@@ -377,6 +776,206 @@ unittest
     assert(rawExp.toLower.count("expect:") == 1, rawExp);
 }
 
+version (unittest)
+{
+    /// A keep-alive HTTP/1.1 server on its own thread: answers `requests`
+    /// requests with `{}`, sending each raw request (head and body, framed
+    /// by Content-Length) on `seen`. The port goes out first on `out_`, the
+    /// number of TCP connections it accepted last.
+    private void countingServer(int requests, Chan!int out_, Chan!string seen)
+    {
+        import std.socket : TcpSocket, InternetAddress, Socket, SocketSet, SocketOption, SocketOptionLevel;
+        import std.conv : to;
+        import std.string : indexOf, toLower;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(16);
+        out_.put((cast(InternetAddress) listener.localAddress).port);
+        Socket[] conns;
+        string[] pending;
+        int accepted, answered;
+        auto set = new SocketSet();
+        while (answered < requests)
+        {
+            set.reset();
+            set.add(listener);
+            foreach (c; conns) set.add(c);
+            if (Socket.select(set, null, null) <= 0) continue;
+            if (set.isSet(listener))
+            {
+                conns ~= listener.accept();
+                pending ~= "";
+                accepted++;
+            }
+            foreach (i, c; conns)
+            {
+                if (!set.isSet(c)) continue;
+                ubyte[4096] chunk;
+                const n = c.receive(chunk[]);
+                if (n <= 0) continue;
+                pending[i] ~= cast(const(char)[]) chunk[0 .. n];
+                for (;;)
+                {
+                    const end = pending[i].indexOf("\r\n\r\n");
+                    if (end < 0) break;
+                    const head = pending[i][0 .. end + 4];
+                    size_t bodyLen;
+                    const cl = head.toLower.indexOf("\r\ncontent-length:");
+                    if (cl >= 0)
+                    {
+                        auto rest = head[cl + 17 .. $];
+                        import std.string : strip;
+                        bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                    }
+                    if (pending[i].length < head.length + bodyLen) break;
+                    seen.put(pending[i][0 .. head.length + bodyLen]);
+                    pending[i] = pending[i][head.length + bodyLen .. $];
+                    c.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
+                    answered++;
+                }
+            }
+        }
+        foreach (c; conns) c.close();
+        out_.put(accepted);
+        seen.close();
+    }
+}
+
+// Sequential requests on one thread reuse one connection (keep-alive)
+// instead of opening a TCP connection per request, and nothing one request
+// set on the reused handle (verb override, body, Content-Type) leaks into
+// the next.
+unittest
+{
+    import std.algorithm.searching : canFind, startsWith;
+    import std.conv : to;
+    import std.uni : toLower;
+    auto ch = Chan!int.make;
+    auto seen = Chan!string.make;
+    auto server = spawn(&countingServer, 6, ch, seen);
+    int port;
+    ch.take(port);
+    const base = "http://127.0.0.1:" ~ port.to!string;
+    void send(string method, string body_ = null)
+    {
+        HttpRequest req;
+        req.method = method;
+        req.body_ = body_;
+        req.url = base ~ "/v2/things";
+        auto res = perform(req);
+        assert(res.status == 200 && res.body_ == "{}", res.body_);
+    }
+    send("POST", `{"a":1}`);
+    send("PATCH", `{"b":2}`);
+    send("DELETE");
+    send("GET");
+    send("PUT");
+    send("GET");
+    string[] raw;
+    string r;
+    while (seen.take(r)) raw ~= r;
+    int accepted;
+    ch.take(accepted);
+    server.join();
+    assert(accepted == 1, "expected 1 connection for 6 requests, got " ~ accepted.to!string);
+    assert(raw.length == 6);
+    assert(raw[0].startsWith("POST /v2/things ") && bodyOf(raw[0]) == `{"a":1}`, raw[0]);
+    assert(raw[1].startsWith("PATCH /v2/things ") && bodyOf(raw[1]) == `{"b":2}`, raw[1]);
+    foreach (i, want; ["DELETE", "GET"])
+    {
+        auto req = raw[2 + i];
+        assert(req.startsWith(want ~ " /v2/things "), req);
+        assert(!req.toLower.canFind("content-type:"), req);
+        assert(!req.toLower.canFind("content-length:") || hasHeader(req, "content-length: 0"), req);
+        assert(bodyOf(req) == "", req);
+    }
+    assert(raw[4].startsWith("PUT /v2/things ") && hasHeader(raw[4], "content-length: 0"), raw[4]);
+    assert(raw[5].startsWith("GET /v2/things ") && bodyOf(raw[5]) == "", raw[5]);
+}
+
+version (unittest)
+{
+    /// Answers its first request slowly: the head after `delayMs`, then the
+    /// body after another `delayMs`.
+    private void slowServer(Chan!int port, int delayMs)
+    {
+        import core.thread : Thread;
+        import core.time : msecs;
+        import std.socket : TcpSocket, InternetAddress;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(4);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        auto conn = listener.accept();
+        scope (exit) conn.close();
+        ubyte[4096] chunk;
+        conn.receive(chunk[]);
+        Thread.sleep(delayMs.msecs);
+        conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+        Thread.sleep(delayMs.msecs);
+        conn.send("{}");
+    }
+}
+
+// The request timeout bounds the whole exchange, not each step: a head that
+// arrives just in time followed by a slow body still times out.
+unittest
+{
+    import std.conv : to;
+    import std.exception : collectException;
+    import camunda.errors : NetworkException;
+
+    auto port = Chan!int.make;
+    auto server = spawn(&slowServer, port, 700);
+    int p;
+    port.take(p);
+    HttpRequest req;
+    req.method = "GET";
+    req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/slow";
+    req.timeoutMs = 1_000;
+    auto e = collectException!NetworkException(perform(req));
+    server.join();
+    assert(e !is null, "a 1400 ms exchange finished inside a 1000 ms timeout");
+}
+
+// A request queued behind a busy connection limit times out from when it
+// was submitted, not from when a connection frees up: its time in the
+// queue counts against its timeout.
+unittest
+{
+    import std.conv : to;
+    import std.algorithm.searching : canFind;
+    import camunda.safeio : monoNowMs;
+
+    auto port = Chan!int.make;
+    auto server = spawn(&slowServer, port, 600);
+    int p;
+    port.take(p);
+    auto engine = new HttpEngine(1);
+    auto results = Chan!HttpResult.make;
+    HttpRequest slow;
+    slow.method = "GET";
+    slow.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/slow";
+    slow.timeoutMs = 5_000;
+    engine.submit(slow, ChanSink.of(results), 1);
+    HttpRequest queued = slow;
+    queued.timeoutMs = 200;
+    const start = monoNowMs;
+    engine.submit(queued, ChanSink.of(results), 2);
+    HttpResult first;
+    results.take(first);
+    const waited = monoNowMs - start;
+    HttpResult second;
+    results.take(second);
+    server.join();
+    assert(first.tag == 2, "the queued request outlived its timeout: it waited for the busy slot");
+    assert(first.error.canFind("queued"), first.error);
+    assert(waited < 1_000, "queued timeout fired only after " ~ waited.to!string ~ " ms");
+    assert(second.tag == 1 && second.error == "", second.error);
+}
 // An explicitly empty caller header is sent as "Name:" on the wire, not
 // dropped by curl's empty-value removal; SDK suppression headers still remove.
 unittest
@@ -398,4 +997,41 @@ unittest
             assert(!raw.toLower.canFind("expect:"), raw);
         }
     }
+}
+
+// camunda/orchestration-cluster-api-dlang#56 (backport of #54/#55): many
+// requests submitted at once never open more connections than the engine's
+// limit (libcurl's num_connects), and those connections are kept alive.
+unittest
+{
+    import std.conv : to;
+    enum requests = 40, limit = 3;
+    auto ch = Chan!int.make;
+    auto seen = Chan!string.make;
+    auto server = spawn(&countingServer, requests, ch, seen);
+    int port;
+    ch.take(port);
+    auto engine = new HttpEngine(limit);
+    assert(engine.maxConnections == limit);
+    auto results = Chan!HttpResult.make;
+    HttpRequest req;
+    req.method = "POST";
+    req.body_ = `{}`;
+    req.url = "http://127.0.0.1:" ~ port.to!string ~ "/v2/things";
+    foreach (i; 0 .. requests) engine.submit(req, ChanSink.of(results), i);
+    foreach (_; 0 .. requests)
+    {
+        HttpResult r;
+        results.take(r);
+        assert(r.get.status == 200, r.error);
+    }
+    string raw;
+    while (seen.take(raw)) {}
+    int accepted;
+    ch.take(accepted);
+    server.join();
+    assert(engine.requestsSent == requests);
+    assert(engine.connectionsOpened <= limit,
+        "opened " ~ engine.connectionsOpened.to!string ~ " connections, limit " ~ limit.to!string);
+    assert(accepted <= limit, "server accepted " ~ accepted.to!string ~ " connections");
 }

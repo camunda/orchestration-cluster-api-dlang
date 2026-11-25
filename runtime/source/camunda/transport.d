@@ -117,6 +117,7 @@ final class Transport
     private Authentication _auth;
     private Clock _clock;
     private BackpressureManager _bp;
+    private HttpEngine _engine;
     private string _userAgent = sdkUserAgent;
     private string[string] _headers;
 
@@ -128,6 +129,7 @@ final class Transport
         _clock = options.clock is null ? liveClock() : options.clock;
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
+        _engine = new HttpEngine(_config.httpMaxConnections);
         // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
         // (case-insensitive) name. Validate here too: `options.headers` is a
         // public field, so direct assignment bypasses `withHeader`; every
@@ -241,6 +243,7 @@ final class Transport
                     req.body_ = body_.toString;
                     req.contentType = "application/json";
                 }
+                req.longPoll = req.longPoll || isLongWait(method, path, req.body_);
                 return send(req);
             });
         }
@@ -265,6 +268,10 @@ final class Transport
         HttpRequest req;
         req.method = method;
         req.url = joinUrl(baseAddress(server), path, query);
+        // A job activation may wait on the server for its whole request
+        // timeout: it runs outside the connection limit (a JSON body may
+        // add an awaited creation: see `isLongWait`).
+        req.longPoll = isJobActivation(method, path);
         req.headers = _auth.headers();
         req.headers["Accept"] = "application/json, */*";
         req.headers["User-Agent"] = _userAgent;
@@ -287,12 +294,83 @@ final class Transport
         return req;
     }
 
-    private static HttpResponse send(ref HttpRequest req)
+    /// The engine that runs this transport's requests: one I/O thread over
+    /// a keep-alive pool of at most `CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`
+    /// connections.
+    HttpEngine engine() { return _engine; }
+
+    private HttpResponse send(ref HttpRequest req)
     {
-        auto res = perform(req);
+        auto res = _engine.perform(req);
         if (res.status >= 200 && res.status < 300) return res;
         throw new ApiException(res.status, res.body_);
     }
+}
+
+/// `POST /jobs/activation` (with or without a leading slash or query): a
+/// long poll that may wait on the server for its whole request timeout.
+bool isJobActivation(string method, string path) pure nothrow @nogc
+{
+    import std.algorithm.searching : findSplitBefore;
+    if (method != "POST") return false;
+    auto p = path.findSplitBefore("?")[0];
+    if (p.length && p[0] == '/') p = p[1 .. $];
+    return p == "jobs/activation";
+}
+
+/// A request that may wait on the server for its whole timeout, so it
+/// runs outside the connection limit and never holds a slot a job
+/// completion needs: a job activation (long poll), or a process-instance
+/// creation with `awaitCompletion`, which waits for jobs this same client
+/// may have to complete.
+bool isLongWait(string method, string path, string jsonBody)
+{
+    if (isJobActivation(method, path)) return true;
+    if (method != "POST") return false;
+    import std.algorithm.searching : findSplitBefore, canFind;
+    auto p = path.findSplitBefore("?")[0];
+    if (p.length && p[0] == '/') p = p[1 .. $];
+    if (p != "process-instances" || !jsonBody.canFind("awaitCompletion")) return false;
+    try
+    {
+        auto v = parseJSON(jsonBody);
+        if (v.type != JSONType.object) return false;
+        if (auto a = "awaitCompletion" in v) return a.type == JSONType.true_;
+    }
+    catch (Exception) {}
+    return false;
+}
+
+unittest
+{
+    // A job activation is a long poll however it is sent: it must not
+    // occupy an ordinary connection slot.
+    assert(isJobActivation("POST", "/jobs/activation"));
+    assert(isJobActivation("POST", "jobs/activation"));
+    assert(isJobActivation("POST", "/jobs/activation?x=1"));
+    assert(!isJobActivation("GET", "/jobs/activation"));
+    assert(!isJobActivation("POST", "/jobs/1/completion"));
+    assert(!isJobActivation("POST", "/jobs/activations"));
+    assert(isLongWait("POST", "/jobs/activation", `{}`));
+    assert(isLongWait("POST", "/process-instances", `{"processDefinitionId":"p","awaitCompletion":true}`));
+    assert(isLongWait("POST", "process-instances?x=1", `{"awaitCompletion": true}`));
+    assert(!isLongWait("POST", "/process-instances", `{"awaitCompletion":false}`));
+    assert(!isLongWait("POST", "/process-instances", `{"variables":{"awaitCompletion":true}}`));
+    assert(!isLongWait("POST", "/process-instances", `{"processDefinitionId":"p"}`));
+    assert(!isLongWait("POST", "/process-instances", `not json awaitCompletion`));
+    assert(!isLongWait("GET", "/process-instances", `{"awaitCompletion":true}`));
+    assert(!isLongWait("POST", "/jobs/1/completion", `{}`));
+}
+
+unittest
+{
+    // CAMUNDA_SDK_HTTP_MAX_CONNECTIONS sizes the transport's engine.
+    auto t = new Transport(CamundaOptions.create
+        .withKey("CAMUNDA_AUTH_STRATEGY", "NONE")
+        .withKey("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS", "5"));
+    assert(t.engine.maxConnections == 5);
+    auto d = new Transport(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
+    assert(d.engine.maxConnections == 16);
 }
 
 /// An empty JSON object is a present body (`{}`), not an absent one.
