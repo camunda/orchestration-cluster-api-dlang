@@ -1,3 +1,10 @@
+# [11.0.0-alpha.18](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.17...v11.0.0-alpha.18) (2026-11-25)
+
+
+### Bug Fixes
+
+* **runtime:** per-backend, version-gated checks for inline mTLS cert/key/CA blobs ([#59](https://github.com/camunda/orchestration-cluster-api-dlang/issues/59)) ([2955b29](https://github.com/camunda/orchestration-cluster-api-dlang/commit/2955b294082672c91fa00e2d4a7584849ed8a750)), closes [#58](https://github.com/camunda/orchestration-cluster-api-dlang/issues/58)
+
 # [11.0.0-alpha.17](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.16...v11.0.0-alpha.17) (2026-11-24)
 
 
