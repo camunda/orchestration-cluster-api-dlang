@@ -61,6 +61,13 @@ struct JobWorkerConfig
     /// Pause after an activation that returned no jobs (for servers that
     /// answer at once rather than long-polling).
     long pollIntervalMs = 250;
+    /// How long `run` waits, once stopping, for the jobs it holds to be
+    /// settled. Jobs still held then are counted in `WorkerStats.unaccounted`
+    /// and `run` returns without waiting for their handler threads. An
+    /// activation request still in flight then is not waited for either and
+    /// is counted in `WorkerStats.abandonedActivations`: jobs it activates
+    /// stay locked on the engine until `jobTimeoutMs`. 0 means 30 s.
+    long shutdownTimeoutMs;
     /// Default "d-sdk-worker" (`CAMUNDA_WORKER_NAME`).
     string workerName;
     string[] fetchVariables;
@@ -93,6 +100,7 @@ struct JobWorkerConfig
     }
 
     JobWorkerConfig maxJobs(int n) { maxJobsActive = n; return this; }
+    JobWorkerConfig shutdownTimeout(long ms) { shutdownTimeoutMs = ms; return this; }
     JobWorkerConfig threads(int n) { handlerThreads = n; return this; }
     JobWorkerConfig coreThreads(int n) { coreHandlerThreads = n; return this; }
     JobWorkerConfig idleTimeoutMs(long ms) { threadIdleTimeoutMs = ms; return this; }
@@ -124,6 +132,12 @@ struct JobWorkerConfig
     {
         return threadIdleTimeoutMs > 0 ? threadIdleTimeoutMs : 30_000;
     }
+
+    /// `shutdownTimeoutMs`, or 30 s when unset.
+    long effectiveShutdownTimeoutMs() const
+    {
+        return shutdownTimeoutMs > 0 ? shutdownTimeoutMs : 30_000;
+    }
 }
 
 /// Handler pool size so far, for tests and tuning.
@@ -146,6 +160,12 @@ struct WorkerStats
     long handlerExceptions;  /// handler threw; the job was failed with retries - 1
     long actionFailures;     /// a complete/fail/error call itself failed
     long activationFailures; /// activation requests that failed (then backed off)
+    long handlerAborts;      /// a handler thread died (an `Error`) holding a job; the job is counted as left
+    long unaccounted;        /// jobs still held when the shutdown timeout ran out
+    /// Activation requests still in flight when the shutdown timeout ran
+    /// out. Jobs such a request activates are never seen by the worker and
+    /// stay locked on the engine until their job timeout.
+    long abandonedActivations;
 }
 
 /// A worker's run state, shared by its poller, its handler threads and
@@ -154,14 +174,39 @@ final class WorkerControl
 {
     import core.atomic : atomicLoad, atomicOp, atomicStore;
     private shared bool stopping_;
+    // Each `run` is a generation. When the shutdown timeout runs out, that
+    // run's generation is recorded here: its handler threads then run no
+    // job they take, since nobody is left to settle it. A later `run` has a
+    // new generation, so its handlers are not affected. The record is a
+    // watermark: every generation up to it stays abandoned, so a second
+    // timed-out run does not revive the first one's handlers.
+    private shared long runGen_, abandonedGen_;
     private shared long activated, completed, failed, errored, left,
-        handlerExceptions, actionFailures, activationFailures;
+        handlerExceptions, actionFailures, activationFailures,
+        handlerAborts, unaccounted, abandonedActivations;
     private shared int poolLive, poolPeak;
     private shared long poolSpawned, poolRetired;
 
     /// Ask the worker to stop: it activates no more jobs, finishes the ones
-    /// it holds, and `run` returns (after at most one activation long poll).
+    /// it holds, and `run` returns (within the shutdown timeout).
     void stop() { atomicStore(stopping_, true); }
+
+    /// Whether the shutdown timeout ran out with jobs held.
+    /// Cleared when the worker runs again.
+    bool abandoned() const
+    {
+        const g = atomicLoad(runGen_);
+        return g > 0 && atomicLoad(abandonedGen_) == g;
+    }
+
+    package void abandon() { atomicStore(abandonedGen_, atomicLoad(runGen_)); }
+
+    /// Whether the run of generation `gen`, or a later one, timed out on
+    /// shutdown. A run that ended in time waited for all its handlers, so
+    /// none of an earlier generation is left to be wrongly skipped.
+    private bool abandonedRun(long gen) const { return gen <= atomicLoad(abandonedGen_); }
+
+    private long generation() const { return atomicLoad(runGen_); }
 
     /// Whether `stop` was called.
     bool stopping() const { return atomicLoad(stopping_); }
@@ -202,6 +247,9 @@ final class WorkerControl
         s.handlerExceptions = atomicLoad(handlerExceptions);
         s.actionFailures = atomicLoad(actionFailures);
         s.activationFailures = atomicLoad(activationFailures);
+        s.handlerAborts = atomicLoad(handlerAborts);
+        s.unaccounted = atomicLoad(unaccounted);
+        s.abandonedActivations = atomicLoad(abandonedActivations);
         return s;
     }
 
@@ -210,7 +258,29 @@ final class WorkerControl
         atomicOp!"+="(mixin(field), n);
     }
 
-    private void restart() { atomicStore(stopping_, false); }
+    private void restart()
+    {
+        atomicOp!"+="(runGen_, 1);
+        atomicStore(stopping_, false);
+    }
+}
+
+unittest // abandonment is a watermark across successive shutdown timeouts
+{
+    auto c = new WorkerControl;
+    c.restart();
+    const g1 = c.generation;
+    c.abandon();
+    assert(c.abandonedRun(g1) && c.abandoned);
+    c.restart();
+    const g2 = c.generation;
+    assert(!c.abandoned && !c.abandonedRun(g2));
+    assert(c.abandonedRun(g1), "first run revived by a restart");
+    c.abandon();
+    assert(c.abandonedRun(g1), "first run revived by a second timeout");
+    assert(c.abandonedRun(g2) && c.abandoned);
+    c.restart();
+    assert(!c.abandoned && !c.abandonedRun(c.generation));
 }
 
 /// A job delivered to a worker handler.
@@ -357,12 +427,16 @@ final class JobWorker
         import camunda.retry : backoffDelayMs, isRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
+        long gen = ctl.generation;
         auto clock = client.clock;
         if (config.startupJitterMaxSeconds > 0)
         {
             import camunda.safeio : unitRandom;
             auto jitter = cast(long)(config.startupJitterMaxSeconds * 1000 * unitRandom());
-            clock.sleep(jitter);
+            // Interruptible: a stop (or a newer run) during the jitter
+            // returns without activating, within the shutdown timeout.
+            if (!startupWait(clock, jitter, () => ctl.stopping || ctl.generation != gen))
+                return;
         }
         auto transport = client.transport;
         const retry = transport.config.retry;
@@ -378,15 +452,31 @@ final class JobWorker
         JoinHandle[] handlers;
         int live;     // threads serving jobs
         int retiring; // threads sent a retire signal and not yet exited
+        bool abandoned; // the shutdown timeout ran out with jobs held
         scope (exit)
         {
+            // After a shutdown timeout, jobs still queued for a handler are
+            // discarded (they are counted in `unaccounted`): no dispatcher
+            // is left to settle what a late handler would do with them.
+            if (abandoned)
+            {
+                Ticket dropped;
+                while (tickets.tryTake(dropped)) {}
+            }
             tickets.close();
-            foreach (ref h; handlers) h.join();
+            // A thread that died was reported (`aborted`) and accounted
+            // for, so what killed it is not rethrown. After a shutdown
+            // timeout, threads still running are not waited for.
+            foreach (ref h; handlers)
+                if (!abandoned || !h.running) h.join(false);
+                else h.detach(); // do not keep the process alive at exit
             ctl.poolShrank(0, 0);
         }
         const maxThreads = max(1, config.effectiveThreads);
         const coreThreads = config.effectiveCoreThreads;
         const idleTimeout = config.effectiveIdleTimeoutMs;
+        const shutdownTimeout = config.effectiveShutdownTimeoutMs;
+        long stopDeadlineMs = long.max; // set when stopping starts
         int held;  // activated and not yet completed, failed, errored or left
         int busy;  // handed to a handler that has not returned yet
         bool activating;
@@ -399,7 +489,7 @@ final class JobWorker
 
         void grow()
         {
-            handlers ~= spawn(&handlerLoop!Ctx, tickets, events, client.threadSafe, control, handler, context);
+            handlers ~= spawn(&handlerLoop!Ctx, tickets, events, client.threadSafe, control, gen, handler, context);
             live++;
             ctl.poolGrew(live + retiring);
         }
@@ -495,6 +585,16 @@ final class JobWorker
                 retiring--;
                 ctl.poolShrank(live + retiring, 0);
                 return;
+            case Event.Kind.aborted:
+                // The thread died holding a job: free its slot and count
+                // the job as left (the engine hands it out again after its
+                // timeout). The pool replaces the thread when needed.
+                busy--;
+                live--;
+                ctl.count!"handlerAborts";
+                settled(JobAction.Kind.leave);
+                ctl.poolShrank(live + retiring, 0);
+                return;
             case Event.Kind.handled:
                 busy--;
                 if (ev.command.kind == JobAction.Kind.leave || !ev.command.path.length)
@@ -576,6 +676,20 @@ final class JobWorker
             }
             const stopping = ctl.stopping || fatal !is null;
             if (stopping && !activating && held == 0) break;
+            if (stopping && stopDeadlineMs == long.max) stopDeadlineMs = now + shutdownTimeout;
+            if (stopping && now >= stopDeadlineMs)
+            {
+                // Bounded drain: report what is still held, do not hang.
+                if (held > 0) ctl.count!"unaccounted"(held);
+                // An activation long poll may outlast the timeout; the jobs
+                // it returns are not seen here, so record the request.
+                if (activating) ctl.count!"abandonedActivations";
+                // Before the queue is drained: a handler that takes a
+                // ticket from now on sees the flag and skips it.
+                ctl.abandon();
+                abandoned = true;
+                break;
+            }
             // Activate when enough capacity is free, unless queued jobs wait
             // for slots that retiring threads still hold.
             const wanted = !stopping && !activating && cap - held >= threshold
@@ -588,6 +702,10 @@ final class JobWorker
             long deadline = long.max;
             if (live > coreThreads && busy < live) deadline = min(deadline, lastFullMs + idleTimeout);
             foreach (p; retrying) deadline = min(deadline, p.dueMs);
+            deadline = min(deadline, stopDeadlineMs);
+            // `stop` sends no event: look for it now and then (also while
+            // idle or backing off), so the worker stops on time.
+            if (!stopping) deadline = min(deadline, now + stopPollMs);
             if (wanted && !activating) deadline = min(deadline, max(now + 1, nextActivationMs));
             const got = deadline == long.max ? events.take(ev) : takeUntil(events, ev, clock, deadline);
             if (got) handle(ev);
@@ -652,13 +770,48 @@ final class JobWorker
             if (h.running) keep ~= h;
             else
             {
-                h.join();
+                h.join(false); // a thread that died was already reported
                 reaped++;
             }
         }
         handlers = keep;
         return reaped;
     }
+}
+
+/// How often (ms) the dispatcher checks for `stop` while it holds jobs.
+private enum long stopPollMs = 100;
+
+/// Sleep `jitterMs` through `clock` in `stopPollMs` slices, checking
+/// `cancelled` before each slice. Returns false (at once) when cancelled.
+private bool startupWait(C)(C clock, long jitterMs, scope bool delegate() @safe cancelled)
+{
+    const deadline = clock.nowMs + jitterMs;
+    for (;;)
+    {
+        if (cancelled()) return false;
+        const left = deadline - clock.nowMs;
+        if (left <= 0) return true;
+        clock.sleep(left < stopPollMs ? left : stopPollMs);
+    }
+}
+
+unittest // stop during the startup jitter returns promptly, without activating
+{
+    import camunda.clock : TestClock;
+    auto clock = new TestClock;
+    int checks;
+    assert(!startupWait(clock, 30_000, () => ++checks > 3));
+    assert(clock.nowMs <= 3 * stopPollMs, "stop was not seen during the jitter");
+}
+
+unittest // without a stop, the full jitter elapses before the first activation
+{
+    import camunda.clock : TestClock;
+    auto clock = new TestClock;
+    assert(startupWait(clock, 1_234, () => false));
+    assert(clock.nowMs == 1_234);
+    assert(startupWait(clock, 0, () => false) && clock.nowMs == 1_234);
 }
 
 /// A job for a handler thread, or the signal to retire.
@@ -680,7 +833,7 @@ private struct Command
 /// What the dispatcher reacts to.
 private struct Event
 {
-    enum Kind { handled, retired, http }
+    enum Kind { handled, retired, http, aborted }
     Kind kind;
     Command command; // handled
     HttpResult http; // http
@@ -713,7 +866,7 @@ private final class EventSink : HttpSink
 /// call back to the dispatcher (which sends it). It makes no engine call
 /// itself.
 private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
-    ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
+    ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control, long gen,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
 {
     auto c = client.get;
@@ -721,12 +874,24 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
     Ticket t;
     while (tickets.take(t))
     {
+        // After a shutdown timeout, a ticket taken during or after the
+        // drain is already counted in `unaccounted`: do not run it.
+        if (ctl.abandonedRun(gen)) return;
         Event done;
         if (t.retire)
         {
             done.kind = Event.Kind.retired;
             events.put(done); // wake the dispatcher to reuse the slot
             return;
+        }
+        // If anything escapes (an `Error`: the thread dies), tell the
+        // dispatcher, so the job's slot is freed and accounted for.
+        bool reported;
+        scope (exit) if (!reported)
+        {
+            Event aborted;
+            aborted.kind = Event.Kind.aborted;
+            events.put(aborted);
         }
         Job job;
         job.raw = ActivatedJobResult.fromJson(t.job.take);
@@ -748,6 +913,7 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
             ctl.count!"actionFailures";
             done.command = Command(JobAction.Kind.complete); // no path: the dispatcher drops the job
         }
+        reported = true;
         events.put(done);
     }
 }
@@ -1295,4 +1461,306 @@ unittest
     int live;
     relay.take(live);
     assert(live == 3, "idle thread did not retire on the injected clock: " ~ live.to!string);
+}
+
+version (unittest)
+{
+    /// Every 10th job's handler dies with an `Error`, the rest complete.
+    private JobAction dyingHandler(Job job, int unused)
+    {
+        if (job.variables["boom"].boolean) throw new Error("handler thread dies");
+        return JobAction.complete();
+    }
+
+    /// Stop the worker once `want` jobs are completed or aborted (or 10 s pass).
+    private void stopWhenSettled(ThreadSafe!WorkerControl ctl, long want)
+    {
+        import camunda.safeio : sleepMs;
+        foreach (_; 0 .. 2000)
+        {
+            const s = ctl.get.stats;
+            if (s.completed + s.handlerAborts >= want) break;
+            sleepMs(5);
+        }
+        ctl.get.stop();
+    }
+
+    /// A gate the handler waits on, and a channel it reports each run on.
+    struct Gated { Chan!int gate; Chan!int ran; }
+
+    /// Report the run on `g.ran`, block until `g.gate` opens, then leave the job.
+    private JobAction countingStuckHandler(Job job, Gated g)
+    {
+        g.ran.put(1);
+        int v;
+        g.gate.take(v);
+        return JobAction.leave();
+    }
+
+    /// Block until `gate` opens, then leave the job.
+    private JobAction stuckHandler(Job job, Chan!int gate)
+    {
+        int v;
+        gate.take(v);
+        return JobAction.leave();
+    }
+
+    /// Stop the worker once it activated a job.
+    private void stopAfter(ThreadSafe!WorkerControl ctl, long ms)
+    {
+        import camunda.safeio : sleepMs;
+        sleepMs(ms);
+        ctl.get.stop();
+    }
+
+    private JobAction slowActivationHandler(Job job) { return JobAction.complete(); }
+
+    private void stopWhenActivated(ThreadSafe!WorkerControl ctl)
+    {
+        import camunda.safeio : sleepMs;
+        foreach (_; 0 .. 2000)
+        {
+            if (ctl.get.stats.activated > 0) break;
+            sleepMs(5);
+        }
+        ctl.get.stop();
+    }
+}
+
+// A handler thread that dies with an Error holding a job does not hang
+// `stop`: its slot is freed, the pool replaces the thread, and the job is
+// counted as left and as a handler abort.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 20, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(4).threads(2).coreThreads(2));
+    worker.config.pollIntervalMs = 10;
+    auto stopper = spawn(&stopWhenSettled, worker.control, 20L);
+    worker.run(&dyingHandler, 0);
+    stopper.join();
+    const s = worker.stats;
+    assert(s.completed == 18 && s.handlerAborts == 2 && s.left == 2, format("%s", s));
+    assert(s.unaccounted == 0, format("%s", s));
+    assert(worker.pool.live == 0, format("%s", worker.pool));
+}
+
+// Shutdown is bounded: a handler that never returns does not hang `run`
+// past the shutdown timeout, and the job it holds is reported.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 1, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    auto gate = Chan!int.make;
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&stuckHandler, gate);
+    stopper.join();
+    // Let the detached handler thread end before the process does.
+    gate.put(1);
+    import camunda.safeio : sleepMs;
+    sleepMs(200);
+    const s = worker.stats;
+    assert(s.activated == 1 && s.unaccounted == 1, format("%s", s));
+}
+
+// Jobs still queued behind a stuck handler when the shutdown timeout runs
+// out are discarded: a late handler does not run them after `run` returned.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 2, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(2).threads(1).coreThreads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    Gated g = Gated(Chan!int.make, Chan!int.make);
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&countingStuckHandler, g);
+    stopper.join();
+    g.gate.put(1);
+    g.gate.put(1);
+    sleepMs(200);
+    int ran, v;
+    while (g.ran.tryTake(v)) ran++;
+    const s = worker.stats;
+    assert(s.activated == 2 && s.unaccounted == 2, format("%s", s));
+    assert(ran == 1, format("a queued job ran after shutdown (%s runs)", ran));
+}
+
+// With several handler threads, no queued job runs after a shutdown timeout,
+// even when a released handler takes the next ticket.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 3, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(3).threads(2).coreThreads(2).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    Gated g = Gated(Chan!int.make, Chan!int.make);
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&countingStuckHandler, g);
+    stopper.join();
+    foreach (_; 0 .. 3) g.gate.put(1);
+    sleepMs(200);
+    int ran, v;
+    while (g.ran.tryTake(v)) ran++;
+    const s = worker.stats;
+    assert(s.activated == 3 && s.unaccounted == 3, format("%s", s));
+    assert(ran <= 2, format("a queued job ran after shutdown (%s runs)", ran));
+}
+
+// A shutdown timeout that runs out during an activation long poll does not
+// wait for it, and the request is counted, not silently dropped.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : monoNowMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServerWith, 0, 3_000L, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(100));
+    auto stopper = spawn(&stopAfter, worker.control, 200L);
+    const started = monoNowMs;
+    worker.run(&slowActivationHandler);
+    stopper.join();
+    const s = worker.stats;
+    assert(monoNowMs - started < 2_500, format("run waited for the activation: %s", s));
+    assert(s.activated == 0 && s.abandonedActivations == 1 && s.unaccounted == 0, format("%s", s));
+}
+
+// `stop` is seen while the worker idles between activations: a long poll
+// interval does not hold up shutdown.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : monoNowMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 0, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 60_000;
+    auto stopper = spawn(&stopAfter, worker.control, 300L);
+    const started = monoNowMs;
+    worker.run(&slowActivationHandler);
+    stopper.join();
+    assert(monoNowMs - started < 2_000, format("idle worker ignored stop: %s", worker.stats));
+}
+
+// After a shutdown timeout, running the worker again processes jobs: the
+// abandonment belongs to the run that timed out, not to the next one.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 2, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    auto gate = Chan!int.make;
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&stuckHandler, gate);
+    stopper.join();
+    assert(worker.control.get.abandoned);
+    auto again = spawn(&stopWhenCompleted, worker.control);
+    worker.run(&slowActivationHandler);
+    again.join();
+    gate.put(1);
+    sleepMs(100);
+    const s = worker.stats;
+    assert(!worker.control.get.abandoned, format("%s", s));
+    assert(s.completed == 1, format("the restarted worker ran no job: %s", s));
+}
+
+private
+{
+    void stopWhenCompleted(ThreadSafe!WorkerControl ctl)
+    {
+        import camunda.safeio : sleepMs;
+        foreach (_; 0 .. 1000)
+        {
+            if (ctl.get.stats.completed > 0) break;
+            sleepMs(5);
+        }
+        ctl.get.stop();
+    }
 }
