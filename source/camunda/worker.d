@@ -174,9 +174,11 @@ final class WorkerControl
 {
     import core.atomic : atomicLoad, atomicOp, atomicStore;
     private shared bool stopping_;
-    // Set when the shutdown timeout runs out: handler threads then run
-    // no job they take, since nobody is left to settle it.
-    private shared bool abandoned_;
+    // Each `run` is a generation. When the shutdown timeout runs out, that
+    // run's generation is recorded here: its handler threads then run no
+    // job they take, since nobody is left to settle it. A later `run` has a
+    // new generation, so its handlers are not affected.
+    private shared long runGen_, abandonedGen_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures,
         handlerAborts, unaccounted, abandonedActivations;
@@ -188,9 +190,19 @@ final class WorkerControl
     void stop() { atomicStore(stopping_, true); }
 
     /// Whether the shutdown timeout ran out with jobs held.
-    bool abandoned() const { return atomicLoad(abandoned_); }
+    /// Cleared when the worker runs again.
+    bool abandoned() const
+    {
+        const g = atomicLoad(runGen_);
+        return g > 0 && atomicLoad(abandonedGen_) == g;
+    }
 
-    package void abandon() { atomicStore(abandoned_, true); }
+    package void abandon() { atomicStore(abandonedGen_, atomicLoad(runGen_)); }
+
+    /// Whether the run of generation `gen` timed out on shutdown.
+    private bool abandonedRun(long gen) const { return atomicLoad(abandonedGen_) == gen; }
+
+    private long generation() const { return atomicLoad(runGen_); }
 
     /// Whether `stop` was called.
     bool stopping() const { return atomicLoad(stopping_); }
@@ -242,7 +254,11 @@ final class WorkerControl
         atomicOp!"+="(mixin(field), n);
     }
 
-    private void restart() { atomicStore(stopping_, false); }
+    private void restart()
+    {
+        atomicOp!"+="(runGen_, 1);
+        atomicStore(stopping_, false);
+    }
 }
 
 /// A job delivered to a worker handler.
@@ -389,6 +405,7 @@ final class JobWorker
         import camunda.retry : backoffDelayMs, isRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
+        long gen = ctl.generation;
         auto clock = client.clock;
         if (config.startupJitterMaxSeconds > 0)
         {
@@ -447,7 +464,7 @@ final class JobWorker
 
         void grow()
         {
-            handlers ~= spawn(&handlerLoop!Ctx, tickets, events, client.threadSafe, control, handler, context);
+            handlers ~= spawn(&handlerLoop!Ctx, tickets, events, client.threadSafe, control, gen, handler, context);
             live++;
             ctl.poolGrew(live + retiring);
         }
@@ -661,10 +678,9 @@ final class JobWorker
             if (live > coreThreads && busy < live) deadline = min(deadline, lastFullMs + idleTimeout);
             foreach (p; retrying) deadline = min(deadline, p.dueMs);
             deadline = min(deadline, stopDeadlineMs);
-            // `stop` sends no event: while jobs are held or an activation
-            // is in flight, look for it
-            // now and then, so the shutdown timeout starts on time.
-            if (!stopping && (held > 0 || activating)) deadline = min(deadline, now + stopPollMs);
+            // `stop` sends no event: look for it now and then (also while
+            // idle or backing off), so the worker stops on time.
+            if (!stopping) deadline = min(deadline, now + stopPollMs);
             if (wanted && !activating) deadline = min(deadline, max(now + 1, nextActivationMs));
             const got = deadline == long.max ? events.take(ev) : takeUntil(events, ev, clock, deadline);
             if (got) handle(ev);
@@ -793,7 +809,7 @@ private final class EventSink : HttpSink
 /// call back to the dispatcher (which sends it). It makes no engine call
 /// itself.
 private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
-    ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control,
+    ThreadSafe!CamundaClient client, ThreadSafe!WorkerControl control, long gen,
     JobAction function(Job, Ctx) @safe handler, Ctx context)
 {
     auto c = client.get;
@@ -803,7 +819,7 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
     {
         // After a shutdown timeout, a ticket taken during or after the
         // drain is already counted in `unaccounted`: do not run it.
-        if (ctl.abandoned) return;
+        if (ctl.abandonedRun(gen)) return;
         Event done;
         if (t.retire)
         {
@@ -1612,4 +1628,82 @@ unittest
     const s = worker.stats;
     assert(monoNowMs - started < 2_500, format("run waited for the activation: %s", s));
     assert(s.activated == 0 && s.abandonedActivations == 1 && s.unaccounted == 0, format("%s", s));
+}
+
+// `stop` is seen while the worker idles between activations: a long poll
+// interval does not hold up shutdown.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : monoNowMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 0, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 60_000;
+    auto stopper = spawn(&stopAfter, worker.control, 300L);
+    const started = monoNowMs;
+    worker.run(&slowActivationHandler);
+    stopper.join();
+    assert(monoNowMs - started < 2_000, format("idle worker ignored stop: %s", worker.stats));
+}
+
+// After a shutdown timeout, running the worker again processes jobs: the
+// abandonment belongs to the run that timed out, not to the next one.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 2, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    auto gate = Chan!int.make;
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&stuckHandler, gate);
+    stopper.join();
+    assert(worker.control.get.abandoned);
+    auto again = spawn(&stopWhenCompleted, worker.control);
+    worker.run(&slowActivationHandler);
+    again.join();
+    gate.put(1);
+    sleepMs(100);
+    const s = worker.stats;
+    assert(!worker.control.get.abandoned, format("%s", s));
+    assert(s.completed == 1, format("the restarted worker ran no job: %s", s));
+}
+
+private
+{
+    void stopWhenCompleted(ThreadSafe!WorkerControl ctl)
+    {
+        import camunda.safeio : sleepMs;
+        foreach (_; 0 .. 1000)
+        {
+            if (ctl.get.stats.completed > 0) break;
+            sleepMs(5);
+        }
+        ctl.get.stop();
+    }
 }

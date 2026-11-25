@@ -324,10 +324,13 @@ struct JoinHandle
     }
 
     /// Stop waiting for the thread: it no longer keeps the process alive
-    /// at exit. Call it instead of `join`, at most once.
+    /// at exit. Call it instead of `join`, at most once. Once the thread
+    /// has returned, the next `spawn` or `spawnDaemon` joins it, so its
+    /// native resources are released without anyone waiting for it.
     void detach()
     {
-        if (thread !is null) markDaemon(this);
+        if (thread !is null) markDaemon(this, true);
+        thread = null;
     }
 
     /// Whether the thread is still running (false once it has returned).
@@ -346,6 +349,7 @@ private final class SpawnBox(Args...) { staticMap!(Unqual, Args) args; }
 JoinHandle spawn(Args...)(void function(Args) @safe fn, auto ref Args args)
     if (allSatisfy!(isSendable, Args))
 {
+    endedDaemons(null);
     return startSpawned(fn, false, args);
 }
 
@@ -394,9 +398,14 @@ private shared size_t reapedDaemons;
 /// Daemon threads whose function has returned, not yet joined.
 private __gshared Thread[] ended;
 
+/// Detached threads not yet joined (some may still be running).
+private __gshared Thread[] detached;
+
 /// `endedDaemons(self)`: queue the calling daemon thread, the last thing
-/// it does. `endedDaemons(null)`: join every queued one; each has already
-/// returned from its function, so the join waits only for its exit.
+/// it does. `endedDaemons(null)`: join every queued one, and every detached
+/// thread that is no longer running; each has already returned from its
+/// function, so the join waits only for its exit. Each thread leaves its
+/// list under the lock, so it is joined exactly once.
 /// `@trusted`: `ended` is only touched inside the process-wide
 /// `synchronized` section; `Thread.join` is unattributed and only waits
 /// (`false`: what killed the thread was reported where it ran).
@@ -410,6 +419,11 @@ private void endedDaemons(Thread self) @trusted nothrow
         {
             reap = ended;
             ended = null;
+            Thread[] still;
+            foreach (t; detached)
+                if (t.isRunning) still ~= t;
+                else reap ~= t;
+            detached = still;
         }
     }
     catch (Exception) {}
@@ -423,11 +437,15 @@ private void endedDaemons(Thread self) @trusted nothrow
 }
 
 /// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
-/// runtime reads at exit.
-private void markDaemon(ref JoinHandle h) @trusted
+/// runtime reads at exit. With `reap`, the thread is queued for
+/// `endedDaemons(null)`; `detached` is only touched inside the process-wide
+/// `synchronized` section.
+private void markDaemon(ref JoinHandle h, bool reap = false) @trusted
 {
     h.thread.isDaemon = true;
+    if (reap) synchronized { detached ~= h.thread; }
 }
+
 
 /// A value handed to exactly one other thread: the sender built it, keeps
 /// no reference to it, and the receiver `take`s it once. Use it for parsed
@@ -677,6 +695,25 @@ version (linux) @safe unittest // daemons that start and end again and again kee
     churn(3_000);
     const grown = rssKb() - before;
     assert(grown < 8_000, "RSS grew " ~ grown.to!string ~ " KB over 3,000 daemon restarts");
+}
+
+@safe unittest // a detached thread is joined once it has returned
+{
+    import core.atomic : atomicLoad;
+    static void once(Chan!int go) { int v; go.take(v); }
+    auto go = Chan!int.make;
+    auto h = spawn(&once, go);
+    h.detach();
+    assert(!h.running);
+    go.put(1);
+    const before = atomicLoad(reapedDaemons);
+    foreach (_; 0 .. 500)
+    {
+        endedDaemons(null);
+        if (atomicLoad(reapedDaemons) > before) break;
+        sleepMs(2);
+    }
+    assert(atomicLoad(reapedDaemons) > before, "detached thread never joined");
 }
 
 @safe unittest // daemons ending while many threads spawn and reap them are each joined once
