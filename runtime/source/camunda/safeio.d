@@ -314,11 +314,13 @@ struct JoinHandle
 {
     private Thread thread;
 
-    /// Wait for the thread to finish (rethrows what killed it).
+    /// Wait for the thread to finish. With `rethrow` (the default) it
+    /// rethrows what killed it; without, that is dropped (for a thread
+    /// whose abnormal exit was already reported another way).
     /// `@trusted`: `Thread.join` is unattributed; it only waits.
-    void join() @trusted
+    void join(bool rethrow = true) @trusted
     {
-        if (thread !is null) thread.join();
+        if (thread !is null) thread.join(rethrow);
     }
 
     /// Whether the thread is still running (false once it has returned).

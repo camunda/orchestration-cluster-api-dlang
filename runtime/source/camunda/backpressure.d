@@ -111,6 +111,10 @@ final class BackpressureManager
     {
         if (observeOnly) return;
         bool waiting;
+        // A wait interrupted (the sleep throws, or the waiter queue is full)
+        // leaves the waiter count as it found it. No permit is counted
+        // before `tryAcquire` returns true, and nothing can fail after.
+        scope (failure) if (waiting) lock.run({ waiters -= 1; });
         for (;;)
         {
             long delay;
@@ -292,4 +296,30 @@ unittest
     foreach (ref h; hs) h.join();
     assert(bp.state().permitsCurrent == 0);
     assert(bp.state().waiters == 0);
+}
+
+unittest
+{
+    // An interrupted wait for a permit leaves the counters unchanged.
+    import camunda.clock : Clock;
+    static final class InterruptingClock : Clock
+    {
+        long nowMs() const { return 0; }
+        long nowWallMs() const { return 0; }
+        void sleep(long ms) { throw new Exception("interrupted"); }
+    }
+    auto bp = new BackpressureManager(BackpressureProfile.balanced, new InterruptingClock);
+    bp.recordBackpressure();
+    foreach (_; 0 .. INITIAL_MAX) bp.acquire(); // the cap is now held
+    const before = bp.state();
+    assert(before.permitsCurrent == INITIAL_MAX && before.waiters == 0);
+    bool thrown;
+    try bp.acquire();
+    catch (Exception e) thrown = true;
+    assert(thrown);
+    const after = bp.state();
+    assert(after.permitsCurrent == before.permitsCurrent);
+    assert(after.waiters == 0);
+    foreach (_; 0 .. INITIAL_MAX) bp.release();
+    assert(bp.state().permitsCurrent == 0);
 }
