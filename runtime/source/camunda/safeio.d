@@ -368,14 +368,19 @@ private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, bool daem
 /// joins every one queued, so starting daemons again and again (an idle
 /// I/O thread exiting and restarting) does not grow memory
 /// (camunda/orchestration-cluster-api-dlang#61).
-JoinHandle spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
+///
+/// Returns nothing: the thread is joined only by that reaping, so no caller
+/// can join it a second time (or concurrently), which would be undefined.
+void spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
     if (allSatisfy!(isSendable, Args))
 {
     endedDaemons(null);
     auto h = startSpawned(fn, true, args);
     markDaemon(h);
-    return h;
 }
+
+/// Ended daemons joined so far (for tests).
+private shared size_t reapedDaemons;
 
 /// Daemon threads whose function has returned, not yet joined.
 private __gshared Thread[] ended;
@@ -404,6 +409,8 @@ private void endedDaemons(Thread self) @trusted nothrow
         try t.join(false);
         catch (Exception) {}
     }
+    import core.atomic : atomicOp;
+    reapedDaemons.atomicOp!"+="(reap.length);
 }
 
 /// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
@@ -661,4 +668,31 @@ version (linux) @safe unittest // daemons that start and end again and again kee
     churn(3_000);
     const grown = rssKb() - before;
     assert(grown < 8_000, "RSS grew " ~ grown.to!string ~ " KB over 3,000 daemon restarts");
+}
+
+@safe unittest // daemons ending while many threads spawn and reap them are each joined once
+{
+    import core.atomic : atomicLoad;
+    import core.thread : Thread;
+    import core.time : msecs;
+    static void once(Chan!int done) { done.put(1); }
+    static void churn(Chan!int done)
+    {
+        foreach (_; 0 .. 200) spawnDaemon(&once, done);
+    }
+    const before = atomicLoad(reapedDaemons);
+    auto done = Chan!int.make;
+    JoinHandle[8] hs;
+    foreach (ref h; hs) h = spawn(&churn, done);
+    foreach (ref h; hs) h.join();
+    int v;
+    foreach (_; 0 .. 1_600) done.take(v);
+    // Each daemon queues itself just after `done.put`; drain the queue.
+    foreach (_; 0 .. 500)
+    {
+        endedDaemons(null);
+        if (atomicLoad(reapedDaemons) - before >= 1_600) break;
+        Thread.sleep(10.msecs);
+    }
+    assert(atomicLoad(reapedDaemons) - before >= 1_600);
 }
