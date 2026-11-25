@@ -57,36 +57,10 @@ struct HttpResponse
 
 /// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
 /// consume, decided purely from the reported TLS backend and libcurl version.
-/// Setting a blob option successfully is not proof of support: several
-/// backends accept the option and then silently ignore the blob
-/// (<https://curl.se/libcurl/c/tls-options.html>). Inline credentials that
-/// never reach the TLS handshake would let a server with optional client
-/// authentication accept the request without mTLS, so unsupported
-/// combinations must fail closed before any request is sent.
-///
-/// `sslVersion` is libcurl's `ssl_version` string and `versionNum` its
-/// `version_num`. Certificate, key and CA blobs are checked separately, each
-/// against the backends whose curl source actually loads that (PEM) blob and
-/// the first libcurl release that did so
-/// (<https://curl.se/libcurl/c/CURLOPT_SSLCERT_BLOB.html>,
-/// <https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html>,
-/// <https://curl.se/libcurl/c/CURLOPT_CAINFO_BLOB.html>):
-///
-/// $(UL
-///   $(LI cert blob: OpenSSL family from 7.71, mbedTLS from 7.78, wolfSSL
-///        from 8.10, rustls from 8.23. Schannel takes only PKCS#12 cert
-///        blobs, not PEM, so it is treated as unsupported.)
-///   $(LI key blob: OpenSSL family from 7.71, wolfSSL from 8.10, rustls
-///        from 8.23. mbedTLS, GnuTLS and Schannel ignore it.)
-///   $(LI CA blob: OpenSSL family and Schannel from 7.77, mbedTLS from 7.81,
-///        rustls from 7.82, wolfSSL from 8.2, GnuTLS from 8.18.)
-/// )
-private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
-    bool caPem, bool certPem, bool keyPem)
+/// The active backend of libcurl's `ssl_version` string.
+private string activeTlsBackend(string sslVersion)
 {
-    import std.algorithm.searching : canFind;
     import std.string : indexOf, strip;
-
     // MultiSSL builds list the inactive backends in parentheses, before or
     // after the active one: `OpenSSL/3.0.8 (GnuTLS/3.7.9)` or
     // `(SecureTransport) LibreSSL/3.3.6`. Remove every parenthesized segment
@@ -106,6 +80,61 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
         }
     }
     ssl = ssl.strip;
+    return ssl;
+}
+
+/// mbedTLS parses PEM only when the buffer's counted length includes a
+/// terminating NUL (`mbedtls_x509_crt_parse`, `mbedtls_pk_parse_key`), and
+/// curl's mbedTLS backend passes cert/key blobs through as-is
+/// (curl 7.78 `lib/vtls/mbedtls.c`). Include the terminator for that backend.
+private string nulTerminatedFor(string sslVersion, string pem)
+{
+    import std.algorithm.searching : canFind;
+    if (!pem.length || !activeTlsBackend(sslVersion).canFind("mbedTLS")) return pem;
+    return pem[$ - 1] == '\0' ? pem : pem ~ "\0";
+}
+
+unittest
+{
+    assert(nulTerminatedFor("mbedTLS/3.6.0", "PEM") == "PEM\0");
+    assert(nulTerminatedFor("mbedTLS/3.6.0", "PEM\0") == "PEM\0");
+    assert(nulTerminatedFor("mbedTLS/3.6.0", "") == "");
+    assert(nulTerminatedFor("OpenSSL/3.0.8", "PEM") == "PEM");
+    assert(nulTerminatedFor("OpenSSL/3.0.8 (mbedTLS/3.6.0)", "PEM") == "PEM");
+    assert(nulTerminatedFor("(OpenSSL/3.0.8) mbedTLS/3.6.0", "PEM") == "PEM\0");
+}
+
+/// Setting a blob option successfully is not proof of support: several
+/// backends accept the option and then silently ignore the blob
+/// (<https://curl.se/libcurl/c/tls-options.html>). Inline credentials that
+/// never reach the TLS handshake would let a server with optional client
+/// authentication accept the request without mTLS, so unsupported
+/// combinations must fail closed before any request is sent.
+///
+/// `sslVersion` is libcurl's `ssl_version` string and `versionNum` its
+/// `version_num`. Certificate, key and CA blobs are checked separately, each
+/// against the backends whose curl source actually loads that (PEM) blob and
+/// the first libcurl release that did so
+/// (<https://curl.se/libcurl/c/CURLOPT_SSLCERT_BLOB.html>,
+/// <https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html>,
+/// <https://curl.se/libcurl/c/CURLOPT_CAINFO_BLOB.html>):
+///
+/// $(UL
+///   $(LI cert blob: OpenSSL family from 7.71, mbedTLS from 7.78, wolfSSL
+///        from 8.10, rustls from 8.23. Schannel takes only PKCS#12 cert
+///        blobs, not PEM, so it is treated as unsupported.)
+///   $(LI key blob: OpenSSL family from 7.71, mbedTLS from 7.78, wolfSSL
+///        from 8.10, rustls from 8.23. GnuTLS and Schannel ignore it.)
+///   $(LI CA blob: OpenSSL family and Schannel from 7.77, mbedTLS from 7.81,
+///        rustls from 7.82, wolfSSL from 8.2, GnuTLS from 8.18.)
+/// )
+private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
+    bool caPem, bool certPem, bool keyPem)
+{
+    import std.algorithm.searching : canFind;
+
+    const ssl = activeTlsBackend(sslVersion);
+
 
     const v = versionNum;
     const opensslFamily = ssl.canFind("OpenSSL") || ssl.canFind("LibreSSL")
@@ -128,6 +157,7 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
     if (keyPem)
     {
         const keyOk = (opensslFamily && v >= 0x07_47_00) // 7.71.0
+            || (mbedtls && v >= 0x07_4E_00)  // 7.78.0
             || (wolfssl && v >= 0x08_0A_00)  // 8.10.0
             || (rustls && v >= 0x08_17_00);  // 8.23.0
         if (!keyOk) missing ~= "CAMUNDA_MTLS_KEY";
@@ -150,7 +180,7 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
 /// calls first); `curl_version_info` is not documented as
 /// safe to call before that.
 version (Windows) {} else
-private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
+private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req, out string sslVersion)
 {
     import etc.c.curl : CURLVERSION_NOW, curl_version_info;
     import std.string : fromStringz;
@@ -164,6 +194,7 @@ private string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
         return i is null ? Probe("", 0)
             : Probe(i.ssl_version is null ? "" : fromStringz(i.ssl_version).idup, i.version_num);
     }();
+    sslVersion = probe.ssl;
     return missingInlinePemSupport(probe.ssl, probe.num,
         req.caPem.length != 0, req.certPem.length != 0, req.keyPem.length != 0);
 }
@@ -178,12 +209,12 @@ unittest
     assert(missingInlinePemSupport("wolfSSL/5.7.2", 0x08_0A_00, false, true, true).length == 0);
     assert(missingInlinePemSupport("wolfSSL/5.7.2", 0x08_09_00, false, true, true)
         == ["CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"]);
-    // mbedTLS: cert blob from 7.78 (inline cert + file key works), never key blob.
+    // mbedTLS: cert and key blobs from 7.78, alone or mixed with files.
     assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_4E_00, false, true, false).length == 0);
-    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_4D_00, false, true, false)
-        == ["CAMUNDA_MTLS_CERT"]);
-    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x08_12_00, false, true, true)
-        == ["CAMUNDA_MTLS_KEY"]);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_4E_00, false, false, true).length == 0);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x08_12_00, false, true, true).length == 0);
+    assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_4D_00, false, true, true)
+        == ["CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"]);
     // rustls: cert and key blobs from 8.23.
     assert(missingInlinePemSupport("rustls-ffi/0.15.0/rustls/0.23", 0x08_17_00, false, true, true)
         .length == 0);
@@ -289,6 +320,7 @@ WireRequest toWire(const ref HttpRequest req)
     case "GET", "POST", "PUT", "PATCH", "DELETE": break;
     default: throw new CamundaException("unsupported HTTP method: " ~ req.method);
     }
+    string sslVersion;
     version (Windows) {}
     else
     {
@@ -297,7 +329,7 @@ WireRequest toWire(const ref HttpRequest req)
         curlGlobalInitOnce();
         // Fail closed when this libcurl's TLS backend would silently drop
         // the inline PEM (curl.se support table).
-        if (const missing = curlTlsBackendMissingBlobs(req))
+        if (const missing = curlTlsBackendMissingBlobs(req, sslVersion))
         {
             import std.array : join;
             throw new CamundaException("inline PEM (" ~ missing.join(", ") ~ ") is not supported by"
@@ -317,8 +349,8 @@ WireRequest toWire(const ref HttpRequest req)
     w.keyPath = req.keyPath;
     w.caPath = req.caPath;
     w.keyPassphrase = req.keyPassphrase;
-    w.certPem = req.certPem;
-    w.keyPem = req.keyPem;
+    w.certPem = nulTerminatedFor(sslVersion, req.certPem);
+    w.keyPem = nulTerminatedFor(sslVersion, req.keyPem);
     w.caPem = req.caPem;
     w.keystorePath = req.keystorePath;
     w.keystorePassword = req.keystorePassword;
