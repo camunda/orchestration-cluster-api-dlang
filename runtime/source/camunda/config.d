@@ -224,12 +224,12 @@ struct CamundaConfig
         }
         // Pairing is about presence, never length: a PEM certificate and its
         // private key are different documents, so their lengths differ.
-        if ((tls.cert.length != 0) ^ (tls.key.length != 0))
+        // Each side may come inline or from a file (mixed-source pairs are
+        // valid, e.g. an inline certificate with a key file).
+        if ((tls.cert.length != 0 || tls.certPath.length != 0) ^ (tls.key.length != 0 || tls.keyPath.length != 0))
             throw new ConfigException(
-                "mutual TLS requires both CAMUNDA_MTLS_CERT and CAMUNDA_MTLS_KEY");
-        if ((tls.certPath.length != 0) ^ (tls.keyPath.length != 0))
-            throw new ConfigException(
-                "mutual TLS requires both CAMUNDA_MTLS_CERT_PATH and CAMUNDA_MTLS_KEY_PATH");
+                "mutual TLS requires both a certificate (CAMUNDA_MTLS_CERT or CAMUNDA_MTLS_CERT_PATH)"
+                ~ " and a key (CAMUNDA_MTLS_KEY or CAMUNDA_MTLS_KEY_PATH)");
         foreach (pair; [["CAMUNDA_MTLS_CA", tls.ca, tls.caPath], ["CAMUNDA_MTLS_CERT", tls.cert, tls.certPath],
                 ["CAMUNDA_MTLS_KEY", tls.key, tls.keyPath]])
             if (pair[1].length && pair[2].length)
@@ -578,6 +578,11 @@ unittest
     auto byPath = CamundaConfig.fromMap(
         ["CAMUNDA_MTLS_CERT_PATH": "/p/client-cert.pem", "CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"]);
     assert(byPath.tls.certPath.length && byPath.tls.keyPath.length);
+    // Mixed-source pairs are valid both ways (#58).
+    auto mixed1 = CamundaConfig.fromMap(["CAMUNDA_MTLS_CERT": cert, "CAMUNDA_MTLS_KEY_PATH": "/p/k.pem"]);
+    assert(mixed1.tls.cert == cert && mixed1.tls.keyPath == "/p/k.pem");
+    auto mixed2 = CamundaConfig.fromMap(["CAMUNDA_MTLS_CERT_PATH": "/p/c.pem", "CAMUNDA_MTLS_KEY": key]);
+    assert(mixed2.tls.certPath == "/p/c.pem" && mixed2.tls.key == key.strip);
     // And a genuinely missing half is still rejected, each way.
     string[string][] unpaired;
     unpaired ~= ["CAMUNDA_MTLS_CERT": cert];
