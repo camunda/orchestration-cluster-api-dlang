@@ -1573,7 +1573,8 @@ unittest
         if (optTenant)
             injected ~= id;
     }
-    assert(jobTenants == ["activateJobs"]);
+    // #63: activateProbes (alpha) shares activateJobs' tenantIds semantics.
+    assert(jobTenants == ["activateJobs", "activateProbes"], jobTenants.to!string);
     foreach (id; ["createProcessInstance", "publishMessage", "correlateMessage",
             "broadcastSignal", "evaluateDecision", "evaluateExpression",
             "evaluateConditionals", "createDeployment", "suspendProcessDefinitions", "resumeProcessDefinitions"])

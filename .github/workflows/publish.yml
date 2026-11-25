@@ -202,6 +202,7 @@ jobs:
       - name: Gate regenerated code
         if: steps.drift.outputs.changed == 'true'
         run: |
+          dub run -q --build=unittest --single scripts/generate.d -- --DRT-testmode=test-only
           dub test
           dub test :runtime
           make examples example-coverage sync-readme-check config-reference-check
