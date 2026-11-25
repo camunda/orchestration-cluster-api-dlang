@@ -1052,3 +1052,64 @@ unittest
         "opened " ~ engine.connectionsOpened.to!string ~ " connections, limit " ~ limit.to!string);
     assert(accepted <= limit, "server accepted " ~ accepted.to!string ~ " connections");
 }
+
+version (unittest)
+{
+    /// Two-connection server: answers the first request with a 307 to
+    /// `/v2/final`, the second with `200 {"ok":1}` and reports its request line.
+    private void redirectServer(Chan!int port, Chan!string seen)
+    {
+        import std.socket : TcpSocket, InternetAddress;
+        import std.string : indexOf;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(4);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        foreach (i; 0 .. 2)
+        {
+            auto conn = listener.accept();
+            scope (exit) conn.close();
+            string got;
+            ubyte[4096] chunk;
+            while (got.indexOf("\r\n\r\n") < 0)
+            {
+                const n = conn.receive(chunk[]);
+                if (n <= 0) break;
+                got ~= cast(const(char)[]) chunk[0 .. n];
+            }
+            if (i == 0)
+                conn.send("HTTP/1.1 307 Temporary Redirect\r\nLocation: /v2/final\r\n"
+                    ~ "Content-Length: 0\r\nConnection: close\r\n\r\n");
+            else
+            {
+                const eol = got.indexOf("\r\n");
+                seen.put(eol < 0 ? got : got[0 .. eol]);
+                conn.send("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    ~ "Content-Length: 8\r\nConnection: close\r\n\r\n{\"ok\":1}");
+            }
+        }
+    }
+}
+
+// A 307 from a gateway or token endpoint is followed, as std.net.curl did.
+unittest
+{
+    import std.conv : to;
+    auto port = Chan!int.make;
+    auto seen = Chan!string.make;
+    auto server = spawn(&redirectServer, port, seen);
+    int p;
+    port.take(p);
+    HttpRequest req;
+    req.method = "GET";
+    req.url = "http://127.0.0.1:" ~ p.to!string ~ "/v2/start";
+    req.timeoutMs = 10_000;
+    auto res = perform(req);
+    assert(res.status == 200, "redirect not followed: " ~ res.status.to!string);
+    assert(res.body_ == `{"ok":1}`, res.body_);
+    string line;
+    seen.take(line);
+    server.join();
+    assert(line == "GET /v2/final HTTP/1.1", line);
+}

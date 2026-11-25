@@ -207,6 +207,11 @@ final class Transport
                 HttpRequest req = baseRequest(method, path, query, server);
                 req.contentType = contentType;
                 req.rawBody = rawBody.dup;
+                // An awaited creation sent raw waits just as long as a JSON one.
+                import std.algorithm.searching : startsWith;
+                import std.uni : toLower;
+                if (contentType.toLower.startsWith("application/json"))
+                    req.longPoll = req.longPoll || isLongWait(method, path, (cast(const(char)[]) rawBody).idup);
                 return send(req);
             });
         }

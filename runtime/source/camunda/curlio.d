@@ -177,6 +177,10 @@ private void ioRun(HttpEngine engine, CURLM* multi, ref Transfer[size_t] active,
             try ok = start(multi, t, spare, failed);
             catch (Exception e)
             {
+                // `start` threw after taking a handle but before adding it
+                // to `multi`: give it back, or it leaks.
+                if (t.easy !is null) recycle(spare, t.easy);
+                t.easy = null;
                 failed = HttpResult.init;
                 failed.error = "request setup failed: " ~ e.msg;
             }
@@ -235,10 +239,10 @@ private struct Done
 
 /// A new multi handle.
 /// `@trusted`: `curl_multi_init` takes no arguments.
-/// Its connection cache keeps `maxConnections` plus a few long-poll
-/// connections alive: libcurl's default (four per handle currently added)
-/// shrinks as transfers finish, closing pooled connections only for the
-/// next burst to reopen them.
+/// Its connection cache keeps at most `maxConnections` idle connections
+/// alive: libcurl's default (four per handle currently added) shrinks as
+/// transfers finish, closing pooled connections only for the next burst to
+/// reopen them. Active long polls are not bounded by the cache.
 /// `@trusted`: `curl_multi_init` takes no arguments; CURLMOPT_MAXCONNECTS
 /// takes a long.
 private CURLM* newMulti(int maxConnections) @trusted
@@ -246,7 +250,7 @@ private CURLM* newMulti(int maxConnections) @trusted
     import etc.c.curl : curl_multi_init, curl_multi_setopt, CurlMOption;
     auto m = curl_multi_init();
     if (m is null) assert(0, "curl_multi_init failed");
-    curl_multi_setopt(m, CurlMOption.maxconnects, cast(c_long) (maxConnections + 8));
+    curl_multi_setopt(m, CurlMOption.maxconnects, cast(c_long) maxConnections);
     return m;
 }
 
@@ -319,6 +323,10 @@ private bool start(CURLM* multi, Transfer t, ref CURL*[] spare, out HttpResult f
     }
 
     curl_easy_setopt(e, CurlOption.nosignal, cast(c_long) 1);
+    // As std.net.curl.HTTP did: follow redirects (a 307/308 from a gateway
+    // or token endpoint), at most 10.
+    curl_easy_setopt(e, CurlOption.followlocation, cast(c_long) 1);
+    curl_easy_setopt(e, CurlOption.maxredirs, cast(c_long) 10);
     str(CurlOption.url, req.url);
     curl_easy_setopt(e, CurlOption.errorbuffer, t.errorBuffer.ptr);
     curl_easy_setopt(e, CurlOption.writefunction, &onBodyChunk);
