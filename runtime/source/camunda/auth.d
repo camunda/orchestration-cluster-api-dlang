@@ -37,6 +37,9 @@ final class Authentication
     private Clock clock;
     private CachedToken cached;
     private bool hasCached;
+    /// The owning client's engine for token requests (null: the
+    /// process-wide default engine).
+    package(camunda) HttpEngine engine;
 
     this(const ref CamundaConfig config, Clock clock)
     {
@@ -164,7 +167,7 @@ final class Authentication
         req.contentType = "application/x-www-form-urlencoded";
         req.headers["Accept"] = "application/json";
         HttpResponse res;
-        try res = perform(req);
+        try res = engine is null ? perform(req) : engine.perform(req);
         catch (NetworkException e)
             throw new AuthException("Failed to reach the OAuth token endpoint: " ~ e.msg, __FILE__, __LINE__, e);
 

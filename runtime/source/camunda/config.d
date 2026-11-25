@@ -90,6 +90,11 @@ struct CamundaConfig
     string[string] defaultHeaders;
     long eventualPollDefaultMs = 10_000;
     RetryConfig retry;
+    /// Most ordinary requests a client has in flight at once, which bounds
+    /// its connections (`CAMUNDA_SDK_HTTP_MAX_CONNECTIONS`). Job activation
+    /// long polls and process creations with `awaitCompletion` come on top,
+    /// so they never hold back a job completion.
+    int httpMaxConnections = 16;
     TlsConfig tls;
     WorkerDefaults workerDefaults;
     bool restAddressExact;
@@ -173,6 +178,14 @@ struct CamundaConfig
         c.retry.maxAttempts = cast(uint) parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS"), 3);
         c.retry.baseDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS"), 100);
         c.retry.maxDelayMs = parseLong(get("CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS"), 2000);
+        {
+            // Validate before narrowing: a bare cast would wrap 4294967297 to 1.
+            const mc = parseLong(get("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS"), 16);
+            if (mc < 1 || mc > int.max)
+                throw new ConfigException("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS must be between 1 and "
+                    ~ int.max.to!string ~ ", got " ~ mc.to!string);
+            c.httpMaxConnections = cast(int) mc;
+        }
 
         c.tls.cert = get("CAMUNDA_MTLS_CERT");
         c.tls.key = get("CAMUNDA_MTLS_KEY");
@@ -196,6 +209,8 @@ struct CamundaConfig
 
     private void validate() const
     {
+        if (httpMaxConnections < 1)
+            throw new ConfigException("CAMUNDA_SDK_HTTP_MAX_CONNECTIONS must be at least 1");
         if (authStrategy == AuthStrategy.oauth)
         {
             if (!clientId.length || !clientSecret.length || !oauthUrl.length)
@@ -515,4 +530,13 @@ unittest
         assert(false, "expected ConfigException");
     }
     catch (ConfigException) {}
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+    // Out-of-int-range values must be rejected, not wrapped to a valid count.
+    foreach (v; ["4294967297", "-4294967295", "0"])
+        assertThrown!ConfigException(CamundaConfig.fromEnv(["CAMUNDA_SDK_HTTP_MAX_CONNECTIONS": v]));
+    assert(CamundaConfig.fromEnv(["CAMUNDA_SDK_HTTP_MAX_CONNECTIONS": "7"]).httpMaxConnections == 7);
 }

@@ -40,7 +40,10 @@ helps close that gap.
 ## Requirements
 
 - [LDC](https://github.com/ldc-developers/ldc) 1.43 or later, and dub
-- libcurl (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`)
+- libcurl 7.68 or later (ships with macOS; on Linux install `libcurl4` / `libcurl-devel`).
+  Each client runs its requests on one I/O thread over a keep-alive pool of at most
+  `CAMUNDA_SDK_HTTP_MAX_CONNECTIONS` connections; that thread uses `curl_multi_poll` and
+  `curl_multi_wakeup`, so an older libcurl fails to load the program
 
 DMD and GDC are rejected: the build requires LDC's DIP1000 / nosharedaccess
 support.
@@ -268,6 +271,7 @@ auto instance = client.eventual(ConsistencyOptions.init, {
 | `CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS` | `3` | Total HTTP attempts for transient failures (429, 502, 503, 504, network). |
 | `CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS` | `100` | Base backoff delay, in milliseconds. |
 | `CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS` | `2000` | Backoff cap, in milliseconds. |
+| `CAMUNDA_SDK_HTTP_MAX_CONNECTIONS` | `16` | Most requests a client has in flight at once (they run on its I/O thread over keep-alive connections), which bounds its connections. Job activation long polls and process creations with `awaitCompletion` come on top. |
 | `CAMUNDA_SDK_EVENTUAL_POLL_DEFAULT_MS` | `10000` | Default overall timeout for `eventual` polling, in milliseconds. |
 | `CAMUNDA_SDK_LOG_LEVEL` | `info` | `off`, `error`, `warn`, `info`, `debug`, or `trace`. |
 | `CAMUNDA_WORKER_TIMEOUT` | `60000` | Default job activation timeout, in milliseconds. |

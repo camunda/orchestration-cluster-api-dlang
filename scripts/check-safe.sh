@@ -33,6 +33,14 @@ ratchet() { # name count budget-file [what]
         echo "check-safe: $2 $what $1, below the budget of $budget; lower $3 to $2" >&2
     fi
 }
+# Budgets raised for the curl-multi HttpEngine backport (#56, from #55).
+# Outside safeio.d, 3 -> 17: the blocking std.net.curl `perform` (-1) is
+# replaced by 13 in curlio.d (the libcurl multi C boundary: easy/multi
+# handles, callbacks, blobs), 1 curl_version_info probe in http.d (the
+# fail-closed inline PEM check) and 1 test-only kill of the spawned
+# `openssl s_server` in tlstest.d. In safeio.d, 18 -> 30: the
+# package-private threading primitives the I/O thread needs (Chan, Lock,
+# ThreadSafe, spawnDaemon) and a race-free liveSingleton.
 ratchet "outside safeio.d" "$(trusted -r $SRC --include='*.d' | grep -c -v "^$SAFEIO:")" scripts/trusted-budget
 ratchet "in safeio.d" "$(trusted $SAFEIO | wc -l | tr -d ' ')" scripts/trusted-budget-safeio
 # The "E profile": threads start through safeio's `spawn`/`spawnDaemon`.
