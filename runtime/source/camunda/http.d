@@ -55,8 +55,6 @@ struct HttpResponse
     string contentType;
 }
 
-/// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
-/// consume, decided purely from the reported TLS backend and libcurl version.
 /// The active backend of libcurl's `ssl_version` string.
 private string activeTlsBackend(string sslVersion)
 {
@@ -104,6 +102,8 @@ unittest
     assert(nulTerminatedFor("(OpenSSL/3.0.8) mbedTLS/3.6.0", "PEM") == "PEM\0");
 }
 
+/// The CAMUNDA_MTLS_* settings whose inline PEM a given libcurl cannot
+/// consume, decided purely from the reported TLS backend and libcurl version.
 /// Setting a blob option successfully is not proof of support: several
 /// backends accept the option and then silently ignore the blob
 /// (<https://curl.se/libcurl/c/tls-options.html>). Inline credentials that
