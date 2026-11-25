@@ -337,19 +337,23 @@ private final class SpawnBox(Args...) { staticMap!(Unqual, Args) args; }
 JoinHandle spawn(Args...)(void function(Args) @safe fn, auto ref Args args)
     if (allSatisfy!(isSendable, Args))
 {
-    return startSpawned(fn, args);
+    return startSpawned(fn, false, args);
 }
 
 /// `@trusted`: the arguments (checked sendable by `spawn`) are moved into a
 /// box only the new thread can reach; `shared` is stripped for the move and
 /// restored for the call. `fn` is a context-free function.
-private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, ref Args args) @trusted
+/// A `daemon` thread retires itself when `fn` ends (see `reapDaemons`).
+private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, bool daemon, ref Args args) @trusted
 {
     import core.lifetime : move;
     auto box = new SpawnBox!Args;
     static foreach (i; 0 .. Args.length)
         box.args[i] = move(*cast(Unqual!(Args[i])*) &args[i]);
-    auto t = new Thread({ mixin("fn(" ~ callArgs!(Args.length) ~ ");"); });
+    auto t = new Thread({
+        scope (exit) if (daemon) endedDaemons(Thread.getThis);
+        mixin("fn(" ~ callArgs!(Args.length) ~ ");");
+    });
     JoinHandle h;
     h.thread = t.start();
     return h;
@@ -357,12 +361,56 @@ private JoinHandle startSpawned(Args...)(void function(Args) @safe fn, ref Args 
 
 /// `spawn` for a background thread the program does not wait for at exit
 /// (an I/O thread that idles until it is needed).
-JoinHandle spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
+///
+/// Nobody joins such a thread, but a thread that is never joined keeps its
+/// stack and runtime bookkeeping after it ends (about 8 KB of RSS each). A
+/// daemon that ends therefore queues itself, and the next `spawnDaemon`
+/// joins every one queued, so starting daemons again and again (an idle
+/// I/O thread exiting and restarting) does not grow memory
+/// (camunda/orchestration-cluster-api-dlang#61).
+///
+/// Returns nothing: the thread is joined only by that reaping, so no caller
+/// can join it a second time (or concurrently), which would be undefined.
+void spawnDaemon(Args...)(void function(Args) @safe fn, auto ref Args args)
     if (allSatisfy!(isSendable, Args))
 {
-    auto h = startSpawned(fn, args);
+    endedDaemons(null);
+    auto h = startSpawned(fn, true, args);
     markDaemon(h);
-    return h;
+}
+
+/// Ended daemons joined so far (for tests).
+private shared size_t reapedDaemons;
+
+/// Daemon threads whose function has returned, not yet joined.
+private __gshared Thread[] ended;
+
+/// `endedDaemons(self)`: queue the calling daemon thread, the last thing
+/// it does. `endedDaemons(null)`: join every queued one; each has already
+/// returned from its function, so the join waits only for its exit.
+/// `@trusted`: `ended` is only touched inside the process-wide
+/// `synchronized` section; `Thread.join` is unattributed and only waits
+/// (`false`: what killed the thread was reported where it ran).
+private void endedDaemons(Thread self) @trusted nothrow
+{
+    Thread[] reap;
+    try synchronized
+    {
+        if (self !is null) ended ~= self;
+        else
+        {
+            reap = ended;
+            ended = null;
+        }
+    }
+    catch (Exception) {}
+    foreach (t; reap)
+    {
+        try t.join(false);
+        catch (Exception) {}
+    }
+    import core.atomic : atomicOp;
+    reapedDaemons.atomicOp!"+="(reap.length);
 }
 
 /// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
@@ -587,4 +635,64 @@ final class Lock
     assert(!c.takeFor(v, 5));
     c.put(7);
     assert(c.takeFor(v, 5) && v == 7);
+}
+
+version (linux) @safe unittest // daemons that start and end again and again keep RSS flat (#61)
+{
+    import std.algorithm.searching : startsWith;
+    import std.array : split;
+    import std.conv : to;
+    import std.file : readText;
+    import std.string : lineSplitter, strip;
+    static long rssKb()
+    {
+        foreach (l; readText("/proc/self/status").lineSplitter)
+            if (l.startsWith("VmRSS:")) return l["VmRSS:".length .. $].strip.split[0].to!long;
+        return 0;
+    }
+    // An idle I/O thread exits and the next request starts a new one; an
+    // unjoined ended thread kept ~8 KB, so 3,000 restarts grew RSS ~25 MB.
+    static void once(Chan!int done) { done.put(1); }
+    void churn(int n)
+    {
+        auto done = Chan!int.make;
+        int v;
+        foreach (_; 0 .. n)
+        {
+            spawnDaemon(&once, done);
+            done.take(v);
+        }
+    }
+    churn(300); // warm up thread caches and the GC pool
+    const before = rssKb();
+    churn(3_000);
+    const grown = rssKb() - before;
+    assert(grown < 8_000, "RSS grew " ~ grown.to!string ~ " KB over 3,000 daemon restarts");
+}
+
+@safe unittest // daemons ending while many threads spawn and reap them are each joined once
+{
+    import core.atomic : atomicLoad;
+    import core.thread : Thread;
+    import core.time : msecs;
+    static void once(Chan!int done) { done.put(1); }
+    static void churn(Chan!int done)
+    {
+        foreach (_; 0 .. 200) spawnDaemon(&once, done);
+    }
+    const before = atomicLoad(reapedDaemons);
+    auto done = Chan!int.make;
+    JoinHandle[8] hs;
+    foreach (ref h; hs) h = spawn(&churn, done);
+    foreach (ref h; hs) h.join();
+    int v;
+    foreach (_; 0 .. 1_600) done.take(v);
+    // Each daemon queues itself just after `done.put`; drain the queue.
+    foreach (_; 0 .. 500)
+    {
+        endedDaemons(null);
+        if (atomicLoad(reapedDaemons) - before >= 1_600) break;
+        Thread.sleep(10.msecs);
+    }
+    assert(atomicLoad(reapedDaemons) - before >= 1_600);
 }
