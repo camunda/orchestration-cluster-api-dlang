@@ -227,6 +227,32 @@ worker.run((Job job) {
 });
 ```
 
+`run` with a delegate is the serial 10.x loop: one batch at a time, each job
+handled on the calling thread. `run` with a plain function (`JobHandler`)
+uses a handler thread pool: the worker holds up to `maxJobs` jobs at once,
+activates more as soon as capacity frees up, sends every engine call through
+the client's I/O thread, and counts its activity in `stats`.
+
+<!-- snippet-source: examples/readme.d | regions: PooledJobWorker -->
+
+```d
+import camunda;
+
+static JobAction handle(Job job)
+{
+    // Runs on a handler thread; `job.client` makes further calls.
+    return JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
+}
+
+auto worker = client.createJobWorker(
+    JobWorkerConfig.create("payment-service")
+        .maxJobs(64)  // jobs held at once (in-flight capacity)
+        .threads(16), // handler threads
+);
+worker.run(&handle); // until worker.stop() / worker.control.get.stop()
+auto stats = worker.stats; // activated, completed, failed, activationFailures, ...
+```
+
 ## Eventual consistency
 
 Reads against secondary storage may lag a write. `eventual` polls until the

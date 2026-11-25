@@ -239,10 +239,12 @@ private struct Done
 
 /// A new multi handle.
 /// `@trusted`: `curl_multi_init` takes no arguments.
-/// Its connection cache keeps at most `maxConnections` idle connections
-/// alive: libcurl's default (four per handle currently added) shrinks as
-/// transfers finish, closing pooled connections only for the next burst to
-/// reopen them. Active long polls are not bounded by the cache.
+/// Its connection cache keeps `maxConnections` plus a few long-poll
+/// connections alive: libcurl's default (four per handle currently added)
+/// shrinks as transfers finish, closing pooled connections only for the
+/// next burst to reopen them. Without the headroom, a job worker's
+/// activation long poll would push an ordinary connection out of the cache
+/// on every activation.
 /// `@trusted`: `curl_multi_init` takes no arguments; CURLMOPT_MAXCONNECTS
 /// takes a long.
 private CURLM* newMulti(int maxConnections) @trusted
@@ -250,7 +252,7 @@ private CURLM* newMulti(int maxConnections) @trusted
     import etc.c.curl : curl_multi_init, curl_multi_setopt, CurlMOption;
     auto m = curl_multi_init();
     if (m is null) assert(0, "curl_multi_init failed");
-    curl_multi_setopt(m, CurlMOption.maxconnects, cast(c_long) maxConnections);
+    curl_multi_setopt(m, CurlMOption.maxconnects, cast(c_long) (maxConnections + 8));
     return m;
 }
 

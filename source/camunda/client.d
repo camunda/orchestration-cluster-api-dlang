@@ -13,7 +13,7 @@ import camunda.generated;
 import camunda.jsonx;
 import camunda.http : HttpResponse;
 import camunda.multipart;
-import camunda.safeio : readBytes;
+import camunda.safeio : ThreadSafe, readBytes;
 import camunda.transport;
 import camunda.version_ : sdkUserAgent, sdkVersion;
 import camunda.worker;
@@ -27,6 +27,10 @@ public import camunda.transport : CamundaOptions;
 /// Mixes in the generated flat facade (`GeneratedOperations`) so every REST
 /// operation is a method on this type. Curated helpers (`topology`,
 /// `deployResources`, `createJobWorker`, `eventual`) sit on top.
+///
+/// Thread-safe once configured, like its `Transport` (its only state): one
+/// client may serve every thread in a process. Hand it to another thread
+/// with `threadSafe`.
 final class CamundaClient
 {
     mixin GeneratedOperations;
@@ -36,6 +40,15 @@ final class CamundaClient
     this(CamundaOptions options)
     {
         _t = new Transport(options);
+    }
+
+    /// This client as a value other threads may hold (`spawn` arguments,
+    /// job worker handler threads).
+    ThreadSafe!CamundaClient threadSafe()
+    {
+        // Sound: the only state is `_t`, a thread-safe `Transport`; the
+        // generated operations and helpers keep no state of their own.
+        return ThreadSafe!CamundaClient.assumeThreadSafe(this);
     }
 
     static CamundaClient fromEnv()

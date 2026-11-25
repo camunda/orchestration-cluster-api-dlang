@@ -76,6 +76,29 @@ void jobWorker()
     // endregion JobWorker
 }
 
+void pooledJobWorker()
+{
+    auto client = CamundaClient.fromEnv();
+    // region PooledJobWorker
+    import camunda;
+
+    static JobAction handle(Job job)
+    {
+        // Runs on a handler thread; `job.client` makes further calls.
+        return JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
+    }
+
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("payment-service")
+            .maxJobs(64)  // jobs held at once (in-flight capacity)
+            .threads(16), // handler threads
+    );
+    worker.run(&handle); // until worker.stop() / worker.control.get.stop()
+    auto stats = worker.stats; // activated, completed, failed, activationFailures, ...
+    // endregion PooledJobWorker
+    cast(void) stats;
+}
+
 void eventualConsistency()
 {
     auto client = CamundaClient.fromEnv();
