@@ -1,3 +1,10 @@
+# [10.4.0](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.3.0...v10.4.0) (2026-11-25)
+
+
+### Features
+
+* **worker:** backport the v11 JobWorker model to stable/10 ([#65](https://github.com/camunda/orchestration-cluster-api-dlang/issues/65)) ([0a8eaf7](https://github.com/camunda/orchestration-cluster-api-dlang/commit/0a8eaf7b7ec5b737d92269dcdf5b09731df20312)), closes [#60](https://github.com/camunda/orchestration-cluster-api-dlang/issues/60)
+
 # [10.3.0](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.2.2...v10.3.0) (2026-11-25)
 
 
