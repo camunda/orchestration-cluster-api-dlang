@@ -1,3 +1,10 @@
+# [10.3.0](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.2.2...v10.3.0) (2026-11-25)
+
+
+### Features
+
+* **runtime:** per-client curl-multi I/O engine (runtime-only backport of [#55](https://github.com/camunda/orchestration-cluster-api-dlang/issues/55) to stable/10) ([#57](https://github.com/camunda/orchestration-cluster-api-dlang/issues/57)) ([126a7a9](https://github.com/camunda/orchestration-cluster-api-dlang/commit/126a7a9975409fc19fbc9eb9ba747539f2fef529)), closes [#22](https://github.com/camunda/orchestration-cluster-api-dlang/issues/22) [#53](https://github.com/camunda/orchestration-cluster-api-dlang/issues/53) [#56](https://github.com/camunda/orchestration-cluster-api-dlang/issues/56) [22/#53](https://github.com/camunda/orchestration-cluster-api-dlang/issues/53) [#56](https://github.com/camunda/orchestration-cluster-api-dlang/issues/56)
+
 ## [10.2.2](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.2.1...v10.2.2) (2026-11-23)
 
 
