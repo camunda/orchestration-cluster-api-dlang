@@ -378,7 +378,12 @@ final class JobWorker
         foreach (job; jobs)
         {
             auto action = handler(job);
-            applyBlocking(job, action);
+            try applyBlocking(job, action);
+            catch (Exception e)
+            {
+                ctl.count!"actionFailures";
+                throw e;
+            }
         }
         return cast(int) jobs.length;
     }
