@@ -314,11 +314,10 @@ private bool start(CURLM* multi, Transfer t, ref CURL*[] spare, out HttpResult f
         if (rc != 0 && rc != 4 && rc != 48)
             return fail("clearing CURLOPT_CAPATH failed: error " ~ rcText(rc));
     }
-    if (req.certPath.length)
-    {
-        str(CurlOption.sslcert, req.certPath);
-        if (req.keyPath.length) str(CurlOption.sslkey, req.keyPath);
-    }
+    // Certificate and key are set independently: a mixed-source pair
+    // (inline certificate + key file, or the reverse) is valid.
+    if (req.certPath.length) str(CurlOption.sslcert, req.certPath);
+    if (req.keyPath.length) str(CurlOption.sslkey, req.keyPath);
     if (req.keyPassphrase.length) str(CurlOption.keypasswd, req.keyPassphrase);
     if (req.keystorePath.length)
     {
