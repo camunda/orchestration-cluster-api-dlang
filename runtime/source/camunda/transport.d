@@ -355,12 +355,15 @@ final class Transport
             return;
         }
         _prepLock.run({
-            _prep.put(p);
+            // Start the thread before recording it: if spawning throws,
+            // nothing is queued and `_prepRunning` stays false, so the next
+            // submission retries instead of queuing behind a missing thread.
             if (!_prepRunning)
             {
-                _prepRunning = true;
                 spawnDaemon(&prepLoop, threadSafe);
+                _prepRunning = true;
             }
+            _prep.put(p);
         });
     }
 

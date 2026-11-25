@@ -48,16 +48,6 @@ struct JobWorkerConfig
     int maxJobsActive = 32;
     /// The 10.x name of `maxJobsActive`.
     alias maxJobsToActivate = maxJobsActive;
-    /// Most threads running the handler; 0 means four per CPU core, at
-    /// most `maxJobsActive`. Handler threads only run user code, so this
-    /// sets how many handlers run at once, not how many connections the
-    /// worker opens.
-    int handlerThreads;
-    /// Handler threads kept even when idle; 0 means `min(2, effectiveThreads)`.
-    int coreHandlerThreads;
-    /// Retire handler threads above the core once the pool has not been
-    /// fully busy for this long. 0 means 30 s.
-    long threadIdleTimeoutMs;
     long jobTimeoutMs = 60_000;
     long requestTimeoutMs = 10_000;
     /// Pause after an activation that returned no jobs (for servers that
@@ -69,6 +59,18 @@ struct JobWorkerConfig
     long startupJitterMaxSeconds;
     bool withLease;
     bool autoComplete = true;
+    // Pool settings come last so 10.x positional initializers keep
+    // their meaning.
+    /// Most threads running the handler; 0 means four per CPU core, at
+    /// most `maxJobsActive`. Handler threads only run user code, so this
+    /// sets how many handlers run at once, not how many connections the
+    /// worker opens.
+    int handlerThreads;
+    /// Handler threads kept even when idle; 0 means `min(2, effectiveThreads)`.
+    int coreHandlerThreads;
+    /// Retire handler threads above the core once the pool has not been
+    /// fully busy for this long. 0 means 30 s.
+    long threadIdleTimeoutMs;
 
     static JobWorkerConfig create(string jobType)
     {
@@ -1429,4 +1431,12 @@ unittest
     assert(cfg.workerName == "payment-worker");
     auto a = JobAction.completeWith(JSONValue(["paid": JSONValue(true)]));
     assert(a.kind == JobAction.Kind.complete);
+}
+
+// 10.x positional initializers keep their meaning (pool fields come last).
+unittest
+{
+    auto c = JobWorkerConfig("t", 8, 5_000);
+    assert(c.jobTimeoutMs == 5_000);
+    assert(c.handlerThreads == 0);
 }
