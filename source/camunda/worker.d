@@ -177,7 +177,9 @@ final class WorkerControl
     // Each `run` is a generation. When the shutdown timeout runs out, that
     // run's generation is recorded here: its handler threads then run no
     // job they take, since nobody is left to settle it. A later `run` has a
-    // new generation, so its handlers are not affected.
+    // new generation, so its handlers are not affected. The record is a
+    // watermark: every generation up to it stays abandoned, so a second
+    // timed-out run does not revive the first one's handlers.
     private shared long runGen_, abandonedGen_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures,
@@ -199,8 +201,10 @@ final class WorkerControl
 
     package void abandon() { atomicStore(abandonedGen_, atomicLoad(runGen_)); }
 
-    /// Whether the run of generation `gen` timed out on shutdown.
-    private bool abandonedRun(long gen) const { return atomicLoad(abandonedGen_) == gen; }
+    /// Whether the run of generation `gen`, or a later one, timed out on
+    /// shutdown. A run that ended in time waited for all its handlers, so
+    /// none of an earlier generation is left to be wrongly skipped.
+    private bool abandonedRun(long gen) const { return gen <= atomicLoad(abandonedGen_); }
 
     private long generation() const { return atomicLoad(runGen_); }
 
@@ -259,6 +263,24 @@ final class WorkerControl
         atomicOp!"+="(runGen_, 1);
         atomicStore(stopping_, false);
     }
+}
+
+unittest // abandonment is a watermark across successive shutdown timeouts
+{
+    auto c = new WorkerControl;
+    c.restart();
+    const g1 = c.generation;
+    c.abandon();
+    assert(c.abandonedRun(g1) && c.abandoned);
+    c.restart();
+    const g2 = c.generation;
+    assert(!c.abandoned && !c.abandonedRun(g2));
+    assert(c.abandonedRun(g1), "first run revived by a restart");
+    c.abandon();
+    assert(c.abandonedRun(g1), "first run revived by a second timeout");
+    assert(c.abandonedRun(g2) && c.abandoned);
+    c.restart();
+    assert(!c.abandoned && !c.abandonedRun(c.generation));
 }
 
 /// A job delivered to a worker handler.

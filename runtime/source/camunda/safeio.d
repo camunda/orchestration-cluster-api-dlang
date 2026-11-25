@@ -409,12 +409,16 @@ private __gshared Thread[] detached;
 /// `@trusted`: `ended` is only touched inside the process-wide
 /// `synchronized` section; `Thread.join` is unattributed and only waits
 /// (`false`: what killed the thread was reported where it ran).
-private void endedDaemons(Thread self) @trusted nothrow
+private void endedDaemons(Thread self, bool detach = false) @trusted nothrow
 {
     Thread[] reap;
+    // The one `synchronized` statement for both lists: D gives each
+    // argumentless `synchronized` its own mutex, so registration and
+    // reaping must go through this same block.
     try synchronized
     {
-        if (self !is null) ended ~= self;
+        if (self !is null && detach) detached ~= self;
+        else if (self !is null) ended ~= self;
         else
         {
             reap = ended;
@@ -438,12 +442,12 @@ private void endedDaemons(Thread self) @trusted nothrow
 
 /// `@trusted`: `Thread.isDaemon` is unattributed; it only sets a flag the
 /// runtime reads at exit. With `reap`, the thread is queued for
-/// `endedDaemons(null)`; `detached` is only touched inside the process-wide
-/// `synchronized` section.
+/// `endedDaemons(null)`; it is registered through `endedDaemons` so
+/// `detached` is only touched inside that function's `synchronized` section.
 private void markDaemon(ref JoinHandle h, bool reap = false) @trusted
 {
     h.thread.isDaemon = true;
-    if (reap) synchronized { detached ~= h.thread; }
+    if (reap) endedDaemons(h.thread, true);
 }
 
 
