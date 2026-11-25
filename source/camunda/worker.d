@@ -433,7 +433,10 @@ final class JobWorker
         {
             import camunda.safeio : unitRandom;
             auto jitter = cast(long)(config.startupJitterMaxSeconds * 1000 * unitRandom());
-            clock.sleep(jitter);
+            // Interruptible: a stop (or a newer run) during the jitter
+            // returns without activating, within the shutdown timeout.
+            if (!startupWait(clock, jitter, () => ctl.stopping || ctl.generation != gen))
+                return;
         }
         auto transport = client.transport;
         const retry = transport.config.retry;
@@ -778,6 +781,38 @@ final class JobWorker
 
 /// How often (ms) the dispatcher checks for `stop` while it holds jobs.
 private enum long stopPollMs = 100;
+
+/// Sleep `jitterMs` through `clock` in `stopPollMs` slices, checking
+/// `cancelled` before each slice. Returns false (at once) when cancelled.
+private bool startupWait(C)(C clock, long jitterMs, scope bool delegate() @safe cancelled)
+{
+    const deadline = clock.nowMs + jitterMs;
+    for (;;)
+    {
+        if (cancelled()) return false;
+        const left = deadline - clock.nowMs;
+        if (left <= 0) return true;
+        clock.sleep(left < stopPollMs ? left : stopPollMs);
+    }
+}
+
+unittest // stop during the startup jitter returns promptly, without activating
+{
+    import camunda.clock : TestClock;
+    auto clock = new TestClock;
+    int checks;
+    assert(!startupWait(clock, 30_000, () => ++checks > 3));
+    assert(clock.nowMs <= 3 * stopPollMs, "stop was not seen during the jitter");
+}
+
+unittest // without a stop, the full jitter elapses before the first activation
+{
+    import camunda.clock : TestClock;
+    auto clock = new TestClock;
+    assert(startupWait(clock, 1_234, () => false));
+    assert(clock.nowMs == 1_234);
+    assert(startupWait(clock, 0, () => false) && clock.nowMs == 1_234);
+}
 
 /// A job for a handler thread, or the signal to retire.
 private struct Ticket
