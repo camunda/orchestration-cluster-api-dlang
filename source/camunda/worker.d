@@ -174,6 +174,9 @@ final class WorkerControl
 {
     import core.atomic : atomicLoad, atomicOp, atomicStore;
     private shared bool stopping_;
+    // Set when the shutdown timeout runs out: handler threads then run
+    // no job they take, since nobody is left to settle it.
+    private shared bool abandoned_;
     private shared long activated, completed, failed, errored, left,
         handlerExceptions, actionFailures, activationFailures,
         handlerAborts, unaccounted, abandonedActivations;
@@ -183,6 +186,11 @@ final class WorkerControl
     /// Ask the worker to stop: it activates no more jobs, finishes the ones
     /// it holds, and `run` returns (within the shutdown timeout).
     void stop() { atomicStore(stopping_, true); }
+
+    /// Whether the shutdown timeout ran out with jobs held.
+    bool abandoned() const { return atomicLoad(abandoned_); }
+
+    package void abandon() { atomicStore(abandoned_, true); }
 
     /// Whether `stop` was called.
     bool stopping() const { return atomicLoad(stopping_); }
@@ -634,6 +642,9 @@ final class JobWorker
                 // An activation long poll may outlast the timeout; the jobs
                 // it returns are not seen here, so record the request.
                 if (activating) ctl.count!"abandonedActivations";
+                // Before the queue is drained: a handler that takes a
+                // ticket from now on sees the flag and skips it.
+                ctl.abandon();
                 abandoned = true;
                 break;
             }
@@ -790,6 +801,9 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
     Ticket t;
     while (tickets.take(t))
     {
+        // After a shutdown timeout, a ticket taken during or after the
+        // drain is already counted in `unaccounted`: do not run it.
+        if (ctl.abandoned) return;
         Event done;
         if (t.retire)
         {
@@ -1398,9 +1412,10 @@ version (unittest)
         ctl.get.stop();
     }
 
-    /// Block until `gate` opens, then leave the job.
+    /// A gate the handler waits on, and a channel it reports each run on.
     struct Gated { Chan!int gate; Chan!int ran; }
 
+    /// Report the run on `g.ran`, block until `g.gate` opens, then leave the job.
     private JobAction countingStuckHandler(Job job, Gated g)
     {
         g.ran.put(1);
@@ -1409,6 +1424,7 @@ version (unittest)
         return JobAction.leave();
     }
 
+    /// Block until `gate` opens, then leave the job.
     private JobAction stuckHandler(Job job, Chan!int gate)
     {
         int v;
@@ -1533,6 +1549,40 @@ unittest
     const s = worker.stats;
     assert(s.activated == 2 && s.unaccounted == 2, format("%s", s));
     assert(ran == 1, format("a queued job ran after shutdown (%s runs)", ran));
+}
+
+// With several handler threads, no queued job runs after a shutdown timeout,
+// even when a released handler takes the next ticket.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 3, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(3).threads(2).coreThreads(2).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    Gated g = Gated(Chan!int.make, Chan!int.make);
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&countingStuckHandler, g);
+    stopper.join();
+    foreach (_; 0 .. 3) g.gate.put(1);
+    sleepMs(200);
+    int ran, v;
+    while (g.ran.tryTake(v)) ran++;
+    const s = worker.stats;
+    assert(s.activated == 3 && s.unaccounted == 3, format("%s", s));
+    assert(ran <= 2, format("a queued job ran after shutdown (%s runs)", ran));
 }
 
 // A shutdown timeout that runs out during an activation long poll does not
