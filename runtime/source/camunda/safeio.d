@@ -323,6 +323,13 @@ struct JoinHandle
         if (thread !is null) thread.join(rethrow);
     }
 
+    /// Stop waiting for the thread: it no longer keeps the process alive
+    /// at exit. Call it instead of `join`, at most once.
+    void detach()
+    {
+        if (thread !is null) markDaemon(this);
+    }
+
     /// Whether the thread is still running (false once it has returned).
     /// `@trusted`: `Thread.isRunning` is unattributed; it only reads state.
     bool running() const @trusted

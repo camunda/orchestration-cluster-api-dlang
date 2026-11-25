@@ -405,12 +405,21 @@ final class JobWorker
         bool abandoned; // the shutdown timeout ran out with jobs held
         scope (exit)
         {
+            // After a shutdown timeout, jobs still queued for a handler are
+            // discarded (they are counted in `unaccounted`): no dispatcher
+            // is left to settle what a late handler would do with them.
+            if (abandoned)
+            {
+                Ticket dropped;
+                while (tickets.tryTake(dropped)) {}
+            }
             tickets.close();
             // A thread that died was reported (`aborted`) and accounted
             // for, so what killed it is not rethrown. After a shutdown
             // timeout, threads still running are not waited for.
             foreach (ref h; handlers)
                 if (!abandoned || !h.running) h.join(false);
+                else h.detach(); // do not keep the process alive at exit
             ctl.poolShrank(0, 0);
         }
         const maxThreads = max(1, config.effectiveThreads);
@@ -1390,6 +1399,16 @@ version (unittest)
     }
 
     /// Block until `gate` opens, then leave the job.
+    struct Gated { Chan!int gate; Chan!int ran; }
+
+    private JobAction countingStuckHandler(Job job, Gated g)
+    {
+        g.ran.put(1);
+        int v;
+        g.gate.take(v);
+        return JobAction.leave();
+    }
+
     private JobAction stuckHandler(Job job, Chan!int gate)
     {
         int v;
@@ -1470,12 +1489,50 @@ unittest
         JobWorkerConfig.create("t").maxJobs(1).threads(1).shutdownTimeout(200));
     worker.config.pollIntervalMs = 10;
     auto gate = Chan!int.make;
-    scope (exit) gate.put(1); // let the stuck handler thread end
     auto stopper = spawn(&stopWhenActivated, worker.control);
     worker.run(&stuckHandler, gate);
     stopper.join();
+    // Let the detached handler thread end before the process does.
+    gate.put(1);
+    import camunda.safeio : sleepMs;
+    sleepMs(200);
     const s = worker.stats;
     assert(s.activated == 1 && s.unaccounted == 1, format("%s", s));
+}
+
+// Jobs still queued behind a stuck handler when the shutdown timeout runs
+// out are discarded: a late handler does not run them after `run` returned.
+unittest
+{
+    import std.conv : to;
+    import std.format : format;
+    import camunda.safeio : sleepMs;
+    auto port = Chan!int.make;
+    auto done = Chan!string.make;
+    auto quit = Chan!int.make;
+    auto server = spawn(&fakeJobServer, 2, port, done, quit);
+    scope (exit) { quit.put(1); server.join(); }
+    int p;
+    port.take(p);
+    auto client = CamundaClient.fromEnv([
+        "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+        "CAMUNDA_AUTH_STRATEGY": "NONE",
+    ]);
+    auto worker = client.createJobWorker(
+        JobWorkerConfig.create("t").maxJobs(2).threads(1).coreThreads(1).shutdownTimeout(200));
+    worker.config.pollIntervalMs = 10;
+    Gated g = Gated(Chan!int.make, Chan!int.make);
+    auto stopper = spawn(&stopWhenActivated, worker.control);
+    worker.run(&countingStuckHandler, g);
+    stopper.join();
+    g.gate.put(1);
+    g.gate.put(1);
+    sleepMs(200);
+    int ran, v;
+    while (g.ran.tryTake(v)) ran++;
+    const s = worker.stats;
+    assert(s.activated == 2 && s.unaccounted == 2, format("%s", s));
+    assert(ran == 1, format("a queued job ran after shutdown (%s runs)", ran));
 }
 
 // A shutdown timeout that runs out during an activation long poll does not
