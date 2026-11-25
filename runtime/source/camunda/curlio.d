@@ -118,8 +118,6 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
     auto engine = engineRef.get;
     auto multi = newMulti(engine.maxConnections);
     engine.attach(multi);
-    // A dying I/O thread must not leave the engine marked running.
-    scope (failure) engine.crashed();
     Transfer[size_t] active; // by easy handle address
     Submission[] waiting;
     CURL*[] spare;
@@ -129,6 +127,27 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
         foreach (t; active) abandon(multi, t);
         freeAll(multi, spare);
     }
+    // A dying I/O thread must not leave the engine marked running. Declared
+    // after the cleanup guard so it runs first: the multi handle is
+    // unpublished (under the engine lock) before it is freed.
+    bool unpublished;
+    scope (failure) if (!unpublished) engine.crashed();
+    try ioRun(engine, multi, active, waiting, spare, ordinary);
+    catch (Exception e)
+    {
+        // Fail every affected caller rather than leave it blocked forever.
+        HttpResult r;
+        r.error = "HTTP I/O thread failed: " ~ e.msg;
+        foreach (t; active) deliver(t.sub, r);
+        foreach (w; waiting) deliver(w, r);
+        unpublished = true;
+        foreach (w; engine.crashed()) deliver(w, r);
+    }
+}
+
+private void ioRun(HttpEngine engine, CURLM* multi, ref Transfer[size_t] active,
+    ref Submission[] waiting, ref CURL*[] spare, ref int ordinary)
+{
     long idleSince = monoNowMs;
     for (;;)
     {
@@ -154,7 +173,14 @@ void ioLoop(ThreadSafe!HttpEngine engineRef)
             t.sub = w;
             t.sub.req.timeoutMs = left;
             HttpResult failed;
-            if (!start(multi, t, spare, failed))
+            bool ok;
+            try ok = start(multi, t, spare, failed);
+            catch (Exception e)
+            {
+                failed = HttpResult.init;
+                failed.error = "request setup failed: " ~ e.msg;
+            }
+            if (!ok)
             {
                 engine.counted(0);
                 deliver(t.sub, failed);
@@ -287,7 +313,7 @@ private bool start(CURLM* multi, Transfer t, ref CURL*[] spare, out HttpResult f
         if (rc == 0) return true;
         import std.string : fromStringz;
         import etc.c.curl : curl_easy_strerror;
-        return fail(setting ~ " (inline PEM) needs libcurl 7.77 or later with an"
+        return fail(setting ~ " (inline PEM) needs libcurl 7.71 (7.77 for the CA) or later with an"
             ~ " OpenSSL-compatible TLS backend; set " ~ setting ~ "_PATH to a file instead ("
             ~ fromStringz(curl_easy_strerror(rc)).idup ~ ")");
     }
@@ -315,11 +341,10 @@ private bool start(CURLM* multi, Transfer t, ref CURL*[] spare, out HttpResult f
         if (rc != 0 && rc != 4 && rc != 48)
             return fail("clearing CURLOPT_CAPATH failed: error " ~ rcText(rc));
     }
-    if (req.certPath.length)
-    {
-        str(CurlOption.sslcert, req.certPath);
-        if (req.keyPath.length) str(CurlOption.sslkey, req.keyPath);
-    }
+    // Certificate and key are set independently: an inline certificate
+    // (CAMUNDA_MTLS_CERT) may pair with a key file.
+    if (req.certPath.length) str(CurlOption.sslcert, req.certPath);
+    if (req.keyPath.length) str(CurlOption.sslkey, req.keyPath);
     if (req.keyPassphrase.length) str(CurlOption.keypasswd, req.keyPassphrase);
     if (!blob(curlOptCaInfoBlob, req.caPem, "CAMUNDA_MTLS_CA")) return false;
     if (!blob(curlOptSslCertBlob, req.certPem, "CAMUNDA_MTLS_CERT")) return false;

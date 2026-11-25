@@ -130,6 +130,7 @@ final class Transport
         _auth = new Authentication(_config, _clock);
         _bp = new BackpressureManager(_config.backpressureProfile, _clock);
         _engine = new HttpEngine(_config.httpMaxConnections);
+        _auth.engine = _engine; // token requests share this client's engine
         // Programmatic headers win over CAMUNDA_DEFAULT_HEADERS on the same
         // (case-insensitive) name. Validate here too: `options.headers` is a
         // public field, so direct assignment bypasses `withHeader`; every
@@ -371,6 +372,9 @@ unittest
     assert(t.engine.maxConnections == 5);
     auto d = new Transport(CamundaOptions.create.withKey("CAMUNDA_AUTH_STRATEGY", "NONE"));
     assert(d.engine.maxConnections == 16);
+    // OAuth token requests run on the owning client's engine.
+    assert(t.auth.engine is t.engine);
+    assert(d.auth.engine is d.engine && d.auth.engine !is t.engine);
 }
 
 /// An empty JSON object is a present body (`{}`), not an absent one.

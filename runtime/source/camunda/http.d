@@ -64,7 +64,7 @@ struct HttpResponse
 /// `sslVersion` is libcurl's `ssl_version` string and `versionNum` its
 /// `version_num`. Per-backend minimums from the upstream history
 /// (<https://curl.se/libcurl/c/CURLOPT_CAINFO_BLOB.html>): the client
-/// certificate/key blobs are OpenSSL-family only (GnuTLS, mbedTLS, wolfSSL
+/// certificate/key blobs are OpenSSL-family only, from 7.71 (GnuTLS, mbedTLS, wolfSSL
 /// and Schannel ignore them); the CA blob is supported by the OpenSSL family
 /// from 7.77, by rustls from 7.82, mbedTLS from 7.81, wolfSSL from 8.2 and
 /// GnuTLS from 8.18, and never by Schannel.
@@ -106,8 +106,8 @@ private string[] missingInlinePemSupport(string sslVersion, uint versionNum,
     string[] missing;
     if (certPem || keyPem)
     {
-        // Client cert/key blobs: OpenSSL family only, from 7.77.
-        const certKeyOk = opensslFamily && v >= 0x07_4D_00; // 7.77.0
+        // Client cert/key blobs: OpenSSL family only, from 7.71.
+        const certKeyOk = opensslFamily && v >= 0x07_47_00; // 7.71.0
         if (!certKeyOk)
         {
             if (certPem) missing ~= "CAMUNDA_MTLS_CERT";
@@ -150,10 +150,13 @@ package(camunda) string[] curlTlsBackendMissingBlobs(const ref HttpRequest req)
 
 unittest
 {
-    // cert/key blobs: OpenSSL family only, from 7.77.
-    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4D_00, false, true, true).length == 0);
-    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4C_00, false, true, true)
+    // cert/key blobs: OpenSSL family only, from 7.71.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_47_00, false, true, true).length == 0);
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_46_00, false, true, true)
         == ["CAMUNDA_MTLS_CERT", "CAMUNDA_MTLS_KEY"]);
+    // The CA blob keeps its 7.77 floor while cert/key are accepted.
+    assert(missingInlinePemSupport("OpenSSL/3.0.8", 0x07_4C_00, true, true, true)
+        == ["CAMUNDA_MTLS_CA"]);
     // GnuTLS / mbedTLS / Schannel ignore client cert/key blobs.
     assert(missingInlinePemSupport("GnuTLS/3.7.9", 0x08_12_00, false, true, true).length == 2);
     assert(missingInlinePemSupport("mbedTLS/3.6.0", 0x07_51_00, false, true, false)
@@ -441,17 +444,25 @@ final class HttpEngine
         import camunda.safeio : monoNowMs;
         auto s = Submission(toWire(req), sink, tag, monoNowMs);
         lock.run({
-            queue.put(s);
+            // Start the thread before marking the engine running or queuing:
+            // a failed spawn throws to this caller and leaves nothing queued
+            // and no engine wrongly marked running. The new thread blocks on
+            // `attach` (this lock) until the request below is queued.
             if (!running)
             {
                 import camunda.curlio : ioLoop;
-                running = true;
                 spawnDaemon(&ioLoop, threadSafe);
+                running = true;
+                queue.put(s);
             }
-            else if (multi !is null)
+            else
             {
-                import camunda.curlio : multiWakeup;
-                multiWakeup(multi);
+                queue.put(s);
+                if (multi !is null)
+                {
+                    import camunda.curlio : multiWakeup;
+                    multiWakeup(multi);
+                }
             }
         });
     }
@@ -484,11 +495,17 @@ final class HttpEngine
     package Submission pendingAfterDetach;
 
     /// The I/O thread is dying: the next request starts a new one.
-    package void crashed()
+    /// Returns the requests still queued, for the dying thread to fail:
+    /// no I/O thread would ever pick them up otherwise.
+    package Submission[] crashed()
     {
-        lock.run({
+        return lock.run({
             running = false;
             multi = null;
+            Submission[] orphans;
+            Submission s;
+            while (queue.tryTake(s)) orphans ~= s;
+            return orphans;
         });
     }
 }
