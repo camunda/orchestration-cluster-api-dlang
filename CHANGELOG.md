@@ -1,3 +1,10 @@
+# [11.0.0-alpha.19](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.18...v11.0.0-alpha.19) (2026-11-25)
+
+
+### Bug Fixes
+
+* **runtime:** join ended daemon threads so I/O-thread restarts don't leak ([#62](https://github.com/camunda/orchestration-cluster-api-dlang/issues/62)) ([a6d725a](https://github.com/camunda/orchestration-cluster-api-dlang/commit/a6d725a27a01aa71ee3c7ad1a0fe8e29ca941140)), closes [#61](https://github.com/camunda/orchestration-cluster-api-dlang/issues/61)
+
 # [11.0.0-alpha.18](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.17...v11.0.0-alpha.18) (2026-11-25)
 
 
