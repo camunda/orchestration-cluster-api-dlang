@@ -123,6 +123,6 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || exit 2
           if [ "$rc" -eq 1 ]; then
-            echo "::error::Breaking API changes compared with ${TAG}. Make the change backward compatible, or, if the break is intended, copy the BREAK lines into api-compat-suppressions.txt and ask a maintainer for the breaking-change-approved label."
+            echo "::error::Breaking API changes compared with ${TAG}. Make the change backward compatible, or, if the break is intended, copy the "<baseline tag> BREAK ..." lines (e.g. "${TAG} BREAK ...") into api-compat-suppressions.txt and ask a maintainer for the breaking-change-approved label."
           fi
           exit "$rc"
