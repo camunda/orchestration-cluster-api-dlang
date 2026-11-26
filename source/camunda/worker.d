@@ -2031,17 +2031,27 @@ unittest
     import std.algorithm.searching : countUntil;
     import std.format : format;
     WorkerStats s;
-    // Instant handlers and five throttles: the jobs settle while the
-    // worker waits out >= 750 ms of activation backoff (50+100+200+400).
-    auto log = scriptedRun(["2", "429", "429", "429", "429", "429"], 2, 0, 4, 0, s);
+    // Handlers pause 150 ms, so both jobs are still running when the
+    // first throttle lands and settle while the worker waits out >= 750 ms
+    // of activation backoff (50+100+200+400) before the last throttle.
+    auto log = scriptedRun(["2", "429", "429", "429", "429", "429"], 2, 0, 4, 150, s);
     auto a = activations(log);
-    assert(a.length >= 6 && a[5][2] == 429, format("%s", log));
-    const lastThrottle = log.countUntil!(e => e.length && e[0] == 'A' && activations([e])[0][1] == a[5][1]);
-    assert(lastThrottle > 0, format("%s", log));
+    assert(a.length >= 6 && a[1][2] == 429 && a[5][2] == 429, format("%s", log));
+    // Log position of the n-th activation (timestamps can tie).
+    long indexOf(size_t n)
+    {
+        foreach (i, e; log)
+            if (e.length && e[0] == 'A' && n-- == 0) return i;
+        return -1;
+    }
+    const firstThrottle = indexOf(1);
+    const lastThrottle = indexOf(5);
+    assert(firstThrottle > 0 && lastThrottle > firstThrottle, format("%s", log));
     foreach (key; ["C1@", "C2@"])
     {
         const at = log.countUntil!(e => e.length >= key.length && e[0 .. key.length] == key);
-        assert(at >= 0 && at < lastThrottle, format("%s settled only after the backoff: %s", key, log));
+        assert(at > firstThrottle, format("%s settled before any backoff began: %s", key, log));
+        assert(at < lastThrottle, format("%s settled only after the backoff: %s", key, log));
     }
     assert(s.completed == 2 && s.actionFailures == 0, format("%s", s));
 }

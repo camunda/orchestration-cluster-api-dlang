@@ -4,8 +4,11 @@
 /// (`src/camunda_contract.ads`, conformance traces in `spec/traces/`).
 ///
 /// Every function is `pure nothrow @nogc @safe` and total: out-of-range
-/// arguments are clamped to the proved ranges instead of failing, so the
-/// invariants of each state hold whatever the caller passes.
+/// arguments are clamped to the proved ranges instead of failing. The
+/// invariants of each state hold for a state built with its `make`
+/// constructor and changed only through its transition methods; the
+/// fields stay public plain data, and writing them directly (e.g.
+/// `inFlight > capacity`, `minLimit > maxLimit`) voids the guarantees.
 ///
 /// - `WorkerSlotState`: in-flight slot accounting. `inFlight` stays in
 ///   `0 .. capacity`, over-activation saturates, release never underflows.
