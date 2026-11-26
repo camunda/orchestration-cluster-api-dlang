@@ -54,5 +54,5 @@ if [ "${DISPATCH_APPROVED:-false}" = "true" ]; then
   echo "::warning::Breaking API changes approved by the api_break_approved input of this run."
   exit 0
 fi
-echo "::error::Release blocked: the public API breaks compatibility with ${tag}. If intended, record the "${tag} BREAK ..." lines (baseline tag first) in api-compat-suppressions.txt through a PR labelled breaking-change-approved (or re-run this workflow manually with api_break_approved), then re-run."
+echo "::error::Release blocked: the public API breaks compatibility with ${tag}. If intended, record the \"${tag} BREAK ...\" lines (baseline tag first) in api-compat-suppressions.txt through a PR labelled breaking-change-approved (or re-run this workflow manually with api_break_approved), then re-run."
 exit 1
