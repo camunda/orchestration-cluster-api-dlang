@@ -35,7 +35,7 @@ make_scratch_dir() {
   fi
   [[ -n "${dir}" && -d "${dir}" ]] || return 1
   # Canonical path so prefix checks against git's resolved paths are reliable.
-  (cd "${dir}" && pwd -P)
+  (cd -P -- "${dir}" && pwd -P)
 }
 
 # Abort the whole run unless the current work tree and its origin both live
@@ -44,8 +44,13 @@ make_scratch_dir() {
 # (symlinks and '..' resolved) lies strictly under the physical fixture $2.
 path_in_fixture() {
   local p="$1" root="$2" phys
+  # Only plain local paths: reject URLs (scheme://) and scp-style host:path.
+  [[ "${p}" != *://* ]] || return 1
+  [[ "${p}" != [!/]*:* ]] || return 1
   [[ "${p}" == /* ]] || return 1
-  phys="$(cd -- "${p}" 2>/dev/null && pwd -P)" || return 1
+  # -P: resolve symlinks before "..", as git does; a logical cd collapses
+  # "link/.." lexically and would hide an escape through a symlink.
+  phys="$(cd -P -- "${p}" 2>/dev/null && pwd -P)" || return 1
   [[ -n "${phys}" && "${phys}" == "${root}"/* ]]
 }
 
@@ -55,7 +60,7 @@ assert_in_fixture() {
     echo "FATAL: no fixture directory; refusing to mutate git state" >&2
     exit 2
   fi
-  root="$(cd -- "${FIXTURE}" && pwd -P)" || exit 2
+  root="$(cd -P -- "${FIXTURE}" && pwd -P)" || exit 2
   top="$(command git rev-parse --show-toplevel 2>/dev/null)" || top=""
   origin="$(command git remote get-url origin 2>/dev/null)" || origin=""
   if ! path_in_fixture "${top}" "${root}" || ! path_in_fixture "${origin}" "${root}"; then
@@ -593,6 +598,58 @@ test_pushurl_escape_via_dotdot_or_symlink_refused() {
   rm -rf "${outside}"
 }
 
+test_url_escape_via_symlink_then_dotdot_refused() {
+  local name="origin/push URL <fixture>/link/../x.git with link outside -> refused, outside repo untouched"
+  local outside rc_push rc_push_guard rc_origin rc_origin_guard
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  mkdir -p "${outside}/dir"
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  ln -s "${outside}/dir" "${FIXTURE}/link"
+  # Logically ${FIXTURE}/remote.git; physically ${outside}/remote.git.
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/link/../remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_push=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_push_guard=$?
+  command git -C "${FIXTURE}/work" config --unset remote.origin.pushurl
+  command git -C "${FIXTURE}/work" config remote.origin.url "${FIXTURE}/link/../remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_origin=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_origin_guard=$?
+  if [[ "${rc_push}" != "0" && "${rc_push_guard}" == "2" && "${rc_origin}" != "0" && "${rc_origin_guard}" == "2" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (pushurl=${rc_push}/${rc_push_guard} url=${rc_origin}/${rc_origin_guard})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
+}
+
+test_non_path_urls_refused() {
+  local name="non-path origin URLs (scheme:// and scp-style) -> refused"
+  local u rc bad=""
+  setup_fixture "11.0.0-alpha.5"
+  for u in "file://${FIXTURE}/remote.git" "localhost:${FIXTURE}/remote.git"; do
+    command git -C "${FIXTURE}/work" config remote.origin.url "${u}"
+    run_repair main >/dev/null 2>&1
+    rc=$?
+    [[ "${rc}" != "0" ]] || bad+=" ${u}"
+  done
+  if [[ -z "${bad}" ]] && ! grep -qE "release (create|edit)" "${GH_CALLS}"; then
+    ok "${name}"
+  else
+    not_ok "${name} (accepted:${bad})"
+  fi
+  teardown_fixture
+}
+
 test_empty_fixture_variable_refused() {
   local name="REPAIR_RELEASE_TEST_FIXTURE set but empty -> refused, origin untouched"
   local rc before after
@@ -631,6 +688,8 @@ main() {
   test_pushurl_outside_fixture_refused
   test_pushurl_escape_via_dotdot_or_symlink_refused
   test_empty_fixture_variable_refused
+  test_url_escape_via_symlink_then_dotdot_refused
+  test_non_path_urls_refused
 
   echo
   echo "${pass} passed, ${fail} failed"

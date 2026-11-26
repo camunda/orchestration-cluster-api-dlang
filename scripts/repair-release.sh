@@ -175,8 +175,13 @@ log "branch '${BRANCH}' releases on channel '${CHANNEL}'"
 # (symlinks and '..' resolved) lies strictly under the physical directory $2.
 path_in_fixture() {
   local p="$1" root="$2" phys
+  # Only plain local paths: reject URLs (scheme://) and scp-style host:path.
+  [[ "${p}" != *://* ]] || return 1
+  [[ "${p}" != [!/]*:* ]] || return 1
   [[ "${p}" == /* ]] || return 1
-  phys="$(cd -- "${p}" 2>/dev/null && pwd -P)" || return 1
+  # -P: resolve symlinks before "..", as git does; a logical cd collapses
+  # "link/.." lexically and would hide an escape through a symlink.
+  phys="$(cd -P -- "${p}" 2>/dev/null && pwd -P)" || return 1
   [[ -n "${phys}" && "${phys}" == "${root}"/* ]]
 }
 
@@ -186,7 +191,7 @@ assert_test_fixture() {
   local fixture="${REPAIR_RELEASE_TEST_FIXTURE}"
   [[ -n "${fixture}" ]] || die "test mode: REPAIR_RELEASE_TEST_FIXTURE is set but empty"
   local top origin
-  fixture="$(cd -- "${fixture}" 2>/dev/null && pwd -P)" || die "test mode: fixture ${REPAIR_RELEASE_TEST_FIXTURE} does not resolve"
+  fixture="$(cd -P -- "${fixture}" 2>/dev/null && pwd -P)" || die "test mode: fixture ${REPAIR_RELEASE_TEST_FIXTURE} does not resolve"
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "test mode: not in a git work tree"
   origin="$(git remote get-url origin 2>/dev/null)" || die "test mode: no origin remote"
   path_in_fixture "${top}" "${fixture}" || die "test mode: work tree ${top} is outside fixture ${fixture}"
