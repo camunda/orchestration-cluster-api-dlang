@@ -216,13 +216,13 @@ jobs:
       # Stable branches must not break customer code that compiled against
       # the last release of the major. This checks the commit about to be
       # tagged, including the regenerated code above that no PR reviewed.
-      # Override: the api-break-approved label on a PR merged since that
-      # release, or the api_break_approved input of a manual run. A no-op on
+      # Approved breaks: api-compat-suppressions.txt (changes need the
+      # breaking-change-approved label), or the api_break_approved input of a
+      # manual run. A no-op on
       # main, whose prereleases make no compatibility promise.
       - name: API compatibility gate
         if: ${{ github.event.inputs.repair-tag == '' && startsWith(github.ref_name, 'stable/') }}
         env:
-          GH_TOKEN: ${{ github.token }}
           DISPATCH_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.api_break_approved }}
         run: |
           dub build -q --single scripts/api-compat.d || exit 2

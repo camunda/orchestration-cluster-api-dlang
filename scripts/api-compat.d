@@ -39,6 +39,10 @@ Usage (run from the repository root; `make api-compat` wraps the first form):
       Compare the API in --repo (default: .) with the API in DIR (a checkout of
       the baseline). Exit 0: compatible, 1: breaking changes, 2: error.
 
+      Breaks listed in the suppressions file (default:
+      <repo>/api-compat-suppressions.txt, override with --suppressions FILE)
+      are approved: they are printed as `APPROVED ...` and do not fail.
+
   dub run -q --single scripts/api-compat.d -- --print-baseline-major N [--repo DIR]
       Print the newest published N.x.y release (no prerelease) tagged in the
       git repository DIR, without the leading `v`; print nothing if none.
@@ -958,11 +962,49 @@ string newestRelease(string[] tags, string major)
     return format("%s.%s.%s", best[0], best[1], best[2]);
 }
 
+// ---------------------------------------------------------------- suppressions
+
+/// Default suppressions file, relative to the repository root.
+enum suppressionsFile = "api-compat-suppressions.txt";
+
+/// Parse a suppressions file: one break line per entry, exactly as the
+/// checker prints it (`BREAK <path>: <what>`), optionally with a trailing
+/// ` [<target>]`. Blank lines and lines starting with `#` are ignored.
+string[] parseSuppressions(string text)
+{
+    string[] out_;
+    foreach (l; text.splitLines)
+    {
+        const t = l.strip;
+        if (t.length && !t.startsWith("#"))
+            out_ ~= t;
+    }
+    return out_;
+}
+
+/// Split `breaks` into those not covered by `suppressions` and those that are.
+/// An entry without a target tag also covers the same break on every target.
+void applySuppressions(string[] breaks, string[] suppressions,
+    out string[] remaining, out string[] approved)
+{
+    foreach (b; breaks)
+    {
+        auto untagged = b;
+        auto c = matchFirst(b, ctRegex!`^(.*) \[[^\]]+\]$`);
+        if (!c.empty)
+            untagged = c[1];
+        if (suppressions.canFind(b) || suppressions.canFind(untagged))
+            approved ~= b;
+        else
+            remaining ~= b;
+    }
+}
+
 // ---------------------------------------------------------------- main
 
 int main(string[] args)
 {
-    string baselineDir, repo = ".", major, compiler = "ldc2";
+    string baselineDir, repo = ".", major, compiler = "ldc2", suppressPath;
     bool dump;
     for (size_t i = 1; i < args.length; i++)
     {
@@ -979,6 +1021,7 @@ int main(string[] args)
         case "--repo": repo = next(); break;
         case "--print-baseline-major": major = next(); break;
         case "--compiler": compiler = next(); break;
+        case "--suppressions": suppressPath = next(); break;
         case "--dump": dump = true; break;
         default:
             stderr.writeln("api-compat: unknown argument ", args[i]);
@@ -1009,7 +1052,18 @@ int main(string[] args)
             stderr.writeln("api-compat: need --baseline-dir, --print-baseline-major or --dump");
             return 2;
         }
-        auto breaks = compareTargets(baselineDir, repo, compiler);
+        string[] suppressions;
+        const sp = suppressPath.length ? suppressPath : buildPath(repo, suppressionsFile);
+        if (exists(sp))
+            suppressions = parseSuppressions(readText(sp));
+        else if (suppressPath.length)
+            throw new Exception("suppressions file not found: " ~ suppressPath);
+        string[] breaks, approved;
+        applySuppressions(compareTargets(baselineDir, repo, compiler), suppressions, breaks, approved);
+        foreach (b; approved)
+            writeln("APPROVED ", b);
+        if (approved.length)
+            writeln(format("%s approved break(s) listed in %s.", approved.length, sp));
         foreach (b; breaks)
             writeln(b);
         if (breaks.length)
@@ -1359,4 +1413,27 @@ unittest // static -> instance breaks; instance -> static breaks only overriders
             q{ interface I { static I make() { return null; } } }), "camunda.t.I.make: function overload"));
     assert(diff(q{ struct S { static S make() { return S.init; } } },
             q{ struct S { static S make() { return S.init; } } }) == []);
+}
+
+unittest // suppressions approve listed breaks only, on any target if untagged
+{
+    auto sup = parseSuppressions("# comment\n\n  BREAK camunda.t.f: function removed  \nBREAK camunda.t.g: x [x86_64-windows-msvc]\n");
+    assert(sup == ["BREAK camunda.t.f: function removed", "BREAK camunda.t.g: x [x86_64-windows-msvc]"]);
+    string[] rem, ok;
+    applySuppressions([
+        "BREAK camunda.t.f: function removed",
+        "BREAK camunda.t.f: function removed [x86_64-windows-msvc]",
+        "BREAK camunda.t.g: x",
+        "BREAK camunda.t.g: x [x86_64-windows-msvc]",
+        "BREAK camunda.t.h: function removed",
+    ], sup, rem, ok);
+    assert(rem == ["BREAK camunda.t.g: x", "BREAK camunda.t.h: function removed"], rem.join("\n"));
+    assert(ok.length == 3);
+}
+
+unittest // a response field made optional/nullable is a break
+{
+    auto b = diff(q{ import std.typecons : Nullable; struct R { string id; } },
+        q{ import std.typecons : Nullable; struct R { Nullable!string id; } });
+    assert(has(b, "camunda.t.R.id"), b.join("\n"));
 }
