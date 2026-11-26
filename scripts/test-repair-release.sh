@@ -147,9 +147,13 @@ STUB
   # the harness pushes HEAD:main and later checks out `main` by name, so an
   # ambient default of `master` would otherwise make `make check` fail for the
   # wrong reason.
-  git init -q --bare "${FIXTURE}/remote.git"
-  git init -q -b main "${FIXTURE}/work"
+  # Fail closed: if init fails, `git config` below would otherwise write to
+  # whichever repository encloses the fixture (possibly the real clone).
+  git init -q --bare "${FIXTURE}/remote.git" || exit 2
+  git init -q -b main "${FIXTURE}/work" || exit 2
   cd "${FIXTURE}/work" || exit 2
+  [[ "$(git rev-parse --show-toplevel 2>/dev/null)" == "$(pwd -P)" ]] \
+    || { echo "fixture work tree is not its own repository" >&2; exit 2; }
   git config user.name test
   git config user.email test@example.com
   git remote add origin "${FIXTURE}/remote.git"
