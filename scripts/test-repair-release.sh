@@ -15,6 +15,53 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${REPO_ROOT}/scripts/repair-release.sh"
 
+# --- safety ------------------------------------------------------------------
+#
+# The harness creates commits and pushes. It must never do so outside its
+# scratch fixture (a failed mktemp once made it push empty commits to the real
+# origin). Everything below fails closed.
+
+# Scratch root: respect TMPDIR; fall back to ${REPO_ROOT}/.tmp (gitignored)
+# when the system temp dir is not writable (sandboxes). The fallback can be
+# overridden for the regression test.
+FALLBACK_TMP="${REPAIR_TEST_FALLBACK_TMP:-${REPO_ROOT}/.tmp}"
+
+make_scratch_dir() {
+  local dir=""
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/repair-release-test.XXXXXX" 2>/dev/null)" || dir=""
+  if [[ -z "${dir}" || ! -d "${dir}" ]]; then
+    mkdir -p "${FALLBACK_TMP}" 2>/dev/null || true
+    dir="$(mktemp -d "${FALLBACK_TMP}/repair-release-test.XXXXXX" 2>/dev/null)" || dir=""
+  fi
+  [[ -n "${dir}" && -d "${dir}" ]] || return 1
+  # Canonical path so prefix checks against git's resolved paths are reliable.
+  (cd "${dir}" && pwd -P)
+}
+
+# Abort the whole run unless the current work tree and its origin both live
+# under ${FIXTURE}.
+assert_in_fixture() {
+  local top origin
+  if [[ -z "${FIXTURE:-}" || ! -d "${FIXTURE}" ]]; then
+    echo "FATAL: no fixture directory; refusing to mutate git state" >&2
+    exit 2
+  fi
+  top="$(command git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  origin="$(command git remote get-url origin 2>/dev/null)" || origin=""
+  if [[ "${top}" != "${FIXTURE}"/* || "${origin}" != "${FIXTURE}"/* ]]; then
+    echo "FATAL: git work tree '${top}' / origin '${origin}' outside fixture '${FIXTURE}'; aborting" >&2
+    exit 2
+  fi
+}
+
+# Every mutating git call in this harness goes through this guard.
+git() {
+  case "${1:-}" in
+    commit | push | tag | notes) assert_in_fixture ;;
+  esac
+  command git "$@"
+}
+
 pass=0
 fail=0
 declare -a failures=()
@@ -38,7 +85,12 @@ setup_fixture() {
   # $1: version (e.g. 11.0.0-alpha.5 or 10.2.1)
   # $2: optional heading level for the version's CHANGELOG section (default "#";
   #     pass "##" for a stable patch release, whose notes sit one level deeper).
-  FIXTURE="$(mktemp -d)"
+  FIXTURE="$(make_scratch_dir)" || FIXTURE=""
+  if [[ -z "${FIXTURE}" || ! -d "${FIXTURE}" ]]; then
+    echo "FATAL: could not create a scratch fixture directory (TMPDIR=${TMPDIR:-unset}, fallback=${FALLBACK_TMP})" >&2
+    exit 2
+  fi
+  export REPAIR_RELEASE_TEST_FIXTURE="${FIXTURE}"
   local version="$1"
   local heading="${2:-#}"
   TAG="v${version}"
@@ -73,7 +125,7 @@ STUB
   # wrong reason.
   git init -q --bare "${FIXTURE}/remote.git"
   git init -q -b main "${FIXTURE}/work"
-  cd "${FIXTURE}/work" || return 1
+  cd "${FIXTURE}/work" || exit 2
   git config user.name test
   git config user.email test@example.com
   git remote add origin "${FIXTURE}/remote.git"
@@ -98,7 +150,7 @@ EOF
 }
 
 teardown_fixture() {
-  cd "${REPO_ROOT}" || return
+  cd "${REPO_ROOT}" || exit 2
   [[ -n "${FIXTURE:-}" && -d "${FIXTURE}" ]] && rm -rf "${FIXTURE}"
   FIXTURE=""
 }
@@ -108,7 +160,7 @@ run_repair() {
   local branch="$1"
   shift
   (
-    cd "${FIXTURE}/work" || return 1
+    cd "${FIXTURE}/work" || exit 2
     GITHUB_REF_NAME="${branch}" GITHUB_REPOSITORY="camunda/orchestration-cluster-api-dlang" \
       bash "${SCRIPT}" "$@"
   )
@@ -213,7 +265,7 @@ test_note_push_retried_until_success() {
   # Wrap git so the first push of the note ref fails.
   mkdir -p "${FIXTURE}/gitbin"
   local real_git
-  real_git="$(command -v git)"
+  real_git="$(type -P git)"
   cat > "${FIXTURE}/gitbin/git" <<STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "push" && "\$*" == *"refs/notes/"* ]]; then
@@ -435,7 +487,26 @@ test_latest_reconciled_when_stable_release_already_exists() {
   teardown_fixture
 }
 
+test_fails_closed_when_no_temp_dir() {
+  local name="no writable temp dir -> harness exits non-zero, enclosing repo untouched"
+  local before after rc
+  before="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
+  REPAIR_TEST_NESTED=1 TMPDIR=/nonexistent/unwritable \
+    REPAIR_TEST_FALLBACK_TMP=/nonexistent/unwritable \
+    bash "${BASH_SOURCE[0]}" >/dev/null 2>&1
+  rc=$?
+  after="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
+  if [[ "${rc}" != "0" && "${before}" == "${after}" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (rc=${rc} before=${before} after=${after})"
+  fi
+}
+
 main() {
+  if [[ -z "${REPAIR_TEST_NESTED:-}" ]]; then
+    test_fails_closed_when_no_temp_dir
+  fi
   test_release_created_when_only_tag_and_note_present
   test_note_and_release_created_main_alpha
   test_note_and_release_created_stable_latest

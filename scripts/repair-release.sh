@@ -168,6 +168,20 @@ log "branch '${BRANCH}' releases on channel '${CHANNEL}'"
 
 # --- 4. Recreate the git note when missing ------------------------------------
 
+# Test mode: when the harness sets REPAIR_RELEASE_TEST_FIXTURE, refuse to
+# mutate anything unless the clone and its origin both live under the fixture.
+# Defence in depth so a broken fixture can never write to a real clone/origin.
+assert_test_fixture() {
+  local fixture="${REPAIR_RELEASE_TEST_FIXTURE:-}"
+  [[ -z "${fixture}" ]] && return 0
+  local top origin
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "test mode: not in a git work tree"
+  origin="$(git remote get-url origin 2>/dev/null)" || die "test mode: no origin remote"
+  [[ "${top}" == "${fixture}"/* ]] || die "test mode: work tree ${top} is outside fixture ${fixture}"
+  [[ "${origin}" == "${fixture}"/* ]] || die "test mode: origin ${origin} is outside fixture ${fixture}"
+}
+assert_test_fixture
+
 NOTE_REF="refs/notes/semantic-release-${TAG}"
 repaired=()
 

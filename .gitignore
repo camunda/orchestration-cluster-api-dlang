@@ -25,3 +25,4 @@ package-lock.json
 docs-md/
 /camunda-orchestration-sdk-runtime*
 /camunda-orchestration-sdk-openapi*
+/.tmp/
