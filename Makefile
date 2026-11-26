@@ -53,7 +53,7 @@ lint:
 # It can't link or run: `make check-windows` does that on a real runner.
 WINDOWS_DFLAGS = -mtriple=x86_64-windows-msvc -o- -unittest -preview=dip1000 -preview=nosharedaccess
 typecheck-windows:
-	ldc2 $(WINDOWS_DFLAGS) -Isource -Iruntime/source -Iopenapi/source \
+	ldc2 $(WINDOWS_DFLAGS) -Isource -Iruntime/source -Iopenapi/source -Jtests/contract-traces \
 		$$(find source runtime/source -name '*.d')
 	ldc2 $(WINDOWS_DFLAGS) -Iruntime/source -Iopenapi/source $$(find openapi/source -name '*.d')
 

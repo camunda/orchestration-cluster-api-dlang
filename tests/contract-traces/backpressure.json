@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "machine": "backpressure",
+  "cases": [
+    {
+      "name": "halving-down-to-min",
+      "initial": { "minLimit": 3, "maxLimit": 32, "recoveryWindow": 4 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 32, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 503 }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 8, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 503 }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 3, "maxLimit": 32, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 4 } }
+      ]
+    },
+    {
+      "name": "additive-recovery-per-window",
+      "initial": { "minLimit": 1, "maxLimit": 6, "recoveryWindow": 3 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 6, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 3, "healthyStreak": 1, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 3, "healthyStreak": 2, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 4, "healthyStreak": 1, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 4, "healthyStreak": 2, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 5, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 6, "currentLimit": 5, "healthyStreak": 1, "recoveryWindow": 3 } }
+      ]
+    },
+    {
+      "name": "streak-reset-on-backpressure",
+      "initial": { "minLimit": 1, "maxLimit": 10, "recoveryWindow": 4 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 10, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 503 }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 5, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 5, "healthyStreak": 1, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 5, "healthyStreak": 2, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 5, "healthyStreak": 3, "recoveryWindow": 4 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 2, "healthyStreak": 0, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 2, "healthyStreak": 1, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 2, "healthyStreak": 2, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 2, "healthyStreak": 3, "recoveryWindow": 4 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 10, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 4 } }
+      ]
+    },
+    {
+      "name": "ceiling-clamp-at-max",
+      "initial": { "minLimit": 1, "maxLimit": 4, "recoveryWindow": 2 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 2 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 2, "healthyStreak": 0, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 2, "healthyStreak": 1, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 3, "healthyStreak": 1, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 4, "healthyStreak": 1, "recoveryWindow": 2 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 4, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 2 } }
+      ]
+    },
+    {
+      "name": "window-of-one",
+      "initial": { "minLimit": 2, "maxLimit": 5, "recoveryWindow": 1 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 5, "healthyStreak": 0, "recoveryWindow": 1 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 2, "healthyStreak": 0, "recoveryWindow": 1 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 3, "healthyStreak": 0, "recoveryWindow": 1 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 4, "healthyStreak": 0, "recoveryWindow": 1 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 5, "healthyStreak": 0, "recoveryWindow": 1 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 2, "maxLimit": 5, "currentLimit": 5, "healthyStreak": 0, "recoveryWindow": 1 } }
+      ]
+    },
+    {
+      "name": "min-equals-max",
+      "initial": { "minLimit": 7, "maxLimit": 7, "recoveryWindow": 3 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 1, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 2, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 0, "recoveryWindow": 3 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 7, "maxLimit": 7, "currentLimit": 7, "healthyStreak": 1, "recoveryWindow": 3 } }
+      ]
+    },
+    {
+      "name": "defaults",
+      "initial": { "minLimit": 1, "maxLimit": 32, "recoveryWindow": 16 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 32, "healthyStreak": 0, "recoveryWindow": 16 } },
+        { "event": { "type": "backpressure", "status": 429 }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 0, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 1, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 2, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 3, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 4, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 5, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 6, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 7, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 8, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 9, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 10, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 11, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 12, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 13, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 14, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 16, "healthyStreak": 15, "recoveryWindow": 16 } },
+        { "event": { "type": "healthy" }, "output": {}, "state": { "minLimit": 1, "maxLimit": 32, "currentLimit": 17, "healthyStreak": 0, "recoveryWindow": 16 } }
+      ]
+    }
+  ]
+}
+

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "machine": "slots",
+  "cases": [
+    {
+      "name": "fresh-batch-then-reserve-release",
+      "initial": { "capacity": 4 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 4, "isDrained": false }, "state": { "capacity": 4, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "requestedBatchSize", "permitted": 10 }, "output": { "requestedBatchSize": 4 }, "state": { "capacity": 4, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "requestedBatchSize", "permitted": 3 }, "output": { "requestedBatchSize": 3 }, "state": { "capacity": 4, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "reserve", "count": 3 }, "output": { "taken": 3 }, "state": { "capacity": 4, "inFlight": 3, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 1, "isDrained": false }, "state": { "capacity": 4, "inFlight": 3, "stopped": false } },
+        { "event": { "type": "requestedBatchSize", "permitted": 10 }, "output": { "requestedBatchSize": 1 }, "state": { "capacity": 4, "inFlight": 3, "stopped": false } },
+        { "event": { "type": "release", "count": 2 }, "output": {}, "state": { "capacity": 4, "inFlight": 1, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 3, "isDrained": false }, "state": { "capacity": 4, "inFlight": 1, "stopped": false } },
+        { "event": { "type": "release", "count": 1 }, "output": {}, "state": { "capacity": 4, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 4, "isDrained": false }, "state": { "capacity": 4, "inFlight": 0, "stopped": false } }
+      ]
+    },
+    {
+      "name": "over-activation-saturates-at-capacity",
+      "initial": { "capacity": 4 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 4, "isDrained": false }, "state": { "capacity": 4, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "reserve", "count": 3 }, "output": { "taken": 3 }, "state": { "capacity": 4, "inFlight": 3, "stopped": false } },
+        { "event": { "type": "reserve", "count": 5 }, "output": { "taken": 1 }, "state": { "capacity": 4, "inFlight": 4, "stopped": false } },
+        { "event": { "type": "requestedBatchSize", "permitted": 10 }, "output": { "requestedBatchSize": 0 }, "state": { "capacity": 4, "inFlight": 4, "stopped": false } },
+        { "event": { "type": "reserve", "count": 1 }, "output": { "taken": 0 }, "state": { "capacity": 4, "inFlight": 4, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 0, "isDrained": false }, "state": { "capacity": 4, "inFlight": 4, "stopped": false } }
+      ]
+    },
+    {
+      "name": "release-underflow-clamps-to-zero",
+      "initial": { "capacity": 8 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 8, "isDrained": false }, "state": { "capacity": 8, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "reserve", "count": 2 }, "output": { "taken": 2 }, "state": { "capacity": 8, "inFlight": 2, "stopped": false } },
+        { "event": { "type": "release", "count": 5 }, "output": {}, "state": { "capacity": 8, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 8, "isDrained": false }, "state": { "capacity": 8, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "release", "count": 1 }, "output": {}, "state": { "capacity": 8, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 8, "isDrained": false }, "state": { "capacity": 8, "inFlight": 0, "stopped": false } }
+      ]
+    },
+    {
+      "name": "stopped-is-noop-for-reserve-and-batch",
+      "initial": { "capacity": 5 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 5, "isDrained": false }, "state": { "capacity": 5, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "reserve", "count": 2 }, "output": { "taken": 2 }, "state": { "capacity": 5, "inFlight": 2, "stopped": false } },
+        { "event": { "type": "markStopped" }, "output": {}, "state": { "capacity": 5, "inFlight": 2, "stopped": true } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 3, "isDrained": false }, "state": { "capacity": 5, "inFlight": 2, "stopped": true } },
+        { "event": { "type": "requestedBatchSize", "permitted": 5 }, "output": { "requestedBatchSize": 0 }, "state": { "capacity": 5, "inFlight": 2, "stopped": true } },
+        { "event": { "type": "reserve", "count": 3 }, "output": { "taken": 0 }, "state": { "capacity": 5, "inFlight": 2, "stopped": true } },
+        { "event": { "type": "release", "count": 1 }, "output": {}, "state": { "capacity": 5, "inFlight": 1, "stopped": true } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 4, "isDrained": false }, "state": { "capacity": 5, "inFlight": 1, "stopped": true } },
+        { "event": { "type": "release", "count": 1 }, "output": {}, "state": { "capacity": 5, "inFlight": 0, "stopped": true } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 5, "isDrained": true }, "state": { "capacity": 5, "inFlight": 0, "stopped": true } },
+        { "event": { "type": "markStopped" }, "output": {}, "state": { "capacity": 5, "inFlight": 0, "stopped": true } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 5, "isDrained": true }, "state": { "capacity": 5, "inFlight": 0, "stopped": true } }
+      ]
+    },
+    {
+      "name": "stopped-when-empty-is-drained",
+      "initial": { "capacity": 1 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 1, "isDrained": false }, "state": { "capacity": 1, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "markStopped" }, "output": {}, "state": { "capacity": 1, "inFlight": 0, "stopped": true } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 1, "isDrained": true }, "state": { "capacity": 1, "inFlight": 0, "stopped": true } }
+      ]
+    },
+    {
+      "name": "max-capacity",
+      "initial": { "capacity": 10000 },
+      "steps": [
+        { "event": { "type": "observe" }, "output": { "freeSlots": 10000, "isDrained": false }, "state": { "capacity": 10000, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "requestedBatchSize", "permitted": 10000 }, "output": { "requestedBatchSize": 10000 }, "state": { "capacity": 10000, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "reserve", "count": 10000 }, "output": { "taken": 10000 }, "state": { "capacity": 10000, "inFlight": 10000, "stopped": false } },
+        { "event": { "type": "reserve", "count": 10000 }, "output": { "taken": 0 }, "state": { "capacity": 10000, "inFlight": 10000, "stopped": false } },
+        { "event": { "type": "release", "count": 10000 }, "output": {}, "state": { "capacity": 10000, "inFlight": 0, "stopped": false } },
+        { "event": { "type": "observe" }, "output": { "freeSlots": 10000, "isDrained": false }, "state": { "capacity": 10000, "inFlight": 0, "stopped": false } }
+      ]
+    }
+  ]
+}
+

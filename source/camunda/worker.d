@@ -157,6 +157,9 @@ struct WorkerStats
     long failed;             /// failJob calls that succeeded (incl. handler exceptions)
     long errored;            /// throwJobError calls that succeeded
     long left;               /// jobs the handler chose to leave
+    /// Jobs the server returned beyond the free slots. They are dropped
+    /// without a command and time out on the engine.
+    long overActivated;
     long handlerExceptions;  /// handler threw; the job was failed with retries - 1
     long actionFailures;     /// a complete/fail/error call itself failed
     long activationFailures; /// activation requests that failed (then backed off)
@@ -181,7 +184,7 @@ final class WorkerControl
     // watermark: every generation up to it stays abandoned, so a second
     // timed-out run does not revive the first one's handlers.
     private shared long runGen_, abandonedGen_;
-    private shared long activated, completed, failed, errored, left,
+    private shared long activated, completed, failed, errored, left, overActivated,
         handlerExceptions, actionFailures, activationFailures,
         handlerAborts, unaccounted, abandonedActivations;
     private shared int poolLive, poolPeak;
@@ -244,6 +247,7 @@ final class WorkerControl
         s.failed = atomicLoad(failed);
         s.errored = atomicLoad(errored);
         s.left = atomicLoad(left);
+        s.overActivated = atomicLoad(overActivated);
         s.handlerExceptions = atomicLoad(handlerExceptions);
         s.actionFailures = atomicLoad(actionFailures);
         s.activationFailures = atomicLoad(activationFailures);
@@ -382,6 +386,13 @@ final class JobWorker
         this.client = client;
         WorkerDefaults builtIn;
         config.applyDefaults(builtIn);
+        import camunda.contract : maxSlots;
+        import std.conv : text;
+        // The slot contract caps capacity at maxSlots; reject a larger
+        // setting instead of silently activating fewer jobs.
+        if (config.maxJobsActive < 1 || config.maxJobsActive > maxSlots)
+            throw new ConfigException(text("JobWorkerConfig.maxJobsActive must be in 1 .. ", maxSlots,
+                ", got ", config.maxJobsActive));
         this.config = config;
         this.ctl = new WorkerControl;
     }
@@ -424,6 +435,8 @@ final class JobWorker
     void run(Ctx)(JobAction function(Job, Ctx) @safe handler, Ctx context)
         if (isSendable!Ctx)
     {
+        import camunda.contract : BackpressureState, RpcKind, WorkerSlotState,
+            isBackpressureStatus, retryDelayMs, usesBackpressureGate;
         import camunda.retry : backoffDelayMs, isRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
@@ -441,7 +454,21 @@ final class JobWorker
         auto transport = client.transport;
         const retry = transport.config.retry;
         const maxAttempts = max(1, retry.maxAttempts);
-        const cap = max(1, config.maxJobsActive);
+        // Slot accounting and the activation AIMD limit follow the
+        // SPARK-proved contract (camunda.contract): held jobs never exceed
+        // the capacity, a release never underflows, and the batch asked for
+        // is min(free slots, AIMD limit).
+        auto slots = WorkerSlotState.make(max(1, config.maxJobsActive));
+        const cap = slots.capacity;
+        auto aimd = BackpressureState.make(1, cap, 16);
+        // LEGACY is observe-only (as in BackpressureManager): the batch
+        // limit stays at the capacity; the activation backoff still applies.
+        import camunda.config : BackpressureProfile;
+        const adaptive = transport.config.backpressureProfile != BackpressureProfile.legacy;
+        // Only activation is gated; job commands drain the broker.
+        static assert(usesBackpressureGate(RpcKind.activate));
+        static assert(!usesBackpressureGate(RpcKind.complete) && !usesBackpressureGate(RpcKind.fail)
+            && !usesBackpressureGate(RpcKind.throwError));
         // Activate again once 30% of the capacity is free, as the Java
         // client does: no tiny one-job activations under load.
         const threshold = max(1, (cap * 3 + 9) / 10);
@@ -477,11 +504,10 @@ final class JobWorker
         const idleTimeout = config.effectiveIdleTimeoutMs;
         const shutdownTimeout = config.effectiveShutdownTimeoutMs;
         long stopDeadlineMs = long.max; // set when stopping starts
-        int held;  // activated and not yet completed, failed, errored or left
         int busy;  // handed to a handler that has not returned yet
         bool activating;
         long nextActivationMs; // no activation before this (backoff, poll interval)
-        long backoff;
+        int failedActivations; // in a row, for the backoff
         Exception fatal;
         Pending[long] inFlight; // sent commands, by tag
         Pending[long] retrying; // commands waiting to be sent again
@@ -495,7 +521,7 @@ final class JobWorker
         }
         void settled(JobAction.Kind kind)
         {
-            held--;
+            slots.releaseSlots(1);
             final switch (kind)
             {
             case JobAction.Kind.complete: ctl.count!"completed"; break;
@@ -513,21 +539,23 @@ final class JobWorker
             {
                 inFlight.remove(tag);
                 ctl.count!"actionFailures";
-                held--;
+                slots.releaseSlots(1);
             }
         }
-        void activationFailed()
+        void activationFailed(Exception e = null)
         {
             ctl.count!"activationFailures";
-            backoff = backoff ? min(backoffMaxMs, backoff * 8 / 5) : backoffMinMs;
-            nextActivationMs = clock.nowMs + backoff;
+            if (auto api = cast(ApiException) e)
+                if (adaptive && isBackpressureStatus(api.status)) aimd.onBackpressure();
+            if (failedActivations < 100) failedActivations++;
+            nextActivationMs = clock.nowMs + retryDelayMs(failedActivations, backoffMinMs, backoffMaxMs);
         }
         void activate()
         {
             try
             {
                 const timeout = max(30_000, config.requestTimeoutMs + 10_000);
-                transport.submitJson("POST", "/jobs/activation", activationBody(cap - held), sink,
+                transport.submitJson("POST", "/jobs/activation", activationBody(slots.requestedBatchSize(aimd.currentLimit)), sink,
                     activationTag, true, timeout);
                 activating = true;
             }
@@ -547,11 +575,12 @@ final class JobWorker
             catch (Exception e)
             {
                 transport.recordOutcome(e); // activations are not retried
-                activationFailed();
+                activationFailed(e);
                 return;
             }
             transport.recordOutcome(null);
-            backoff = 0;
+            failedActivations = 0;
+            if (adaptive) aimd.onHealthy();
             ctl.count!"activated"(jobs.length);
             if (config.withLease)
                 foreach (j; jobs)
@@ -566,9 +595,17 @@ final class JobWorker
                         return;
                     }
                 }
+            // Over-activation (more jobs than free slots) saturates: the
+            // excess is left, and the engine hands it out again after its
+            // timeout.
+            const taken = slots.reserveSlots(jobs.length);
+            if (taken < jobs.length)
+            {
+                ctl.count!"overActivated"(jobs.length - taken);
+                jobs = jobs[0 .. taken];
+            }
             foreach (j; jobs)
             {
-                held++;
                 busy++;
                 // The parsed response is dropped below; each job subtree
                 // goes to exactly one handler thread.
@@ -600,7 +637,7 @@ final class JobWorker
                 if (ev.command.kind == JobAction.Kind.leave || !ev.command.path.length)
                 {
                     if (ev.command.kind == JobAction.Kind.leave) settled(JobAction.Kind.leave);
-                    else held--; // the command could not even be built (counted by the handler)
+                    else slots.releaseSlots(1); // the command could not even be built (counted by the handler)
                     return;
                 }
                 send(nextTag++, Pending(ev.command));
@@ -634,7 +671,7 @@ final class JobWorker
                     {
                         transport.recordOutcome(e);
                         ctl.count!"actionFailures";
-                        held--;
+                        slots.releaseSlots(1);
                     }
                 }
                 return;
@@ -675,12 +712,12 @@ final class JobWorker
                 lastFullMs = now;
             }
             const stopping = ctl.stopping || fatal !is null;
-            if (stopping && !activating && held == 0) break;
+            if (stopping && !activating && slots.inFlight == 0) break;
             if (stopping && stopDeadlineMs == long.max) stopDeadlineMs = now + shutdownTimeout;
             if (stopping && now >= stopDeadlineMs)
             {
                 // Bounded drain: report what is still held, do not hang.
-                if (held > 0) ctl.count!"unaccounted"(held);
+                if (slots.inFlight > 0) ctl.count!"unaccounted"(slots.inFlight);
                 // An activation long poll may outlast the timeout; the jobs
                 // it returns are not seen here, so record the request.
                 if (activating) ctl.count!"abandonedActivations";
@@ -692,7 +729,7 @@ final class JobWorker
             }
             // Activate when enough capacity is free, unless queued jobs wait
             // for slots that retiring threads still hold.
-            const wanted = !stopping && !activating && cap - held >= threshold
+            const wanted = !stopping && !activating && slots.freeSlots >= threshold
                 && !(busy > live && retiring > 0);
             if (wanted && now >= nextActivationMs) activate();
 
@@ -1281,6 +1318,17 @@ unittest
     assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == min(32, 4 * totalCPUs));
 }
 
+// maxJobsActive outside the slot contract's 1 .. maxSlots is rejected, not clamped.
+unittest
+{
+    import std.exception : assertThrown;
+    import camunda.contract : maxSlots;
+    auto client = CamundaClient.fromEnv(["CAMUNDA_REST_ADDRESS": "http://127.0.0.1:1"]);
+    assert(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(maxSlots)).config.maxJobsActive == maxSlots);
+    assertThrown!ConfigException(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(maxSlots + 1)));
+    assertThrown!ConfigException(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(-1)));
+}
+
 version (unittest)
 {
     /// After `done`, wait (up to 5 s) for the pool to shrink back to its
@@ -1763,4 +1811,283 @@ private
         }
         ctl.get.stop();
     }
+}
+
+version (unittest)
+{
+    /// A fake job API that answers activations from `script`, one entry
+    /// per request: "429" or "503" answer with that status, a number N
+    /// answers with N jobs whatever was asked for (so it can over-activate);
+    /// once the script is used up, activations get no jobs. It logs each
+    /// activation as "A<maxJobsToActivate>@<ms>" (or "A...!<status>" when
+    /// throttled) and each completion as "C<jobKey>@<ms>". When the script
+    /// is used up and `settle` completions arrived, the log goes out on
+    /// `done`, entries separated by spaces (with `finalAsk` > 0, only once
+    /// a later activation asked for that many jobs). It serves until `quit`.
+    private void scriptedJobServer(immutable(string)[] script, int settle, int finalAsk, Chan!int port, Chan!string done, Chan!int quit)
+    {
+        import camunda.safeio : monoNowMs;
+        import std.array : join;
+        import std.conv : to;
+        import std.format : format;
+        import std.socket : TcpSocket, InternetAddress, Socket, SocketSet, SocketOption, SocketOptionLevel;
+        import std.string : indexOf, strip, toLower;
+        import std.algorithm.searching : canFind, startsWith, findSplitAfter, findSplitBefore;
+        import core.time : msecs;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(64);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        Socket[] conns;
+        string[] pending;
+        string[] log;
+        size_t next;
+        int handedOut, completed;
+        bool reported, askedFinal = finalAsk == 0;
+        const t0 = monoNowMs;
+        auto set = new SocketSet();
+        int q;
+        while (!quit.tryTake(q))
+        {
+            set.reset();
+            set.add(listener);
+            foreach (c; conns) set.add(c);
+            if (Socket.select(set, null, null, 20.msecs) <= 0) continue;
+            if (set.isSet(listener))
+            {
+                conns ~= listener.accept();
+                pending ~= "";
+            }
+            foreach (i, c; conns)
+            {
+                if (!set.isSet(c)) continue;
+                ubyte[8192] chunk;
+                const n = c.receive(chunk[]);
+                if (n <= 0) continue;
+                pending[i] ~= cast(const(char)[]) chunk[0 .. n];
+                for (;;)
+                {
+                    const end = pending[i].indexOf("\r\n\r\n");
+                    if (end < 0) break;
+                    const head = pending[i][0 .. end + 4];
+                    size_t bodyLen;
+                    const cl = head.toLower.indexOf("\r\ncontent-length:");
+                    if (cl >= 0)
+                    {
+                        auto rest = head[cl + 17 .. $];
+                        bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                    }
+                    if (pending[i].length < head.length + bodyLen) break;
+                    const body_ = pending[i][head.length .. head.length + bodyLen];
+                    pending[i] = pending[i][head.length + bodyLen .. $];
+                    const at = monoNowMs - t0;
+                    string status = "200 OK", reply = "{}";
+                    if (head.startsWith("POST /v2/jobs/activation "))
+                    {
+                        const want = parseJSON(body_)["maxJobsToActivate"].integer;
+                        if (next >= script.length && want == finalAsk) askedFinal = true;
+                        const step = next < script.length ? script[next++] : "0";
+                        if (step == "429" || step == "503")
+                        {
+                            status = step == "429" ? "429 Too Many Requests" : "503 Service Unavailable";
+                            reply = `{"title":"throttled","status":` ~ step ~ `}`;
+                            log ~= format("A%d@%d!%s", want, at, step);
+                        }
+                        else
+                        {
+                            string[] jobs;
+                            foreach (_; 0 .. step.to!int)
+                                jobs ~= format(`{"jobKey":"%d","type":"t","retries":3,"variables":{}}`, ++handedOut);
+                            reply = `{"jobs":[` ~ jobs.join(",") ~ `]}`;
+                            log ~= format("A%d@%d", want, at);
+                        }
+                    }
+                    else if (head.canFind("/completion "))
+                    {
+                        completed++;
+                        auto key = head.findSplitAfter("/jobs/")[1].findSplitBefore("/")[0];
+                        log ~= format("C%s@%d", key, at);
+                    }
+                    else log ~= "X" ~ head[0 .. head.indexOf(" HTTP")].idup;
+                    c.send(format("HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+                        status, reply.length, reply));
+                    if (!reported && next >= script.length && completed >= settle && askedFinal)
+                    {
+                        reported = true;
+                        done.put(log.join(" "));
+                    }
+                }
+            }
+        }
+        foreach (c; conns) c.close();
+    }
+
+    private JobAction pausingHandler(Job job, long pauseMs)
+    {
+        import camunda.safeio : sleepMs;
+        sleepMs(pauseMs);
+        return JobAction.complete();
+    }
+
+    private void stopOnLog(Chan!string done, Chan!string relay, ThreadSafe!WorkerControl ctl)
+    {
+        string log;
+        // Bounded: a regression that never satisfies the script must fail
+        // the test, not hang `dub test`.
+        if (!done.takeFor(log, 20_000)) log = "TIMEOUT";
+        ctl.get.stop();
+        relay.put(log);
+    }
+
+    /// Run a worker of capacity `maxJobs` against `scriptedJobServer`;
+    /// return the server's log split into entries, and the worker's stats.
+    private string[] scriptedRun(immutable(string)[] script, int settle, int finalAsk, int maxJobs, long pauseMs,
+        out WorkerStats stats, string profile = "BALANCED")
+    {
+        import std.array : split;
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto done = Chan!string.make;
+        auto relay = Chan!string.make;
+        auto quit = Chan!int.make;
+        auto server = spawn(&scriptedJobServer, script, settle, finalAsk, port, done, quit);
+        scope (exit) { quit.put(1); server.join(); }
+        int p;
+        port.take(p);
+        auto client = CamundaClient.fromEnv([
+            "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+            "CAMUNDA_AUTH_STRATEGY": "NONE",
+            "CAMUNDA_SDK_BACKPRESSURE_PROFILE": profile,
+        ]);
+        auto worker = client.createJobWorker(
+            JobWorkerConfig.create("t").maxJobs(maxJobs).threads(maxJobs).shutdownTimeout(2_000));
+        worker.config.pollIntervalMs = 1;
+        auto stopper = spawn(&stopOnLog, done, relay, worker.control);
+        worker.run(&pausingHandler, pauseMs);
+        stopper.join();
+        string log;
+        relay.take(log);
+        stats = worker.stats;
+        assert(log != "TIMEOUT", "scripted server never completed its script");
+        return log.split(" ");
+    }
+
+    /// The activation entries of a `scriptedJobServer` log: [asked, ms, status].
+    private long[3][] activations(string[] log)
+    {
+        import std.algorithm.searching : findSplit;
+        import std.conv : to;
+        long[3][] r;
+        foreach (e; log)
+        {
+            if (!e.length || e[0] != 'A') continue;
+            auto a = e[1 .. $].findSplit("@");
+            auto b = a[2].findSplit("!");
+            r ~= [a[0].to!long, b[0].to!long, b[2].length ? b[2].to!long : 200];
+        }
+        return r;
+    }
+}
+
+// 429/503 on activation: each halves the batch asked for (AIMD) and backs
+// off exponentially; healthy activations raise it again by one per
+// recovery window, and a success resets the backoff.
+unittest
+{
+    import std.format : format;
+    immutable(string)[] script = ["429", "503", "429"];
+    foreach (_; 0 .. 16) script ~= "0";
+    script ~= ["429", "0"];
+    WorkerStats s;
+    auto log = scriptedRun(script, 0, 0, 8, 0, s);
+    auto a = activations(log);
+    assert(a.length >= script.length, format("%s", log));
+    // Asked for: 8, halved per throttle to 4, 2, then 1.
+    assert(a[0][0] == 8 && a[1][0] == 4 && a[2][0] == 2 && a[3][0] == 1, format("%s", log));
+    // Exponential delays after each throttle: >= 50, 100, 200 ms.
+    assert(a[1][1] - a[0][1] >= 50 && a[2][1] - a[1][1] >= 100 && a[3][1] - a[2][1] >= 200,
+        format("%s", log));
+    // 16 healthy activations (a[3] .. a[18]) recover the limit by one.
+    foreach (i; 4 .. 19) assert(a[i][0] == 1, format("%d: %s", i, log));
+    assert(a[19][0] == 2, format("%s", log));
+    // The throttle at a[19] halves it again and backs off from the base
+    // again: the earlier success reset the backoff (a 4th failure in a
+    // row would wait 400 ms).
+    assert(a[19][2] == 429 && a[20][0] == 1, format("%s", log));
+    // Compared with the 200 ms step measured in the same run rather than
+    // an absolute wall-clock bound: without the reset this wait would be
+    // 400 ms, twice that step.
+    const gap = a[20][1] - a[19][1];
+    assert(gap >= 50 && gap < a[3][1] - a[2][1], format("backoff not reset (%d ms): %s", gap, log));
+    assert(s.activationFailures == 4, format("%s", s));
+}
+
+// Activation backoff gates only activation: jobs already held complete
+// while the worker waits out a throttle.
+unittest
+{
+    import std.algorithm.searching : countUntil;
+    import std.format : format;
+    WorkerStats s;
+    // Handlers pause 150 ms, so both jobs are still running when the
+    // first throttle lands and settle while the worker waits out >= 750 ms
+    // of activation backoff (50+100+200+400) before the last throttle.
+    auto log = scriptedRun(["2", "429", "429", "429", "429", "429"], 2, 0, 4, 150, s);
+    auto a = activations(log);
+    assert(a.length >= 6 && a[1][2] == 429 && a[5][2] == 429, format("%s", log));
+    // Log position of the n-th activation (timestamps can tie).
+    long indexOf(size_t n)
+    {
+        foreach (i, e; log)
+            if (e.length && e[0] == 'A' && n-- == 0) return i;
+        return -1;
+    }
+    const firstThrottle = indexOf(1);
+    const lastThrottle = indexOf(5);
+    assert(firstThrottle > 0 && lastThrottle > firstThrottle, format("%s", log));
+    foreach (key; ["C1@", "C2@"])
+    {
+        const at = log.countUntil!(e => e.length >= key.length && e[0 .. key.length] == key);
+        assert(at > firstThrottle, format("%s settled before any backoff began: %s", key, log));
+        assert(at < lastThrottle, format("%s settled only after the backoff: %s", key, log));
+    }
+    assert(s.completed == 2 && s.actionFailures == 0, format("%s", s));
+}
+
+// Over-activation: the engine hands out more jobs than free slots. Only
+// the jobs that fit reach a handler; the excess gets no command, is
+// counted in overActivated, and no slot leaks (the worker activates its
+// full capacity again afterwards).
+unittest
+{
+    import std.algorithm.searching : canFind;
+    import std.format : format;
+    WorkerStats s;
+    auto log = scriptedRun(["6"], 4, 4, 4, 20, s);
+    auto a = activations(log);
+    bool settled(int k)
+    {
+        const key = format("C%d@", k);
+        return log.canFind!(e => e.length >= key.length && e[0 .. key.length] == key);
+    }
+    foreach (k; 1 .. 5) assert(settled(k), format("job %d not settled: %s", k, log));
+    assert(!settled(5) && !settled(6), format("excess job settled: %s", log));
+    assert(!log.canFind!(e => e.length && e[0] == 'X'), format("unexpected command: %s", log));
+    assert(s.activated == 6 && s.overActivated == 2 && s.completed == 4, format("%s", s));
+    assert(a[$ - 1][0] == 4, format("slots leaked: %s", log));
+}
+
+// LEGACY is observe-only: throttles back off activation but never shrink
+// the batch asked for.
+unittest
+{
+    import std.format : format;
+    WorkerStats s;
+    auto log = scriptedRun(["429", "503", "0"], 0, 0, 8, 0, s, "LEGACY");
+    auto a = activations(log);
+    assert(a.length >= 3, format("%s", log));
+    foreach (x; a) assert(x[0] == 8, format("LEGACY shrank the batch: %s", log));
+    assert(a[1][1] - a[0][1] >= 50, format("%s", log));
 }
