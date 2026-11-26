@@ -171,20 +171,30 @@ log "branch '${BRANCH}' releases on channel '${CHANNEL}'"
 # Test mode: when the harness sets REPAIR_RELEASE_TEST_FIXTURE, refuse to
 # mutate anything unless the clone and its origin both live under the fixture.
 # Defence in depth so a broken fixture can never write to a real clone/origin.
+# Succeeds only when $1 is an existing absolute directory whose physical path
+# (symlinks and '..' resolved) lies strictly under the physical directory $2.
+path_in_fixture() {
+  local p="$1" root="$2" phys
+  [[ "${p}" == /* ]] || return 1
+  phys="$(cd -- "${p}" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "${phys}" && "${phys}" == "${root}"/* ]]
+}
+
 assert_test_fixture() {
   local fixture="${REPAIR_RELEASE_TEST_FIXTURE:-}"
   [[ -z "${fixture}" ]] && return 0
   local top origin
+  fixture="$(cd -- "${fixture}" 2>/dev/null && pwd -P)" || die "test mode: fixture ${REPAIR_RELEASE_TEST_FIXTURE} does not resolve"
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "test mode: not in a git work tree"
   origin="$(git remote get-url origin 2>/dev/null)" || die "test mode: no origin remote"
-  [[ "${top}" == "${fixture}"/* ]] || die "test mode: work tree ${top} is outside fixture ${fixture}"
-  [[ "${origin}" == "${fixture}"/* ]] || die "test mode: origin ${origin} is outside fixture ${fixture}"
+  path_in_fixture "${top}" "${fixture}" || die "test mode: work tree ${top} is outside fixture ${fixture}"
+  path_in_fixture "${origin}" "${fixture}" || die "test mode: origin ${origin} is outside fixture ${fixture}"
   # Pushes may go elsewhere (pushurl, pushInsteadOf): check every push URL.
   local push_urls url
   push_urls="$(git remote get-url --push --all origin 2>/dev/null)" || push_urls=""
   [[ -n "${push_urls}" ]] || die "test mode: origin has no push URL"
   while IFS= read -r url; do
-    [[ "${url}" == "${fixture}"/* ]] || die "test mode: origin push URL ${url} is outside fixture ${fixture}"
+    path_in_fixture "${url}" "${fixture}" || die "test mode: origin push URL ${url} is outside fixture ${fixture}"
   done <<< "${push_urls}"
 }
 assert_test_fixture

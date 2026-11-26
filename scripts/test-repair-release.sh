@@ -40,15 +40,25 @@ make_scratch_dir() {
 
 # Abort the whole run unless the current work tree and its origin both live
 # under ${FIXTURE}.
+# Succeeds only when $1 is an existing absolute directory whose physical path
+# (symlinks and '..' resolved) lies strictly under the physical fixture $2.
+path_in_fixture() {
+  local p="$1" root="$2" phys
+  [[ "${p}" == /* ]] || return 1
+  phys="$(cd -- "${p}" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "${phys}" && "${phys}" == "${root}"/* ]]
+}
+
 assert_in_fixture() {
-  local top origin url
+  local top origin url root
   if [[ -z "${FIXTURE:-}" || ! -d "${FIXTURE}" ]]; then
     echo "FATAL: no fixture directory; refusing to mutate git state" >&2
     exit 2
   fi
+  root="$(cd -- "${FIXTURE}" && pwd -P)" || exit 2
   top="$(command git rev-parse --show-toplevel 2>/dev/null)" || top=""
   origin="$(command git remote get-url origin 2>/dev/null)" || origin=""
-  if [[ "${top}" != "${FIXTURE}"/* || "${origin}" != "${FIXTURE}"/* ]]; then
+  if ! path_in_fixture "${top}" "${root}" || ! path_in_fixture "${origin}" "${root}"; then
     echo "FATAL: git work tree '${top}' / origin '${origin}' outside fixture '${FIXTURE}'; aborting" >&2
     exit 2
   fi
@@ -61,7 +71,7 @@ assert_in_fixture() {
     exit 2
   fi
   while IFS= read -r url; do
-    if [[ "${url}" != "${FIXTURE}"/* ]]; then
+    if ! path_in_fixture "${url}" "${root}"; then
       echo "FATAL: origin push URL '${url}' outside fixture '${FIXTURE}'; aborting" >&2
       exit 2
     fi
@@ -547,6 +557,38 @@ test_pushurl_outside_fixture_refused() {
   rm -rf "${outside}"
 }
 
+test_pushurl_escape_via_dotdot_or_symlink_refused() {
+  local name="push URL escaping fixture via '..' or symlink -> refused, outside repo untouched"
+  local outside rc_dotdot rc_dotdot_guard rc_link rc_link_guard
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  # Lexically under ${FIXTURE}, physically outside it (both share a parent).
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/../$(basename "${outside}")/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_dotdot=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_dotdot_guard=$?
+  ln -s "${outside}" "${FIXTURE}/link"
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/link/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_link=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_link_guard=$?
+  if [[ "${rc_dotdot}" != "0" && "${rc_dotdot_guard}" == "2" && "${rc_link}" != "0" && "${rc_link_guard}" == "2" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (dotdot=${rc_dotdot}/${rc_dotdot_guard} symlink=${rc_link}/${rc_link_guard})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
+}
+
 main() {
   if [[ -z "${REPAIR_TEST_NESTED:-}" ]]; then
     test_fails_closed_when_no_temp_dir
@@ -567,6 +609,7 @@ main() {
   test_explicit_nontag_revision_fails_without_mutating_origin
   test_latest_reconciled_when_stable_release_already_exists
   test_pushurl_outside_fixture_refused
+  test_pushurl_escape_via_dotdot_or_symlink_refused
 
   echo
   echo "${pass} passed, ${fail} failed"
