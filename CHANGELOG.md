@@ -1,3 +1,10 @@
+## [10.4.1](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.4.0...v10.4.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* account for jobs when a handler thread dies and bound worker shutdown ([#69](https://github.com/camunda/orchestration-cluster-api-dlang/issues/69)) ([e603612](https://github.com/camunda/orchestration-cluster-api-dlang/commit/e603612d39892324a88babb499201d8e93d68567)), closes [#67](https://github.com/camunda/orchestration-cluster-api-dlang/issues/67)
+
 # [10.4.0](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v10.3.0...v10.4.0) (2026-11-25)
 
 
