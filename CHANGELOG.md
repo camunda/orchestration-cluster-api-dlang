@@ -1,3 +1,10 @@
+# [11.0.0-alpha.22](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.21...v11.0.0-alpha.22) (2026-11-26)
+
+
+### Features
+
+* **worker:** adopt the SPARK-proved JobWorker contract and replay its golden traces ([#73](https://github.com/camunda/orchestration-cluster-api-dlang/issues/73)) ([42d9d1f](https://github.com/camunda/orchestration-cluster-api-dlang/commit/42d9d1fec6a1a8810bcfe7c5c2482444f0f618b4)), closes [#68](https://github.com/camunda/orchestration-cluster-api-dlang/issues/68)
+
 # [11.0.0-alpha.21](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.20...v11.0.0-alpha.21) (2026-11-26)
 
 
