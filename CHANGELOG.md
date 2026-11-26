@@ -1,3 +1,10 @@
+# [11.0.0-alpha.23](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.22...v11.0.0-alpha.23) (2026-11-26)
+
+
+### Bug Fixes
+
+* **scripts:** make test-repair-release.sh fail closed outside its fixture ([#75](https://github.com/camunda/orchestration-cluster-api-dlang/issues/75)) ([39ab6d4](https://github.com/camunda/orchestration-cluster-api-dlang/commit/39ab6d4475a352ac03514bbf8d7e9345f9e74f92)), closes [#74](https://github.com/camunda/orchestration-cluster-api-dlang/issues/74)
+
 # [11.0.0-alpha.22](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.21...v11.0.0-alpha.22) (2026-11-26)
 
 
