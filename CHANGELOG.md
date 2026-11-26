@@ -1,3 +1,11 @@
+# [11.0.0-alpha.20](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.19...v11.0.0-alpha.20) (2026-11-26)
+
+
+### Bug Fixes
+
+* account for jobs when a handler thread dies and bound worker shutdown ([#67](https://github.com/camunda/orchestration-cluster-api-dlang/issues/67)) ([e54030c](https://github.com/camunda/orchestration-cluster-api-dlang/commit/e54030ce0f1f116ef8f2e5203f01097c71130bc6)), closes [#66](https://github.com/camunda/orchestration-cluster-api-dlang/issues/66)
+* **gen:** regenerate artifacts ([f666e94](https://github.com/camunda/orchestration-cluster-api-dlang/commit/f666e9487aa0a740d2f09d5965f5107f94603c89))
+
 # [11.0.0-alpha.19](https://github.com/camunda/orchestration-cluster-api-dlang/compare/v11.0.0-alpha.18...v11.0.0-alpha.19) (2026-11-25)
 
 
