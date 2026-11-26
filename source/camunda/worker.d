@@ -461,6 +461,10 @@ final class JobWorker
         auto slots = WorkerSlotState.make(max(1, config.maxJobsActive));
         const cap = slots.capacity;
         auto aimd = BackpressureState.make(1, cap, 16);
+        // LEGACY is observe-only (as in BackpressureManager): the batch
+        // limit stays at the capacity; the activation backoff still applies.
+        import camunda.config : BackpressureProfile;
+        const adaptive = transport.config.backpressureProfile != BackpressureProfile.legacy;
         // Only activation is gated; job commands drain the broker.
         static assert(usesBackpressureGate(RpcKind.activate));
         static assert(!usesBackpressureGate(RpcKind.complete) && !usesBackpressureGate(RpcKind.fail)
@@ -542,7 +546,7 @@ final class JobWorker
         {
             ctl.count!"activationFailures";
             if (auto api = cast(ApiException) e)
-                if (isBackpressureStatus(api.status)) aimd.onBackpressure();
+                if (adaptive && isBackpressureStatus(api.status)) aimd.onBackpressure();
             if (failedActivations < 100) failedActivations++;
             nextActivationMs = clock.nowMs + retryDelayMs(failedActivations, backoffMinMs, backoffMaxMs);
         }
@@ -576,7 +580,7 @@ final class JobWorker
             }
             transport.recordOutcome(null);
             failedActivations = 0;
-            aimd.onHealthy();
+            if (adaptive) aimd.onHealthy();
             ctl.count!"activated"(jobs.length);
             if (config.withLease)
                 foreach (j; jobs)
@@ -1930,7 +1934,9 @@ version (unittest)
     private void stopOnLog(Chan!string done, Chan!string relay, ThreadSafe!WorkerControl ctl)
     {
         string log;
-        done.take(log);
+        // Bounded: a regression that never satisfies the script must fail
+        // the test, not hang `dub test`.
+        if (!done.takeFor(log, 20_000)) log = "TIMEOUT";
         ctl.get.stop();
         relay.put(log);
     }
@@ -1938,7 +1944,7 @@ version (unittest)
     /// Run a worker of capacity `maxJobs` against `scriptedJobServer`;
     /// return the server's log split into entries, and the worker's stats.
     private string[] scriptedRun(immutable(string)[] script, int settle, int finalAsk, int maxJobs, long pauseMs,
-        out WorkerStats stats)
+        out WorkerStats stats, string profile = "BALANCED")
     {
         import std.array : split;
         import std.conv : to;
@@ -1953,6 +1959,7 @@ version (unittest)
         auto client = CamundaClient.fromEnv([
             "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
             "CAMUNDA_AUTH_STRATEGY": "NONE",
+            "CAMUNDA_SDK_BACKPRESSURE_PROFILE": profile,
         ]);
         auto worker = client.createJobWorker(
             JobWorkerConfig.create("t").maxJobs(maxJobs).threads(maxJobs).shutdownTimeout(2_000));
@@ -1963,6 +1970,7 @@ version (unittest)
         string log;
         relay.take(log);
         stats = worker.stats;
+        assert(log != "TIMEOUT", "scripted server never completed its script");
         return log.split(" ");
     }
 
@@ -2008,8 +2016,11 @@ unittest
     // again: the earlier success reset the backoff (a 4th failure in a
     // row would wait 400 ms).
     assert(a[19][2] == 429 && a[20][0] == 1, format("%s", log));
+    // Compared with the 200 ms step measured in the same run rather than
+    // an absolute wall-clock bound: without the reset this wait would be
+    // 400 ms, twice that step.
     const gap = a[20][1] - a[19][1];
-    assert(gap >= 50 && gap < 350, format("backoff not reset (%d ms): %s", gap, log));
+    assert(gap >= 50 && gap < a[3][1] - a[2][1], format("backoff not reset (%d ms): %s", gap, log));
     assert(s.activationFailures == 4, format("%s", s));
 }
 
@@ -2020,10 +2031,12 @@ unittest
     import std.algorithm.searching : countUntil;
     import std.format : format;
     WorkerStats s;
-    auto log = scriptedRun(["2", "429", "429", "429"], 2, 0, 4, 30, s);
+    // Instant handlers and five throttles: the jobs settle while the
+    // worker waits out >= 750 ms of activation backoff (50+100+200+400).
+    auto log = scriptedRun(["2", "429", "429", "429", "429", "429"], 2, 0, 4, 0, s);
     auto a = activations(log);
-    assert(a.length >= 4 && a[3][2] == 429, format("%s", log));
-    const lastThrottle = log.countUntil!(e => e.length && e[0] == 'A' && activations([e])[0][1] == a[3][1]);
+    assert(a.length >= 6 && a[5][2] == 429, format("%s", log));
+    const lastThrottle = log.countUntil!(e => e.length && e[0] == 'A' && activations([e])[0][1] == a[5][1]);
     assert(lastThrottle > 0, format("%s", log));
     foreach (key; ["C1@", "C2@"])
     {
@@ -2054,4 +2067,17 @@ unittest
     assert(!log.canFind!(e => e.length && e[0] == 'X'), format("unexpected command: %s", log));
     assert(s.activated == 6 && s.overActivated == 2 && s.completed == 4, format("%s", s));
     assert(a[$ - 1][0] == 4, format("slots leaked: %s", log));
+}
+
+// LEGACY is observe-only: throttles back off activation but never shrink
+// the batch asked for.
+unittest
+{
+    import std.format : format;
+    WorkerStats s;
+    auto log = scriptedRun(["429", "503", "0"], 0, 0, 8, 0, s, "LEGACY");
+    auto a = activations(log);
+    assert(a.length >= 3, format("%s", log));
+    foreach (x; a) assert(x[0] == 8, format("LEGACY shrank the batch: %s", log));
+    assert(a[1][1] - a[0][1] >= 50, format("%s", log));
 }
