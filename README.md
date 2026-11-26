@@ -468,9 +468,11 @@ parameter defaults), are not breaks.
 - **Releases** from `stable/**` compare the commit about to be tagged,
   including regenerated code, with the last `N.x.y` release
   (`.github/workflows/publish.yml`).
-- **Intended breaks:** copy the `BREAK ...` lines into
+- **Intended breaks:** copy the `<baseline tag> BREAK ...` lines into
   `api-compat-suppressions.txt` (without the ` [<target>]` suffix the entry
-  covers every target). Both the PR check and the release gate skip listed
+  covers every target; the tag limits the approval to that baseline release,
+  and a changed signature names its new overloads, so a later different
+  change needs a new entry). Both the PR check and the release gate skip listed
   breaks and print them as `APPROVED`. A PR that changes the file needs the
   `breaking-change-approved` label. As a last resort, run the Publish
   workflow manually with `api_break_approved`.

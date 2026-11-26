@@ -39,7 +39,7 @@ trap cleanup EXIT
 git worktree add -q --detach "$tmp/api-compat-baseline" "$tag" || exit 2
 
 pipeline_status=(0 0)
-"$API_COMPAT" --baseline-dir "$tmp/api-compat-baseline" | tee "$tmp/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
+"$API_COMPAT" --baseline-dir "$tmp/api-compat-baseline" --baseline-tag "$tag" | tee "$tmp/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
 [ "${pipeline_status[1]}" -eq 0 ] || exit 2
 rc="${pipeline_status[0]}"
 {

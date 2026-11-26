@@ -862,8 +862,13 @@ string[] compare(Api old, Api neu)
             {
                 const need = visRank(o.overloadProtection.get(ov, o.protection));
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)))
-                    brk(o.path, format("%s overload `%s` changed or removed", o.kind,
-                            (ov in o.display) ? o.display[ov] : show(ov)));
+                    // Name the new overload set too, so an approval covers this
+                    // exact before/after pair and not a later replacement.
+                    brk(o.path, format("%s overload `%s` changed or removed; now: %s", o.kind,
+                            (ov in o.display) ? o.display[ov] : show(ov),
+                            n.overloads.length ? n.overloads.map!(nv => "`"
+                                ~ ((nv in n.display) ? n.display[nv] : show(nv)) ~ "`").join(", ")
+                                : "none"));
                 else if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)
                         && visRank(n.overloadProtection.get(nv, n.protection)) >= need))
                     brk(o.path, format("%s overload `%s` visibility narrowed", o.kind,
@@ -968,8 +973,8 @@ string newestRelease(string[] tags, string major)
 enum suppressionsFile = "api-compat-suppressions.txt";
 
 /// Parse a suppressions file: one break line per entry, exactly as the
-/// checker prints it (`BREAK <path>: <what>`), optionally with a trailing
-/// ` [<target>]`. Blank lines and lines starting with `#` are ignored.
+/// checker prints it (`<baseline tag> BREAK <path>: <what>`), optionally with
+/// a trailing ` [<target>]`. Blank lines and lines starting with `#` are ignored.
 string[] parseSuppressions(string text)
 {
     string[] out_;
@@ -983,12 +988,17 @@ string[] parseSuppressions(string text)
 }
 
 /// Split `breaks` into those not covered by `suppressions` and those that are.
-/// An entry without a target tag also covers the same break on every target.
-void applySuppressions(string[] breaks, string[] suppressions,
+/// Breaks are prefixed with `baselineTag`, so an entry only approves a break
+/// against the release it was recorded for. An entry without a target tag
+/// also covers the same break on every target.
+void applySuppressions(string[] rawBreaks, string[] suppressions, string baselineTag,
     out string[] remaining, out string[] approved)
 {
-    foreach (b; breaks)
+    if (!baselineTag.length)
+        throw new Exception("applySuppressions needs a baseline tag");
+    foreach (raw; rawBreaks)
     {
+        string b = baselineTag ~ " " ~ raw;
         auto untagged = b;
         auto c = matchFirst(b, ctRegex!`^(.*) \[[^\]]+\]$`);
         if (!c.empty)
@@ -1004,7 +1014,7 @@ void applySuppressions(string[] breaks, string[] suppressions,
 
 int main(string[] args)
 {
-    string baselineDir, repo = ".", major, compiler = "ldc2", suppressPath;
+    string baselineDir, baselineTag, repo = ".", major, compiler = "ldc2", suppressPath;
     bool dump;
     for (size_t i = 1; i < args.length; i++)
     {
@@ -1018,6 +1028,7 @@ int main(string[] args)
         switch (args[i])
         {
         case "--baseline-dir": baselineDir = next(); break;
+        case "--baseline-tag": baselineTag = next(); break;
         case "--repo": repo = next(); break;
         case "--print-baseline-major": major = next(); break;
         case "--compiler": compiler = next(); break;
@@ -1052,6 +1063,11 @@ int main(string[] args)
             stderr.writeln("api-compat: need --baseline-dir, --print-baseline-major or --dump");
             return 2;
         }
+        if (!baselineTag.length)
+        {
+            stderr.writeln("api-compat: --baseline-dir needs --baseline-tag (the release it holds)");
+            return 2;
+        }
         string[] suppressions;
         const sp = suppressPath.length ? suppressPath : buildPath(repo, suppressionsFile);
         if (exists(sp))
@@ -1059,7 +1075,8 @@ int main(string[] args)
         else if (suppressPath.length)
             throw new Exception("suppressions file not found: " ~ suppressPath);
         string[] breaks, approved;
-        applySuppressions(compareTargets(baselineDir, repo, compiler), suppressions, breaks, approved);
+        applySuppressions(compareTargets(baselineDir, repo, compiler), suppressions, baselineTag,
+            breaks, approved);
         foreach (b; approved)
             writeln("APPROVED ", b);
         if (approved.length)
@@ -1415,20 +1432,36 @@ unittest // static -> instance breaks; instance -> static breaks only overriders
             q{ struct S { static S make() { return S.init; } } }) == []);
 }
 
-unittest // suppressions approve listed breaks only, on any target if untagged
+unittest // suppressions approve listed breaks only, against their baseline, on any target if untagged
 {
-    auto sup = parseSuppressions("# comment\n\n  BREAK camunda.t.f: function removed  \nBREAK camunda.t.g: x [x86_64-windows-msvc]\n");
-    assert(sup == ["BREAK camunda.t.f: function removed", "BREAK camunda.t.g: x [x86_64-windows-msvc]"]);
+    auto sup = parseSuppressions("# comment\n\n  v11.0.0 BREAK camunda.t.f: function removed  \nv11.0.0 BREAK camunda.t.g: x [x86_64-windows-msvc]\n");
+    assert(sup == ["v11.0.0 BREAK camunda.t.f: function removed", "v11.0.0 BREAK camunda.t.g: x [x86_64-windows-msvc]"]);
     string[] rem, ok;
-    applySuppressions([
+    auto raw = [
         "BREAK camunda.t.f: function removed",
         "BREAK camunda.t.f: function removed [x86_64-windows-msvc]",
         "BREAK camunda.t.g: x",
         "BREAK camunda.t.g: x [x86_64-windows-msvc]",
         "BREAK camunda.t.h: function removed",
-    ], sup, rem, ok);
-    assert(rem == ["BREAK camunda.t.g: x", "BREAK camunda.t.h: function removed"], rem.join("\n"));
+    ];
+    applySuppressions(raw, sup, "v11.0.0", rem, ok);
+    assert(rem == ["v11.0.0 BREAK camunda.t.g: x", "v11.0.0 BREAK camunda.t.h: function removed"], rem.join("\n"));
     assert(ok.length == 3);
+    // After a later release, the old approvals no longer apply.
+    string[] rem2, ok2;
+    applySuppressions(raw, sup, "v11.1.0", rem2, ok2);
+    assert(ok2.length == 0 && rem2.length == raw.length);
+}
+
+unittest // an approved signature change does not approve a different replacement
+{
+    auto a = diff(q{ void f(int) {} }, q{ void f(string) {} });
+    auto b = diff(q{ void f(int) {} }, q{ void f(double) {} });
+    assert(a.length == 1 && b.length == 1, a.join("\n") ~ b.join("\n"));
+    assert(a[0] != b[0], a[0]);
+    string[] rem, ok;
+    applySuppressions(b, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 0 && rem.length == 1);
 }
 
 unittest // a response field made optional/nullable is a break

@@ -62,11 +62,14 @@ jobs:
         id: baseline
         env:
           BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           case "$BASE_REF" in
             stable/*) major="${BASE_REF#stable/}" ;;
-            *) major=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null | sed -E 's/^v([0-9]+)\..*/\1/' || true) ;;
+            # main: the major it develops, from the base branch's stamped
+            # version (not from tags reachable in PR-controlled history).
+            *) major=$(git show "$BASE_SHA:runtime/source/camunda/version_.d" | sed -nE 's/^enum sdkVersion = "([0-9]+)\..*/\1/p') ;;
           esac
           tag=""
           if [ -n "$major" ]; then
@@ -92,6 +95,9 @@ jobs:
       # changes. The release gate checks the same thing before publishing.
       - name: Bundle spec from upstream and regenerate
         if: steps.baseline.outputs.tag != ''
+        env:
+          # Same spec selection as publish.yml, so PR and release gates agree.
+          SPEC_REF: ${{ vars.SPEC_REF_OVERRIDE }}
         run: |
           npm install --no-audit --no-fund
           npm run bundle:spec
@@ -107,7 +113,7 @@ jobs:
           dub build -q --single scripts/api-compat.d || exit 2
           git worktree add -q --detach "$RUNNER_TEMP/api-compat-baseline" "$TAG" || exit 2
           pipeline_status=(0 0)
-          scripts/.dub/bin/api-compat --baseline-dir "$RUNNER_TEMP/api-compat-baseline" | tee "$RUNNER_TEMP/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
+          scripts/.dub/bin/api-compat --baseline-dir "$RUNNER_TEMP/api-compat-baseline" --baseline-tag "$TAG" | tee "$RUNNER_TEMP/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
           [ "${pipeline_status[1]}" -eq 0 ] || exit 2
           rc="${pipeline_status[0]}"
           {

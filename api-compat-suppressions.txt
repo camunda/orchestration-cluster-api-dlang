@@ -2,8 +2,9 @@
 #
 # scripts/api-compat.d skips every break listed here, in PR CI
 # (.github/workflows/api-compat.yml) and in the release gate
-# (scripts/api-compat-release.sh). Copy the `BREAK ...` line exactly as the
-# checker prints it, one per line; leave off a trailing ` [<target>]` to
+# (scripts/api-compat-release.sh). Copy the `<baseline tag> BREAK ...` line exactly
+# as the checker prints it, one per line. The tag scopes the approval to that
+# baseline release: after the next release it no longer applies; leave off a trailing ` [<target>]` to
 # cover the break on every target. Lines starting with `#` are comments.
 #
 # Changing this file needs the `breaking-change-approved` label on the PR.

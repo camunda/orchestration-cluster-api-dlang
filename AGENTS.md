@@ -124,7 +124,7 @@ during alphas) it passes with a notice. Releases from `stable/**` run the same
 comparison before publishing (`publish.yml`, `scripts/api-compat-release.sh`).
 README "API compatibility" lists what counts as a break.
 
-An intended break is recorded by copying its `BREAK ...` lines into
+An intended break is recorded by copying its `<baseline tag> BREAK ...` lines into
 `api-compat-suppressions.txt`; a PR that changes that file needs the
 `breaking-change-approved` label. Do not apply the label yourself: ask the
 maintainer. Run `make api-compat BASE=v<N>.<x>.<y>` (the last release of the
