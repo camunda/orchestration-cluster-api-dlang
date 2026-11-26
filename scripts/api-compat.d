@@ -1037,7 +1037,24 @@ bool suppressionCovers(string e, string b)
         return r;
     }
     const have = items(b[bi + sep.length .. $]);
-    return items(e[ei + sep.length .. $]).all!(x => have.canFind(x));
+    const want = items(e[ei + sep.length .. $]);
+    // An approved `now: none` (a removal) must not approve a later
+    // replacement: an empty list only matches an empty list.
+    if (!want.length)
+        return !have.length;
+    return want.all!(x => have.canFind(x));
+}
+
+unittest
+{
+    const removal = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: none";
+    const replaced = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: `void f(string)`";
+    string[] rem, ok;
+    applySuppressions([replaced["v1.0.0 ".length .. $]], [removal], "v1.0.0", rem, ok);
+    assert(rem.length == 1 && ok.length == 0);
+    rem = null; ok = null;
+    applySuppressions([removal["v1.0.0 ".length .. $]], [removal], "v1.0.0", rem, ok);
+    assert(rem.length == 0 && ok.length == 1);
 }
 
 /// Split `breaks` into those not covered by `suppressions` and those that are.
