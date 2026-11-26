@@ -589,6 +589,22 @@ test_pushurl_escape_via_dotdot_or_symlink_refused() {
   rm -rf "${outside}"
 }
 
+test_empty_fixture_variable_refused() {
+  local name="REPAIR_RELEASE_TEST_FIXTURE set but empty -> refused, origin untouched"
+  local rc before after
+  setup_fixture "11.0.0-alpha.5"
+  before="$(command git -C "${FIXTURE}/remote.git" for-each-ref)"
+  REPAIR_RELEASE_TEST_FIXTURE='' run_repair main >/dev/null 2>&1
+  rc=$?
+  after="$(command git -C "${FIXTURE}/remote.git" for-each-ref)"
+  if [[ "${rc}" != "0" && "${before}" == "${after}" ]] && ! grep -qE "release (create|edit)" "${GH_CALLS}"; then
+    ok "${name}"
+  else
+    not_ok "${name} (rc=${rc})"
+  fi
+  teardown_fixture
+}
+
 main() {
   if [[ -z "${REPAIR_TEST_NESTED:-}" ]]; then
     test_fails_closed_when_no_temp_dir
@@ -610,6 +626,7 @@ main() {
   test_latest_reconciled_when_stable_release_already_exists
   test_pushurl_outside_fixture_refused
   test_pushurl_escape_via_dotdot_or_symlink_refused
+  test_empty_fixture_variable_refused
 
   echo
   echo "${pass} passed, ${fail} failed"

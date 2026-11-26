@@ -181,8 +181,10 @@ path_in_fixture() {
 }
 
 assert_test_fixture() {
-  local fixture="${REPAIR_RELEASE_TEST_FIXTURE:-}"
-  [[ -z "${fixture}" ]] && return 0
+  # Only an unset variable selects production mode; set-but-empty fails closed.
+  [[ -z "${REPAIR_RELEASE_TEST_FIXTURE+set}" ]] && return 0
+  local fixture="${REPAIR_RELEASE_TEST_FIXTURE}"
+  [[ -n "${fixture}" ]] || die "test mode: REPAIR_RELEASE_TEST_FIXTURE is set but empty"
   local top origin
   fixture="$(cd -- "${fixture}" 2>/dev/null && pwd -P)" || die "test mode: fixture ${REPAIR_RELEASE_TEST_FIXTURE} does not resolve"
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "test mode: not in a git work tree"
