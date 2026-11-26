@@ -1808,3 +1808,250 @@ private
         ctl.get.stop();
     }
 }
+
+version (unittest)
+{
+    /// A fake job API that answers activations from `script`, one entry
+    /// per request: "429" or "503" answer with that status, a number N
+    /// answers with N jobs whatever was asked for (so it can over-activate);
+    /// once the script is used up, activations get no jobs. It logs each
+    /// activation as "A<maxJobsToActivate>@<ms>" (or "A...!<status>" when
+    /// throttled) and each completion as "C<jobKey>@<ms>". When the script
+    /// is used up and `settle` completions arrived, the log goes out on
+    /// `done`, entries separated by spaces (with `finalAsk` > 0, only once
+    /// a later activation asked for that many jobs). It serves until `quit`.
+    private void scriptedJobServer(immutable(string)[] script, int settle, int finalAsk, Chan!int port, Chan!string done, Chan!int quit)
+    {
+        import camunda.safeio : monoNowMs;
+        import std.array : join;
+        import std.conv : to;
+        import std.format : format;
+        import std.socket : TcpSocket, InternetAddress, Socket, SocketSet, SocketOption, SocketOptionLevel;
+        import std.string : indexOf, strip, toLower;
+        import std.algorithm.searching : canFind, startsWith, findSplitAfter, findSplitBefore;
+        import core.time : msecs;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(64);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        Socket[] conns;
+        string[] pending;
+        string[] log;
+        size_t next;
+        int handedOut, completed;
+        bool reported, askedFinal = finalAsk == 0;
+        const t0 = monoNowMs;
+        auto set = new SocketSet();
+        int q;
+        while (!quit.tryTake(q))
+        {
+            set.reset();
+            set.add(listener);
+            foreach (c; conns) set.add(c);
+            if (Socket.select(set, null, null, 20.msecs) <= 0) continue;
+            if (set.isSet(listener))
+            {
+                conns ~= listener.accept();
+                pending ~= "";
+            }
+            foreach (i, c; conns)
+            {
+                if (!set.isSet(c)) continue;
+                ubyte[8192] chunk;
+                const n = c.receive(chunk[]);
+                if (n <= 0) continue;
+                pending[i] ~= cast(const(char)[]) chunk[0 .. n];
+                for (;;)
+                {
+                    const end = pending[i].indexOf("\r\n\r\n");
+                    if (end < 0) break;
+                    const head = pending[i][0 .. end + 4];
+                    size_t bodyLen;
+                    const cl = head.toLower.indexOf("\r\ncontent-length:");
+                    if (cl >= 0)
+                    {
+                        auto rest = head[cl + 17 .. $];
+                        bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                    }
+                    if (pending[i].length < head.length + bodyLen) break;
+                    const body_ = pending[i][head.length .. head.length + bodyLen];
+                    pending[i] = pending[i][head.length + bodyLen .. $];
+                    const at = monoNowMs - t0;
+                    string status = "200 OK", reply = "{}";
+                    if (head.startsWith("POST /v2/jobs/activation "))
+                    {
+                        const want = parseJSON(body_)["maxJobsToActivate"].integer;
+                        if (next >= script.length && want == finalAsk) askedFinal = true;
+                        const step = next < script.length ? script[next++] : "0";
+                        if (step == "429" || step == "503")
+                        {
+                            status = step == "429" ? "429 Too Many Requests" : "503 Service Unavailable";
+                            reply = `{"title":"throttled","status":` ~ step ~ `}`;
+                            log ~= format("A%d@%d!%s", want, at, step);
+                        }
+                        else
+                        {
+                            string[] jobs;
+                            foreach (_; 0 .. step.to!int)
+                                jobs ~= format(`{"jobKey":"%d","type":"t","retries":3,"variables":{}}`, ++handedOut);
+                            reply = `{"jobs":[` ~ jobs.join(",") ~ `]}`;
+                            log ~= format("A%d@%d", want, at);
+                        }
+                    }
+                    else if (head.canFind("/completion "))
+                    {
+                        completed++;
+                        auto key = head.findSplitAfter("/jobs/")[1].findSplitBefore("/")[0];
+                        log ~= format("C%s@%d", key, at);
+                    }
+                    else log ~= "X" ~ head[0 .. head.indexOf(" HTTP")].idup;
+                    c.send(format("HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+                        status, reply.length, reply));
+                    if (!reported && next >= script.length && completed >= settle && askedFinal)
+                    {
+                        reported = true;
+                        done.put(log.join(" "));
+                    }
+                }
+            }
+        }
+        foreach (c; conns) c.close();
+    }
+
+    private JobAction pausingHandler(Job job, long pauseMs)
+    {
+        import camunda.safeio : sleepMs;
+        sleepMs(pauseMs);
+        return JobAction.complete();
+    }
+
+    private void stopOnLog(Chan!string done, Chan!string relay, ThreadSafe!WorkerControl ctl)
+    {
+        string log;
+        done.take(log);
+        ctl.get.stop();
+        relay.put(log);
+    }
+
+    /// Run a worker of capacity `maxJobs` against `scriptedJobServer`;
+    /// return the server's log split into entries, and the worker's stats.
+    private string[] scriptedRun(immutable(string)[] script, int settle, int finalAsk, int maxJobs, long pauseMs,
+        out WorkerStats stats)
+    {
+        import std.array : split;
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto done = Chan!string.make;
+        auto relay = Chan!string.make;
+        auto quit = Chan!int.make;
+        auto server = spawn(&scriptedJobServer, script, settle, finalAsk, port, done, quit);
+        scope (exit) { quit.put(1); server.join(); }
+        int p;
+        port.take(p);
+        auto client = CamundaClient.fromEnv([
+            "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+            "CAMUNDA_AUTH_STRATEGY": "NONE",
+        ]);
+        auto worker = client.createJobWorker(
+            JobWorkerConfig.create("t").maxJobs(maxJobs).threads(maxJobs).shutdownTimeout(2_000));
+        worker.config.pollIntervalMs = 1;
+        auto stopper = spawn(&stopOnLog, done, relay, worker.control);
+        worker.run(&pausingHandler, pauseMs);
+        stopper.join();
+        string log;
+        relay.take(log);
+        stats = worker.stats;
+        return log.split(" ");
+    }
+
+    /// The activation entries of a `scriptedJobServer` log: [asked, ms, status].
+    private long[3][] activations(string[] log)
+    {
+        import std.algorithm.searching : findSplit;
+        import std.conv : to;
+        long[3][] r;
+        foreach (e; log)
+        {
+            if (!e.length || e[0] != 'A') continue;
+            auto a = e[1 .. $].findSplit("@");
+            auto b = a[2].findSplit("!");
+            r ~= [a[0].to!long, b[0].to!long, b[2].length ? b[2].to!long : 200];
+        }
+        return r;
+    }
+}
+
+// 429/503 on activation: each halves the batch asked for (AIMD) and backs
+// off exponentially; healthy activations raise it again by one per
+// recovery window, and a success resets the backoff.
+unittest
+{
+    import std.format : format;
+    immutable(string)[] script = ["429", "503", "429"];
+    foreach (_; 0 .. 16) script ~= "0";
+    script ~= ["429", "0"];
+    WorkerStats s;
+    auto log = scriptedRun(script, 0, 0, 8, 0, s);
+    auto a = activations(log);
+    assert(a.length >= script.length, format("%s", log));
+    // Asked for: 8, halved per throttle to 4, 2, then 1.
+    assert(a[0][0] == 8 && a[1][0] == 4 && a[2][0] == 2 && a[3][0] == 1, format("%s", log));
+    // Exponential delays after each throttle: >= 50, 100, 200 ms.
+    assert(a[1][1] - a[0][1] >= 50 && a[2][1] - a[1][1] >= 100 && a[3][1] - a[2][1] >= 200,
+        format("%s", log));
+    // 16 healthy activations (a[3] .. a[18]) recover the limit by one.
+    foreach (i; 4 .. 19) assert(a[i][0] == 1, format("%d: %s", i, log));
+    assert(a[19][0] == 2, format("%s", log));
+    // The throttle at a[19] halves it again and backs off from the base
+    // again: the earlier success reset the backoff (a 4th failure in a
+    // row would wait 400 ms).
+    assert(a[19][2] == 429 && a[20][0] == 1, format("%s", log));
+    const gap = a[20][1] - a[19][1];
+    assert(gap >= 50 && gap < 350, format("backoff not reset (%d ms): %s", gap, log));
+    assert(s.activationFailures == 4, format("%s", s));
+}
+
+// Activation backoff gates only activation: jobs already held complete
+// while the worker waits out a throttle.
+unittest
+{
+    import std.algorithm.searching : countUntil;
+    import std.format : format;
+    WorkerStats s;
+    auto log = scriptedRun(["2", "429", "429", "429"], 2, 0, 4, 30, s);
+    auto a = activations(log);
+    assert(a.length >= 4 && a[3][2] == 429, format("%s", log));
+    const lastThrottle = log.countUntil!(e => e.length && e[0] == 'A' && activations([e])[0][1] == a[3][1]);
+    assert(lastThrottle > 0, format("%s", log));
+    foreach (key; ["C1@", "C2@"])
+    {
+        const at = log.countUntil!(e => e.length >= key.length && e[0 .. key.length] == key);
+        assert(at >= 0 && at < lastThrottle, format("%s settled only after the backoff: %s", key, log));
+    }
+    assert(s.completed == 2 && s.actionFailures == 0, format("%s", s));
+}
+
+// Over-activation: the engine hands out more jobs than free slots. Only
+// the jobs that fit reach a handler; the excess gets no command, is
+// counted in overActivated, and no slot leaks (the worker activates its
+// full capacity again afterwards).
+unittest
+{
+    import std.algorithm.searching : canFind;
+    import std.format : format;
+    WorkerStats s;
+    auto log = scriptedRun(["6"], 4, 4, 4, 20, s);
+    auto a = activations(log);
+    bool settled(int k)
+    {
+        const key = format("C%d@", k);
+        return log.canFind!(e => e.length >= key.length && e[0 .. key.length] == key);
+    }
+    foreach (k; 1 .. 5) assert(settled(k), format("job %d not settled: %s", k, log));
+    assert(!settled(5) && !settled(6), format("excess job settled: %s", log));
+    assert(!log.canFind!(e => e.length && e[0] == 'X'), format("unexpected command: %s", log));
+    assert(s.activated == 6 && s.overActivated == 2 && s.completed == 4, format("%s", s));
+    assert(a[$ - 1][0] == 4, format("slots leaked: %s", log));
+}
