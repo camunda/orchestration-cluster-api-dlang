@@ -801,6 +801,26 @@ private string show(string sig)
     return s.startsWith("text:") ? s[5 .. $] : s;
 }
 
+/// Display text of an overload for break messages, with its defaults mask
+/// when any parameter has a default, so removing successive defaults yields
+/// distinct break lines.
+private string label(string sig, const string[string] display)
+{
+    import std.string : lastIndexOf;
+    const mask = sig[sig.lastIndexOf("|defaults=") + 10 .. $];
+    auto base = (sig in display) ? display[sig] : show(sig);
+    return mask.canFind('1') ? base ~ " (defaults " ~ mask ~ ")" : base;
+}
+
+/// The canonical (sorted, deduplicated) overload set of `n` for messages.
+private string nowList(Sym)(Sym n)
+{
+    import std.algorithm : uniq;
+    auto ls = n.overloads.map!(nv => "`" ~ label(nv, n.display) ~ "`").array;
+    ls.sort();
+    return ls.length ? ls.uniq.join(", ") : "none";
+}
+
 /// The signature without its `|defaults=` mask. Required-member comparison
 /// uses this: adding a default to an existing abstract/interface method does
 /// not force implementations to change, and a removed default is already
@@ -862,13 +882,12 @@ string[] compare(Api old, Api neu)
             {
                 const need = visRank(o.overloadProtection.get(ov, o.protection));
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)))
-                    // Name the new overload set too, so an approval covers this
-                    // exact before/after pair and not a later replacement.
+                    // Name the new overload set too (sorted, with default
+                    // masks), so an approval covers this exact before/after
+                    // pair and not a later replacement; see applySuppressions
+                    // for how compatible additions keep it valid.
                     brk(o.path, format("%s overload `%s` changed or removed; now: %s", o.kind,
-                            (ov in o.display) ? o.display[ov] : show(ov),
-                            n.overloads.length ? n.overloads.map!(nv => "`"
-                                ~ ((nv in n.display) ? n.display[nv] : show(nv)) ~ "`").join(", ")
-                                : "none"));
+                            label(ov, o.display), nowList(n)));
                 else if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)
                         && visRank(n.overloadProtection.get(nv, n.protection)) >= need))
                     brk(o.path, format("%s overload `%s` visibility narrowed", o.kind,
@@ -878,7 +897,8 @@ string[] compare(Api old, Api neu)
         case "template":
             foreach (ov; o.overloads)
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv)))
-                    brk(o.path, format("template parameters or constraint `%s` changed", show(ov)));
+                    brk(o.path, format("template parameters or constraint `%s` changed; now: %s",
+                            label(ov, o.display), nowList(n)));
             break;
         case "import":
             foreach (b; o.overloads)
@@ -987,6 +1007,39 @@ string[] parseSuppressions(string text)
     return out_;
 }
 
+/// Whether suppression entry `e` covers break line `b`. Lines with a
+/// `; now: ` overload list match when everything before it is identical and
+/// every overload the entry names still exists: adding or reordering
+/// unrelated overloads keeps an approval valid, while replacing the approved
+/// overload again does not.
+bool suppressionCovers(string e, string b)
+{
+    if (e == b)
+        return true;
+    enum sep = "; now: ";
+    import std.string : indexOf;
+    const ei = e.indexOf(sep), bi = b.indexOf(sep);
+    if (ei < 0 || bi < 0 || e[0 .. ei] != b[0 .. bi])
+        return false;
+    // A target tag must match too.
+    auto tag(string s)
+    {
+        auto c = matchFirst(s, ctRegex!` \[[^\]]+\]$`);
+        return c.empty ? "" : c[0];
+    }
+    if (tag(e) != tag(b))
+        return false;
+    string[] items(string s)
+    {
+        string[] r;
+        foreach (m; matchAll(s, ctRegex!("`([^`]*)`")))
+            r ~= m[1];
+        return r;
+    }
+    const have = items(b[bi + sep.length .. $]);
+    return items(e[ei + sep.length .. $]).all!(x => have.canFind(x));
+}
+
 /// Split `breaks` into those not covered by `suppressions` and those that are.
 /// Breaks are prefixed with `baselineTag`, so an entry only approves a break
 /// against the release it was recorded for. An entry without a target tag
@@ -1003,7 +1056,7 @@ void applySuppressions(string[] rawBreaks, string[] suppressions, string baselin
         auto c = matchFirst(b, ctRegex!`^(.*) \[[^\]]+\]$`);
         if (!c.empty)
             untagged = c[1];
-        if (suppressions.canFind(b) || suppressions.canFind(untagged))
+        if (suppressions.any!(e => suppressionCovers(e, b) || suppressionCovers(e, untagged)))
             approved ~= b;
         else
             remaining ~= b;
@@ -1462,6 +1515,38 @@ unittest // an approved signature change does not approve a different replacemen
     string[] rem, ok;
     applySuppressions(b, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
     assert(ok.length == 0 && rem.length == 1);
+}
+
+unittest // successive default removals and template replacements need fresh approvals
+{
+    auto a = diff(q{ void f(int a = 0, int b = 0) {} }, q{ void f(int a, int b = 0) {} });
+    auto b = diff(q{ void f(int a = 0, int b = 0) {} }, q{ void f(int a, int b) {} });
+    assert(a.length == 1 && b.length == 1, a.join("\n") ~ b.join("\n"));
+    string[] rem, ok;
+    applySuppressions(b, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 0 && rem.length == 1, a[0] ~ "\n" ~ b[0]);
+    auto t1 = diff(q{ void g(T)(T x) {} }, q{ void g(T, U)(T x) {} });
+    auto t2 = diff(q{ void g(T)(T x) {} }, q{ void g(T, U, V)(T x) {} });
+    assert(t1.length == 1 && t2.length == 1, t1.join("\n") ~ t2.join("\n"));
+    string[] rem2, ok2;
+    applySuppressions(t2, ["v11.0.0 " ~ t1[0]], "v11.0.0", rem2, ok2);
+    assert(ok2.length == 0 && rem2.length == 1, t1[0] ~ "\n" ~ t2[0]);
+}
+
+unittest // an approval survives compatible overload additions and reordering
+{
+    auto a = diff(q{ void f(int) {} }, q{ void f(string) {} });
+    auto b = diff(q{ void f(int) {} }, q{ void f() {} void f(string) {} });
+    auto c = diff(q{ void f(int) {} }, q{ void f(string) {} void f() {} });
+    assert(a.length == 1 && b.length == 1 && c.length == 1);
+    assert(b[0] == c[0], b[0] ~ "\n" ~ c[0]);
+    string[] rem, ok;
+    applySuppressions(b ~ c, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 2 && rem.length == 0, rem.join("\n"));
+    // ... but not across targets.
+    string[] rem2, ok2;
+    applySuppressions([a[0] ~ " [x86_64-windows-msvc]"], ["v11.0.0 " ~ a[0] ~ " [other]"], "v11.0.0", rem2, ok2);
+    assert(ok2.length == 0);
 }
 
 unittest // a response field made optional/nullable is a break
