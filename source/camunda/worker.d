@@ -157,6 +157,9 @@ struct WorkerStats
     long failed;             /// failJob calls that succeeded (incl. handler exceptions)
     long errored;            /// throwJobError calls that succeeded
     long left;               /// jobs the handler chose to leave
+    /// Jobs the server returned beyond the free slots. They are dropped
+    /// without a command and time out on the engine.
+    long overActivated;
     long handlerExceptions;  /// handler threw; the job was failed with retries - 1
     long actionFailures;     /// a complete/fail/error call itself failed
     long activationFailures; /// activation requests that failed (then backed off)
@@ -181,7 +184,7 @@ final class WorkerControl
     // watermark: every generation up to it stays abandoned, so a second
     // timed-out run does not revive the first one's handlers.
     private shared long runGen_, abandonedGen_;
-    private shared long activated, completed, failed, errored, left,
+    private shared long activated, completed, failed, errored, left, overActivated,
         handlerExceptions, actionFailures, activationFailures,
         handlerAborts, unaccounted, abandonedActivations;
     private shared int poolLive, poolPeak;
@@ -244,6 +247,7 @@ final class WorkerControl
         s.failed = atomicLoad(failed);
         s.errored = atomicLoad(errored);
         s.left = atomicLoad(left);
+        s.overActivated = atomicLoad(overActivated);
         s.handlerExceptions = atomicLoad(handlerExceptions);
         s.actionFailures = atomicLoad(actionFailures);
         s.activationFailures = atomicLoad(activationFailures);
@@ -382,6 +386,13 @@ final class JobWorker
         this.client = client;
         WorkerDefaults builtIn;
         config.applyDefaults(builtIn);
+        import camunda.contract : maxSlots;
+        import std.conv : text;
+        // The slot contract caps capacity at maxSlots; reject a larger
+        // setting instead of silently activating fewer jobs.
+        if (config.maxJobsActive < 1 || config.maxJobsActive > maxSlots)
+            throw new ConfigException(text("JobWorkerConfig.maxJobsActive must be in 1 .. ", maxSlots,
+                ", got ", config.maxJobsActive));
         this.config = config;
         this.ctl = new WorkerControl;
     }
@@ -586,7 +597,7 @@ final class JobWorker
             const taken = slots.reserveSlots(jobs.length);
             if (taken < jobs.length)
             {
-                ctl.count!"left"(jobs.length - taken);
+                ctl.count!"overActivated"(jobs.length - taken);
                 jobs = jobs[0 .. taken];
             }
             foreach (j; jobs)
@@ -1301,6 +1312,17 @@ unittest
     import std.algorithm.comparison : min;
     import std.parallelism : totalCPUs;
     assert(bare.config.maxJobsActive == 32 && bare.config.effectiveThreads == min(32, 4 * totalCPUs));
+}
+
+// maxJobsActive outside the slot contract's 1 .. maxSlots is rejected, not clamped.
+unittest
+{
+    import std.exception : assertThrown;
+    import camunda.contract : maxSlots;
+    auto client = CamundaClient.fromEnv(["CAMUNDA_REST_ADDRESS": "http://127.0.0.1:1"]);
+    assert(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(maxSlots)).config.maxJobsActive == maxSlots);
+    assertThrown!ConfigException(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(maxSlots + 1)));
+    assertThrown!ConfigException(client.createJobWorker(JobWorkerConfig.create("t").maxJobs(-1)));
 }
 
 version (unittest)
