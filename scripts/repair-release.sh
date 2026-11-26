@@ -218,7 +218,8 @@ fi
 if [[ "${RELEASE_EXISTS}" == "1" ]]; then
   log "GitHub Release ${TAG} already exists; skipping creation."
 else
-  notes_file="$(mktemp)"
+  notes_file="$(mktemp)" || die "mktemp failed (TMPDIR=${TMPDIR:-unset})"
+  [[ -n "${notes_file}" ]] || die "mktemp returned an empty path"
   trap 'rm -f "${notes_file}"' EXIT
   # The section for this version: from its heading to the next release heading,
   # taken from the CHANGELOG.md of the release commit itself (the tag's blob),

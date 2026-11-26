@@ -161,7 +161,8 @@ run_repair() {
   shift
   (
     cd "${FIXTURE}/work" || exit 2
-    GITHUB_REF_NAME="${branch}" GITHUB_REPOSITORY="camunda/orchestration-cluster-api-dlang" \
+    mkdir -p "${FIXTURE}/tmp" || exit 2
+    TMPDIR="${FIXTURE}/tmp" GITHUB_REF_NAME="${branch}" GITHUB_REPOSITORY="camunda/orchestration-cluster-api-dlang" \
       bash "${SCRIPT}" "$@"
   )
 }
