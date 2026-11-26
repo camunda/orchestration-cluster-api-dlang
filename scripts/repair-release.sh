@@ -179,6 +179,13 @@ assert_test_fixture() {
   origin="$(git remote get-url origin 2>/dev/null)" || die "test mode: no origin remote"
   [[ "${top}" == "${fixture}"/* ]] || die "test mode: work tree ${top} is outside fixture ${fixture}"
   [[ "${origin}" == "${fixture}"/* ]] || die "test mode: origin ${origin} is outside fixture ${fixture}"
+  # Pushes may go elsewhere (pushurl, pushInsteadOf): check every push URL.
+  local push_urls url
+  push_urls="$(git remote get-url --push --all origin 2>/dev/null)" || push_urls=""
+  [[ -n "${push_urls}" ]] || die "test mode: origin has no push URL"
+  while IFS= read -r url; do
+    [[ "${url}" == "${fixture}"/* ]] || die "test mode: origin push URL ${url} is outside fixture ${fixture}"
+  done <<< "${push_urls}"
 }
 assert_test_fixture
 
@@ -218,7 +225,7 @@ fi
 if [[ "${RELEASE_EXISTS}" == "1" ]]; then
   log "GitHub Release ${TAG} already exists; skipping creation."
 else
-  notes_file="$(mktemp)" || die "mktemp failed (TMPDIR=${TMPDIR:-unset})"
+  notes_file="$(mktemp "${TMPDIR:-/tmp}/repair-release-notes.XXXXXX")" || die "mktemp failed (TMPDIR=${TMPDIR:-unset})"
   [[ -n "${notes_file}" ]] || die "mktemp returned an empty path"
   trap 'rm -f "${notes_file}"' EXIT
   # The section for this version: from its heading to the next release heading,

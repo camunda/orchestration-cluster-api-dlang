@@ -41,7 +41,7 @@ make_scratch_dir() {
 # Abort the whole run unless the current work tree and its origin both live
 # under ${FIXTURE}.
 assert_in_fixture() {
-  local top origin
+  local top origin url
   if [[ -z "${FIXTURE:-}" || ! -d "${FIXTURE}" ]]; then
     echo "FATAL: no fixture directory; refusing to mutate git state" >&2
     exit 2
@@ -52,6 +52,20 @@ assert_in_fixture() {
     echo "FATAL: git work tree '${top}' / origin '${origin}' outside fixture '${FIXTURE}'; aborting" >&2
     exit 2
   fi
+  # Push destinations can differ from the fetch URL (pushurl, pushInsteadOf):
+  # every effective push URL must be inside the fixture too.
+  local push_urls
+  push_urls="$(command git remote get-url --push --all origin 2>/dev/null)" || push_urls=""
+  if [[ -z "${push_urls}" ]]; then
+    echo "FATAL: origin has no push URL; aborting" >&2
+    exit 2
+  fi
+  while IFS= read -r url; do
+    if [[ "${url}" != "${FIXTURE}"/* ]]; then
+      echo "FATAL: origin push URL '${url}' outside fixture '${FIXTURE}'; aborting" >&2
+      exit 2
+    fi
+  done <<< "${push_urls}"
 }
 
 # Every mutating git call in this harness goes through this guard.
@@ -492,8 +506,8 @@ test_fails_closed_when_no_temp_dir() {
   local name="no writable temp dir -> harness exits non-zero, enclosing repo untouched"
   local before after rc
   before="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
-  REPAIR_TEST_NESTED=1 TMPDIR=/nonexistent/unwritable \
-    REPAIR_TEST_FALLBACK_TMP=/nonexistent/unwritable \
+  REPAIR_TEST_NESTED=1 TMPDIR=/dev/null \
+    REPAIR_TEST_FALLBACK_TMP=/dev/null \
     bash "${BASH_SOURCE[0]}" >/dev/null 2>&1
   rc=$?
   after="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
@@ -502,6 +516,35 @@ test_fails_closed_when_no_temp_dir() {
   else
     not_ok "${name} (rc=${rc} before=${before} after=${after})"
   fi
+}
+
+test_pushurl_outside_fixture_refused() {
+  local name="origin pushurl / pushInsteadOf outside fixture -> refused, outside repo untouched"
+  local outside rc_script rc_guard rc_insteadof
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${outside}/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_script=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_guard=$?
+  command git -C "${FIXTURE}/work" config --unset remote.origin.pushurl
+  command git -C "${FIXTURE}/work" config "url.${outside}/remote.git.pushInsteadOf" "${FIXTURE}/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_insteadof=$?
+  if [[ "${rc_script}" != "0" && "${rc_guard}" == "2" && "${rc_insteadof}" != "0" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (script=${rc_script} guard=${rc_guard} insteadOf=${rc_insteadof})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
 }
 
 main() {
@@ -523,6 +566,7 @@ main() {
   test_channel_derivation_without_node
   test_explicit_nontag_revision_fails_without_mutating_origin
   test_latest_reconciled_when_stable_release_already_exists
+  test_pushurl_outside_fixture_refused
 
   echo
   echo "${pass} passed, ${fail} failed"
