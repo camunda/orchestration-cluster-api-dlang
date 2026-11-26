@@ -15,6 +15,82 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${REPO_ROOT}/scripts/repair-release.sh"
 
+# --- safety ------------------------------------------------------------------
+#
+# The harness creates commits and pushes. It must never do so outside its
+# scratch fixture (a failed mktemp once made it push empty commits to the real
+# origin). Everything below fails closed.
+
+# Scratch root: respect TMPDIR; fall back to ${REPO_ROOT}/.tmp (gitignored)
+# when the system temp dir is not writable (sandboxes). The fallback can be
+# overridden for the regression test.
+FALLBACK_TMP="${REPAIR_TEST_FALLBACK_TMP:-${REPO_ROOT}/.tmp}"
+
+make_scratch_dir() {
+  local dir=""
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/repair-release-test.XXXXXX" 2>/dev/null)" || dir=""
+  if [[ -z "${dir}" || ! -d "${dir}" ]]; then
+    mkdir -p "${FALLBACK_TMP}" 2>/dev/null || true
+    dir="$(mktemp -d "${FALLBACK_TMP}/repair-release-test.XXXXXX" 2>/dev/null)" || dir=""
+  fi
+  [[ -n "${dir}" && -d "${dir}" ]] || return 1
+  # Canonical path so prefix checks against git's resolved paths are reliable.
+  (cd -P -- "${dir}" && pwd -P)
+}
+
+# Abort the whole run unless the current work tree and its origin both live
+# under ${FIXTURE}.
+# Succeeds only when $1 is an existing absolute directory whose physical path
+# (symlinks and '..' resolved) lies strictly under the physical fixture $2.
+path_in_fixture() {
+  local p="$1" root="$2" phys
+  # Only plain local paths: reject URLs (scheme://) and scp-style host:path.
+  [[ "${p}" != *://* ]] || return 1
+  [[ "${p}" != [!/]*:* ]] || return 1
+  [[ "${p}" == /* ]] || return 1
+  # -P: resolve symlinks before "..", as git does; a logical cd collapses
+  # "link/.." lexically and would hide an escape through a symlink.
+  phys="$(cd -P -- "${p}" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "${phys}" && "${phys}" == "${root}"/* ]]
+}
+
+assert_in_fixture() {
+  local top origin url root
+  if [[ -z "${FIXTURE:-}" || ! -d "${FIXTURE}" ]]; then
+    echo "FATAL: no fixture directory; refusing to mutate git state" >&2
+    exit 2
+  fi
+  root="$(cd -P -- "${FIXTURE}" && pwd -P)" || exit 2
+  top="$(command git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  origin="$(command git remote get-url origin 2>/dev/null)" || origin=""
+  if ! path_in_fixture "${top}" "${root}" || ! path_in_fixture "${origin}" "${root}"; then
+    echo "FATAL: git work tree '${top}' / origin '${origin}' outside fixture '${FIXTURE}'; aborting" >&2
+    exit 2
+  fi
+  # Push destinations can differ from the fetch URL (pushurl, pushInsteadOf):
+  # every effective push URL must be inside the fixture too.
+  local push_urls
+  push_urls="$(command git remote get-url --push --all origin 2>/dev/null)" || push_urls=""
+  if [[ -z "${push_urls}" ]]; then
+    echo "FATAL: origin has no push URL; aborting" >&2
+    exit 2
+  fi
+  while IFS= read -r url; do
+    if ! path_in_fixture "${url}" "${root}"; then
+      echo "FATAL: origin push URL '${url}' outside fixture '${FIXTURE}'; aborting" >&2
+      exit 2
+    fi
+  done <<< "${push_urls}"
+}
+
+# Every mutating git call in this harness goes through this guard.
+git() {
+  case "${1:-}" in
+    commit | push | tag | notes) assert_in_fixture ;;
+  esac
+  command git "$@"
+}
+
 pass=0
 fail=0
 declare -a failures=()
@@ -38,7 +114,12 @@ setup_fixture() {
   # $1: version (e.g. 11.0.0-alpha.5 or 10.2.1)
   # $2: optional heading level for the version's CHANGELOG section (default "#";
   #     pass "##" for a stable patch release, whose notes sit one level deeper).
-  FIXTURE="$(mktemp -d)"
+  FIXTURE="$(make_scratch_dir)" || FIXTURE=""
+  if [[ -z "${FIXTURE}" || ! -d "${FIXTURE}" ]]; then
+    echo "FATAL: could not create a scratch fixture directory (TMPDIR=${TMPDIR:-unset}, fallback=${FALLBACK_TMP})" >&2
+    exit 2
+  fi
+  export REPAIR_RELEASE_TEST_FIXTURE="${FIXTURE}"
   local version="$1"
   local heading="${2:-#}"
   TAG="v${version}"
@@ -71,9 +152,13 @@ STUB
   # the harness pushes HEAD:main and later checks out `main` by name, so an
   # ambient default of `master` would otherwise make `make check` fail for the
   # wrong reason.
-  git init -q --bare "${FIXTURE}/remote.git"
-  git init -q -b main "${FIXTURE}/work"
-  cd "${FIXTURE}/work" || return 1
+  # Fail closed: if init fails, `git config` below would otherwise write to
+  # whichever repository encloses the fixture (possibly the real clone).
+  git init -q --bare "${FIXTURE}/remote.git" || exit 2
+  git init -q -b main "${FIXTURE}/work" || exit 2
+  cd "${FIXTURE}/work" || exit 2
+  [[ "$(git rev-parse --show-toplevel 2>/dev/null)" == "$(pwd -P)" ]] \
+    || { echo "fixture work tree is not its own repository" >&2; exit 2; }
   git config user.name test
   git config user.email test@example.com
   git remote add origin "${FIXTURE}/remote.git"
@@ -98,7 +183,7 @@ EOF
 }
 
 teardown_fixture() {
-  cd "${REPO_ROOT}" || return
+  cd "${REPO_ROOT}" || exit 2
   [[ -n "${FIXTURE:-}" && -d "${FIXTURE}" ]] && rm -rf "${FIXTURE}"
   FIXTURE=""
 }
@@ -108,8 +193,9 @@ run_repair() {
   local branch="$1"
   shift
   (
-    cd "${FIXTURE}/work" || return 1
-    GITHUB_REF_NAME="${branch}" GITHUB_REPOSITORY="camunda/orchestration-cluster-api-dlang" \
+    cd "${FIXTURE}/work" || exit 2
+    mkdir -p "${FIXTURE}/tmp" || exit 2
+    TMPDIR="${FIXTURE}/tmp" GITHUB_REF_NAME="${branch}" GITHUB_REPOSITORY="camunda/orchestration-cluster-api-dlang" \
       bash "${SCRIPT}" "$@"
   )
 }
@@ -213,7 +299,7 @@ test_note_push_retried_until_success() {
   # Wrap git so the first push of the note ref fails.
   mkdir -p "${FIXTURE}/gitbin"
   local real_git
-  real_git="$(command -v git)"
+  real_git="$(type -P git)"
   cat > "${FIXTURE}/gitbin/git" <<STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "push" && "\$*" == *"refs/notes/"* ]]; then
@@ -435,7 +521,155 @@ test_latest_reconciled_when_stable_release_already_exists() {
   teardown_fixture
 }
 
+test_fails_closed_when_no_temp_dir() {
+  local name="no writable temp dir -> harness exits non-zero, enclosing repo untouched"
+  local before after rc
+  before="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
+  REPAIR_TEST_NESTED=1 TMPDIR=/dev/null \
+    REPAIR_TEST_FALLBACK_TMP=/dev/null \
+    bash "${BASH_SOURCE[0]}" >/dev/null 2>&1
+  rc=$?
+  after="$(cd "${REPO_ROOT}" && command git rev-parse HEAD)"
+  if [[ "${rc}" != "0" && "${before}" == "${after}" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (rc=${rc} before=${before} after=${after})"
+  fi
+}
+
+test_pushurl_outside_fixture_refused() {
+  local name="origin pushurl / pushInsteadOf outside fixture -> refused, outside repo untouched"
+  local outside rc_script rc_guard rc_insteadof
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${outside}/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_script=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_guard=$?
+  command git -C "${FIXTURE}/work" config --unset remote.origin.pushurl
+  command git -C "${FIXTURE}/work" config "url.${outside}/remote.git.pushInsteadOf" "${FIXTURE}/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_insteadof=$?
+  if [[ "${rc_script}" != "0" && "${rc_guard}" == "2" && "${rc_insteadof}" != "0" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (script=${rc_script} guard=${rc_guard} insteadOf=${rc_insteadof})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
+}
+
+test_pushurl_escape_via_dotdot_or_symlink_refused() {
+  local name="push URL escaping fixture via '..' or symlink -> refused, outside repo untouched"
+  local outside rc_dotdot rc_dotdot_guard rc_link rc_link_guard
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  # Lexically under ${FIXTURE}, physically outside it (both share a parent).
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/../$(basename "${outside}")/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_dotdot=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_dotdot_guard=$?
+  ln -s "${outside}" "${FIXTURE}/link"
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/link/remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_link=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_link_guard=$?
+  if [[ "${rc_dotdot}" != "0" && "${rc_dotdot_guard}" == "2" && "${rc_link}" != "0" && "${rc_link_guard}" == "2" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (dotdot=${rc_dotdot}/${rc_dotdot_guard} symlink=${rc_link}/${rc_link_guard})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
+}
+
+test_url_escape_via_symlink_then_dotdot_refused() {
+  local name="origin/push URL <fixture>/link/../x.git with link outside -> refused, outside repo untouched"
+  local outside rc_push rc_push_guard rc_origin rc_origin_guard
+  outside="$(make_scratch_dir)" || outside=""
+  if [[ -z "${outside}" ]]; then
+    not_ok "${name} (no scratch dir)"
+    return
+  fi
+  mkdir -p "${outside}/dir"
+  command git init -q --bare "${outside}/remote.git"
+  setup_fixture "11.0.0-alpha.5"
+  ln -s "${outside}/dir" "${FIXTURE}/link"
+  # Logically ${FIXTURE}/remote.git; physically ${outside}/remote.git.
+  command git -C "${FIXTURE}/work" config remote.origin.pushurl "${FIXTURE}/link/../remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_push=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_push_guard=$?
+  command git -C "${FIXTURE}/work" config --unset remote.origin.pushurl
+  command git -C "${FIXTURE}/work" config remote.origin.url "${FIXTURE}/link/../remote.git"
+  run_repair main >/dev/null 2>&1
+  rc_origin=$?
+  (cd "${FIXTURE}/work" && git push -q origin HEAD:main) >/dev/null 2>&1
+  rc_origin_guard=$?
+  if [[ "${rc_push}" != "0" && "${rc_push_guard}" == "2" && "${rc_origin}" != "0" && "${rc_origin_guard}" == "2" ]] \
+    && [[ -z "$(command git -C "${outside}/remote.git" for-each-ref)" ]]; then
+    ok "${name}"
+  else
+    not_ok "${name} (pushurl=${rc_push}/${rc_push_guard} url=${rc_origin}/${rc_origin_guard})"
+  fi
+  teardown_fixture
+  rm -rf "${outside}"
+}
+
+test_non_path_urls_refused() {
+  local name="non-path origin URLs (scheme:// and scp-style) -> refused"
+  local u rc bad=""
+  setup_fixture "11.0.0-alpha.5"
+  for u in "file://${FIXTURE}/remote.git" "localhost:${FIXTURE}/remote.git"; do
+    command git -C "${FIXTURE}/work" config remote.origin.url "${u}"
+    run_repair main >/dev/null 2>&1
+    rc=$?
+    [[ "${rc}" != "0" ]] || bad+=" ${u}"
+  done
+  if [[ -z "${bad}" ]] && ! grep -qE "release (create|edit)" "${GH_CALLS}"; then
+    ok "${name}"
+  else
+    not_ok "${name} (accepted:${bad})"
+  fi
+  teardown_fixture
+}
+
+test_empty_fixture_variable_refused() {
+  local name="REPAIR_RELEASE_TEST_FIXTURE set but empty -> refused, origin untouched"
+  local rc before after
+  setup_fixture "11.0.0-alpha.5"
+  before="$(command git -C "${FIXTURE}/remote.git" for-each-ref)"
+  REPAIR_RELEASE_TEST_FIXTURE='' run_repair main >/dev/null 2>&1
+  rc=$?
+  after="$(command git -C "${FIXTURE}/remote.git" for-each-ref)"
+  if [[ "${rc}" != "0" && "${before}" == "${after}" ]] && ! grep -qE "release (create|edit)" "${GH_CALLS}"; then
+    ok "${name}"
+  else
+    not_ok "${name} (rc=${rc})"
+  fi
+  teardown_fixture
+}
+
 main() {
+  if [[ -z "${REPAIR_TEST_NESTED:-}" ]]; then
+    test_fails_closed_when_no_temp_dir
+  fi
   test_release_created_when_only_tag_and_note_present
   test_note_and_release_created_main_alpha
   test_note_and_release_created_stable_latest
@@ -451,6 +685,11 @@ main() {
   test_channel_derivation_without_node
   test_explicit_nontag_revision_fails_without_mutating_origin
   test_latest_reconciled_when_stable_release_already_exists
+  test_pushurl_outside_fixture_refused
+  test_pushurl_escape_via_dotdot_or_symlink_refused
+  test_empty_fixture_variable_refused
+  test_url_escape_via_symlink_then_dotdot_refused
+  test_non_path_urls_refused
 
   echo
   echo "${pass} passed, ${fail} failed"
