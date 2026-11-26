@@ -39,6 +39,10 @@ Usage (run from the repository root; `make api-compat` wraps the first form):
       Compare the API in --repo (default: .) with the API in DIR (a checkout of
       the baseline). Exit 0: compatible, 1: breaking changes, 2: error.
 
+      Breaks listed in the suppressions file (default:
+      <repo>/api-compat-suppressions.txt, override with --suppressions FILE)
+      are approved: they are printed as `APPROVED ...` and do not fail.
+
   dub run -q --single scripts/api-compat.d -- --print-baseline-major N [--repo DIR]
       Print the newest published N.x.y release (no prerelease) tagged in the
       git repository DIR, without the leading `v`; print nothing if none.
@@ -50,7 +54,7 @@ Unit tests: dub run -q --build=unittest --single scripts/api-compat.d -- --DRT-t
 */
 module api_compat;
 
-import std.algorithm : all, any, canFind, filter, map, sort, startsWith;
+import std.algorithm : all, any, canFind, filter, map, sort, startsWith, endsWith;
 import std.array : array, join, replace;
 import std.conv : to;
 import std.file : exists, isDir, dirEntries, SpanMode, readText, tempDir, mkdirRecurse, rmdirRecurse, write;
@@ -797,6 +801,26 @@ private string show(string sig)
     return s.startsWith("text:") ? s[5 .. $] : s;
 }
 
+/// Display text of an overload for break messages, with its defaults mask
+/// when any parameter has a default, so removing successive defaults yields
+/// distinct break lines.
+private string label(string sig, const string[string] display)
+{
+    import std.string : lastIndexOf;
+    const mask = sig[sig.lastIndexOf("|defaults=") + 10 .. $];
+    auto base = (sig in display) ? display[sig] : show(sig);
+    return mask.canFind('1') ? base ~ " (defaults " ~ mask ~ ")" : base;
+}
+
+/// The canonical (sorted, deduplicated) overload set of `n` for messages.
+private string nowList(Sym)(Sym n)
+{
+    import std.algorithm : uniq;
+    auto ls = n.overloads.map!(nv => "`" ~ label(nv, n.display) ~ "`").array;
+    ls.sort();
+    return ls.length ? ls.uniq.join(", ") : "none";
+}
+
 /// The signature without its `|defaults=` mask. Required-member comparison
 /// uses this: adding a default to an existing abstract/interface method does
 /// not force implementations to change, and a removed default is already
@@ -858,8 +882,12 @@ string[] compare(Api old, Api neu)
             {
                 const need = visRank(o.overloadProtection.get(ov, o.protection));
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)))
-                    brk(o.path, format("%s overload `%s` changed or removed", o.kind,
-                            (ov in o.display) ? o.display[ov] : show(ov)));
+                    // Name the new overload set too (sorted, with default
+                    // masks), so an approval covers this exact before/after
+                    // pair and not a later replacement; see applySuppressions
+                    // for how compatible additions keep it valid.
+                    brk(o.path, format("%s overload `%s` changed or removed; now: %s", o.kind,
+                            label(ov, o.display), nowList(n)));
                 else if (!n.overloads.any!(nv => overloadCompatible(ov, nv, o.overridable)
                         && visRank(n.overloadProtection.get(nv, n.protection)) >= need))
                     brk(o.path, format("%s overload `%s` visibility narrowed", o.kind,
@@ -869,7 +897,8 @@ string[] compare(Api old, Api neu)
         case "template":
             foreach (ov; o.overloads)
                 if (!n.overloads.any!(nv => overloadCompatible(ov, nv)))
-                    brk(o.path, format("template parameters or constraint `%s` changed", show(ov)));
+                    brk(o.path, format("template parameters or constraint `%s` changed; now: %s",
+                            label(ov, o.display), nowList(n)));
             break;
         case "import":
             foreach (b; o.overloads)
@@ -958,11 +987,196 @@ string newestRelease(string[] tags, string major)
     return format("%s.%s.%s", best[0], best[1], best[2]);
 }
 
+// ---------------------------------------------------------------- suppressions
+
+/// Default suppressions file, relative to the repository root.
+enum suppressionsFile = "api-compat-suppressions.txt";
+
+/// Parse a suppressions file: one break line per entry, exactly as the
+/// checker prints it (`<baseline tag> BREAK <path>: <what>`), optionally with
+/// a trailing ` [<target>]`. Blank lines and lines starting with `#` are ignored.
+string[] parseSuppressions(string text)
+{
+    string[] out_;
+    foreach (l; text.splitLines)
+    {
+        const t = l.strip;
+        if (t.length && !t.startsWith("#"))
+            out_ ~= t;
+    }
+    return out_;
+}
+
+/// Whether suppression entry `e` covers break line `b`.
+///
+/// Approvals stay valid across later *compatible* changes, so an approved
+/// break keeps matching after:
+/// - adding or reordering unrelated overloads (`; now: ` list): every
+///   overload the entry names must still exist;
+/// - adding default arguments to an approved overload: a `(defaults MASK)`
+///   label matches when it keeps every default the entry recorded;
+/// - appending fields after an approved layout change: the current layout
+///   must start with the approved one.
+/// Replacing the approved overload again, removing one of its defaults, or
+/// reordering/removing approved fields does not match.
+bool suppressionCovers(string e, string b)
+{
+    if (e == b)
+        return true;
+    import std.string : indexOf;
+    // A target tag must match exactly.
+    static string tag(string s)
+    {
+        auto c = matchFirst(s, ctRegex!` \[[^\]]+\]$`);
+        return c.empty ? "" : c[0];
+    }
+    const et = tag(e), bt = tag(b);
+    if (et != bt)
+        return false;
+    e = e[0 .. $ - et.length];
+    b = b[0 .. $ - bt.length];
+
+    enum sep = "; now: ";
+    const ei = e.indexOf(sep), bi = b.indexOf(sep);
+    if (ei >= 0 && bi >= 0)
+    {
+        if (e[0 .. ei] != b[0 .. bi])
+            return false;
+        const have = backticked(b[bi + sep.length .. $]);
+        const want = backticked(e[ei + sep.length .. $]);
+        // An approved `now: none` (a removal) must not approve a later
+        // replacement: an empty list only matches an empty list.
+        if (!want.length)
+            return !have.length;
+        return want.all!(w => have.any!(h => labelKeepsDefaults(w, h)));
+    }
+    if (ei >= 0 || bi >= 0)
+        return false;
+
+    enum lay = ") to (";
+    if (e.indexOf("public field layout changed from (") >= 0)
+    {
+        const el = e.indexOf(lay), bl = b.indexOf(lay);
+        if (el < 0 || bl < 0 || e[0 .. el] != b[0 .. bl] || !e.endsWith(")") || !b.endsWith(")"))
+            return false;
+        const want = e[el + lay.length .. $ - 1];
+        const have = b[bl + lay.length .. $ - 1];
+        return want.length == 0 ? true : have.startsWith(want ~ ", ");
+    }
+    return false;
+}
+
+/// The backtick-quoted items of a `now:` list.
+private string[] backticked(string s)
+{
+    string[] r;
+    foreach (m; matchAll(s, ctRegex!("`([^`]*)`")))
+        r ~= m[1];
+    return r;
+}
+
+/// Whether overload label `have` is the approved label `want`, possibly with
+/// more default arguments (never fewer).
+private bool labelKeepsDefaults(string want, string have)
+{
+    if (want == have)
+        return true;
+    static void split(string l, out string base, out string mask)
+    {
+        auto c = matchFirst(l, ctRegex!`^(.*) \(defaults ([01]+)\)$`);
+        if (c.empty)
+            base = l;
+        else
+        {
+            base = c[1];
+            mask = c[2];
+        }
+    }
+    string wb, wm, hb, hm;
+    split(want, wb, wm);
+    split(have, hb, hm);
+    if (wb != hb || !hm.length)
+        return false;
+    if (!wm.length)
+        return true; // no defaults approved: any added default keeps it
+    if (wm.length != hm.length)
+        return false;
+    foreach (i; 0 .. wm.length)
+        if (wm[i] == '1' && hm[i] != '1')
+            return false;
+    return true;
+}
+
+unittest // approvals survive added defaults, but not removed ones
+{
+    const approved = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: `void f(string)`";
+    const added = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: `void f(string) (defaults 1)`";
+    assert(suppressionCovers(approved, added));
+    assert(suppressionCovers(approved ~ " [x86_64-windows-msvc]", added ~ " [x86_64-windows-msvc]"));
+    assert(!suppressionCovers(approved, added ~ " [x86_64-windows-msvc]"));
+    const two = "v1.0.0 BREAK m.g: function overload `void g(int, int)` changed or removed; now: `void g(string, int) (defaults 01)`";
+    const more = "v1.0.0 BREAK m.g: function overload `void g(int, int)` changed or removed; now: `void g(string, int) (defaults 11)`";
+    const fewer = "v1.0.0 BREAK m.g: function overload `void g(int, int)` changed or removed; now: `void g(string, int) (defaults 10)`";
+    const none = "v1.0.0 BREAK m.g: function overload `void g(int, int)` changed or removed; now: `void g(string, int)`";
+    assert(suppressionCovers(two, more));
+    assert(!suppressionCovers(two, fewer));
+    assert(!suppressionCovers(two, none));
+    // A different replacement still needs approval.
+    assert(!suppressionCovers(approved, "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: `void f(long) (defaults 1)`"));
+}
+
+unittest // approved layout changes survive appended fields only
+{
+    const approved = "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int a)";
+    assert(suppressionCovers(approved, "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int a, int c)"));
+    assert(!suppressionCovers(approved, "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int c, int a)"));
+    assert(!suppressionCovers(approved, "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b)"));
+    assert(!suppressionCovers(approved, "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int ab)"));
+    assert(!suppressionCovers(approved, "v2.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int a, int c)"));
+    assert(!suppressionCovers(approved, "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int a, int c) [x86_64-windows-msvc]"));
+    assert(suppressionCovers(approved ~ " [t]", "v1.0.0 BREAK m.S: public field layout changed from (int a, int b) to (int b, int a, int c) [t]"));
+}
+
+unittest
+{
+    const removal = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: none";
+    const replaced = "v1.0.0 BREAK m.f: function overload `void f(int)` changed or removed; now: `void f(string)`";
+    string[] rem, ok;
+    applySuppressions([replaced["v1.0.0 ".length .. $]], [removal], "v1.0.0", rem, ok);
+    assert(rem.length == 1 && ok.length == 0);
+    rem = null; ok = null;
+    applySuppressions([removal["v1.0.0 ".length .. $]], [removal], "v1.0.0", rem, ok);
+    assert(rem.length == 0 && ok.length == 1);
+}
+
+/// Split `breaks` into those not covered by `suppressions` and those that are.
+/// Breaks are prefixed with `baselineTag`, so an entry only approves a break
+/// against the release it was recorded for. An entry without a target tag
+/// also covers the same break on every target.
+void applySuppressions(string[] rawBreaks, string[] suppressions, string baselineTag,
+    out string[] remaining, out string[] approved)
+{
+    if (!baselineTag.length)
+        throw new Exception("applySuppressions needs a baseline tag");
+    foreach (raw; rawBreaks)
+    {
+        string b = baselineTag ~ " " ~ raw;
+        auto untagged = b;
+        auto c = matchFirst(b, ctRegex!`^(.*) \[[^\]]+\]$`);
+        if (!c.empty)
+            untagged = c[1];
+        if (suppressions.any!(e => suppressionCovers(e, b) || suppressionCovers(e, untagged)))
+            approved ~= b;
+        else
+            remaining ~= b;
+    }
+}
+
 // ---------------------------------------------------------------- main
 
 int main(string[] args)
 {
-    string baselineDir, repo = ".", major, compiler = "ldc2";
+    string baselineDir, baselineTag, repo = ".", major, compiler = "ldc2", suppressPath;
     bool dump;
     for (size_t i = 1; i < args.length; i++)
     {
@@ -976,9 +1190,11 @@ int main(string[] args)
         switch (args[i])
         {
         case "--baseline-dir": baselineDir = next(); break;
+        case "--baseline-tag": baselineTag = next(); break;
         case "--repo": repo = next(); break;
         case "--print-baseline-major": major = next(); break;
         case "--compiler": compiler = next(); break;
+        case "--suppressions": suppressPath = next(); break;
         case "--dump": dump = true; break;
         default:
             stderr.writeln("api-compat: unknown argument ", args[i]);
@@ -1009,7 +1225,24 @@ int main(string[] args)
             stderr.writeln("api-compat: need --baseline-dir, --print-baseline-major or --dump");
             return 2;
         }
-        auto breaks = compareTargets(baselineDir, repo, compiler);
+        if (!baselineTag.length)
+        {
+            stderr.writeln("api-compat: --baseline-dir needs --baseline-tag (the release it holds)");
+            return 2;
+        }
+        string[] suppressions;
+        const sp = suppressPath.length ? suppressPath : buildPath(repo, suppressionsFile);
+        if (exists(sp))
+            suppressions = parseSuppressions(readText(sp));
+        else if (suppressPath.length)
+            throw new Exception("suppressions file not found: " ~ suppressPath);
+        string[] breaks, approved;
+        applySuppressions(compareTargets(baselineDir, repo, compiler), suppressions, baselineTag,
+            breaks, approved);
+        foreach (b; approved)
+            writeln("APPROVED ", b);
+        if (approved.length)
+            writeln(format("%s approved break(s) listed in %s.", approved.length, sp));
         foreach (b; breaks)
             writeln(b);
         if (breaks.length)
@@ -1359,4 +1592,75 @@ unittest // static -> instance breaks; instance -> static breaks only overriders
             q{ interface I { static I make() { return null; } } }), "camunda.t.I.make: function overload"));
     assert(diff(q{ struct S { static S make() { return S.init; } } },
             q{ struct S { static S make() { return S.init; } } }) == []);
+}
+
+unittest // suppressions approve listed breaks only, against their baseline, on any target if untagged
+{
+    auto sup = parseSuppressions("# comment\n\n  v11.0.0 BREAK camunda.t.f: function removed  \nv11.0.0 BREAK camunda.t.g: x [x86_64-windows-msvc]\n");
+    assert(sup == ["v11.0.0 BREAK camunda.t.f: function removed", "v11.0.0 BREAK camunda.t.g: x [x86_64-windows-msvc]"]);
+    string[] rem, ok;
+    auto raw = [
+        "BREAK camunda.t.f: function removed",
+        "BREAK camunda.t.f: function removed [x86_64-windows-msvc]",
+        "BREAK camunda.t.g: x",
+        "BREAK camunda.t.g: x [x86_64-windows-msvc]",
+        "BREAK camunda.t.h: function removed",
+    ];
+    applySuppressions(raw, sup, "v11.0.0", rem, ok);
+    assert(rem == ["v11.0.0 BREAK camunda.t.g: x", "v11.0.0 BREAK camunda.t.h: function removed"], rem.join("\n"));
+    assert(ok.length == 3);
+    // After a later release, the old approvals no longer apply.
+    string[] rem2, ok2;
+    applySuppressions(raw, sup, "v11.1.0", rem2, ok2);
+    assert(ok2.length == 0 && rem2.length == raw.length);
+}
+
+unittest // an approved signature change does not approve a different replacement
+{
+    auto a = diff(q{ void f(int) {} }, q{ void f(string) {} });
+    auto b = diff(q{ void f(int) {} }, q{ void f(double) {} });
+    assert(a.length == 1 && b.length == 1, a.join("\n") ~ b.join("\n"));
+    assert(a[0] != b[0], a[0]);
+    string[] rem, ok;
+    applySuppressions(b, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 0 && rem.length == 1);
+}
+
+unittest // successive default removals and template replacements need fresh approvals
+{
+    auto a = diff(q{ void f(int a = 0, int b = 0) {} }, q{ void f(int a, int b = 0) {} });
+    auto b = diff(q{ void f(int a = 0, int b = 0) {} }, q{ void f(int a, int b) {} });
+    assert(a.length == 1 && b.length == 1, a.join("\n") ~ b.join("\n"));
+    string[] rem, ok;
+    applySuppressions(b, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 0 && rem.length == 1, a[0] ~ "\n" ~ b[0]);
+    auto t1 = diff(q{ void g(T)(T x) {} }, q{ void g(T, U)(T x) {} });
+    auto t2 = diff(q{ void g(T)(T x) {} }, q{ void g(T, U, V)(T x) {} });
+    assert(t1.length == 1 && t2.length == 1, t1.join("\n") ~ t2.join("\n"));
+    string[] rem2, ok2;
+    applySuppressions(t2, ["v11.0.0 " ~ t1[0]], "v11.0.0", rem2, ok2);
+    assert(ok2.length == 0 && rem2.length == 1, t1[0] ~ "\n" ~ t2[0]);
+}
+
+unittest // an approval survives compatible overload additions and reordering
+{
+    auto a = diff(q{ void f(int) {} }, q{ void f(string) {} });
+    auto b = diff(q{ void f(int) {} }, q{ void f() {} void f(string) {} });
+    auto c = diff(q{ void f(int) {} }, q{ void f(string) {} void f() {} });
+    assert(a.length == 1 && b.length == 1 && c.length == 1);
+    assert(b[0] == c[0], b[0] ~ "\n" ~ c[0]);
+    string[] rem, ok;
+    applySuppressions(b ~ c, ["v11.0.0 " ~ a[0]], "v11.0.0", rem, ok);
+    assert(ok.length == 2 && rem.length == 0, rem.join("\n"));
+    // ... but not across targets.
+    string[] rem2, ok2;
+    applySuppressions([a[0] ~ " [x86_64-windows-msvc]"], ["v11.0.0 " ~ a[0] ~ " [other]"], "v11.0.0", rem2, ok2);
+    assert(ok2.length == 0);
+}
+
+unittest // a response field made optional/nullable is a break
+{
+    auto b = diff(q{ import std.typecons : Nullable; struct R { string id; } },
+        q{ import std.typecons : Nullable; struct R { Nullable!string id; } });
+    assert(has(b, "camunda.t.R.id"), b.join("\n"));
 }

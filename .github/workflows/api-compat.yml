@@ -1,22 +1,26 @@
 name: API compatibility
 
-# Blocks PRs to stable branches that change the public D API in a way that stops
-# customer code from compiling (see scripts/api-compat.d and README "API
-# compatibility"). A PR is compared with its base branch, so it answers only for
-# its own changes: an approved break already merged does not fail every later PR.
-# When a break is intended (e.g. a bug fix that must change the API), apply the
-# `api-break-approved` label: the check still runs and lists the breaks, but
-# passes. The publish workflow compares the code it is about to tag with the last
-# release of the major.
+# Fails a PR whose public D API, after regenerating from the freshly bundled
+# upstream spec, stops customer code that compiled against the last published
+# release of the major from compiling (see scripts/api-compat.d and README "API
+# compatibility"). The baseline is the newest vN.x.y tag, not a committed
+# snapshot this PR could edit. A major with no N.x release yet (main during
+# alphas, a freshly cut stable/N) passes with a notice, so the same job lives on
+# main and turns itself on with the first release.
+#
+# Intended breaks are recorded in api-compat-suppressions.txt (which the
+# release gate reads too). A PR that changes that file needs the
+# `breaking-change-approved` label.
 
 on:
   pull_request:
     branches:
+      - main
       - "stable/**"
-    # labeled/unlabeled: re-evaluate when api-break-approved is added or removed.
-    # edited: re-evaluate when the PR is retargeted to another stable branch. The
-    # job must run for every such event: a skipped run would replace a failed one
-    # and the required check would count as passing.
+    # labeled/unlabeled: re-evaluate when breaking-change-approved is added or
+    # removed. edited: re-evaluate when the PR is retargeted. The job must run
+    # for every such event: a skipped run would replace a failed one and the
+    # required check would count as passing.
     types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 permissions:
@@ -30,55 +34,95 @@ jobs:
   api-compat:
     name: API compatibility
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - name: Check out the base branch
-        uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: .api-compat-base
-          # Tags are needed to find the last published release of the major.
+          # Tags find the last published release; history diffs the
+          # suppressions file against the base.
           fetch-depth: 0
           persist-credentials: false
-      - uses: dlang-community/setup-dlang@v2
-        with:
-          compiler: ldc-1.43.0
 
-      - name: Build checker
-        run: |
-          dub build -q --single scripts/api-compat.d
-          cp scripts/.dub/bin/api-compat "$RUNNER_TEMP/api-compat"
-
-      - name: Check API compatibility
+      - name: Suppressions changes need breaking-change-approved
         env:
-          # stable/<N> with no N.x release yet (just cut from main) has no
-          # published API to protect and passes.
-          BASE_REF: ${{ github.base_ref }}
-          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'api-break-approved') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change-approved') }}
         run: |
-          set -uo pipefail
-          released=$("$RUNNER_TEMP/api-compat" --print-baseline-major "${BASE_REF#stable/}" --repo .api-compat-base) || exit 2
-          if [ -z "$released" ]; then
-            echo "::notice::No ${BASE_REF#stable/}.x release published yet; nothing to protect."
+          if git diff --quiet "$BASE_SHA" HEAD -- api-compat-suppressions.txt; then
             exit 0
           fi
+          git diff "$BASE_SHA" HEAD -- api-compat-suppressions.txt
+          if [ "$APPROVED" != "true" ]; then
+            echo "::error::This PR changes api-compat-suppressions.txt (approved API breaks). A maintainer must apply the breaking-change-approved label."
+            exit 1
+          fi
+          echo "::warning::api-compat-suppressions.txt changed; approved with the breaking-change-approved label."
+
+      - name: Find baseline release
+        id: baseline
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "$BASE_REF" in
+            stable/*) major="${BASE_REF#stable/}" ;;
+            # main: the major it develops, from the base branch's stamped
+            # version (not from tags reachable in PR-controlled history).
+            *) major=$(git show "$BASE_SHA:runtime/source/camunda/version_.d" | sed -nE 's/^enum sdkVersion = "([0-9]+)\..*/\1/p') ;;
+          esac
+          tag=""
+          if [ -n "$major" ]; then
+            v=$(git tag --list "v${major}.*" | grep -E "^v${major}\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
+            tag="$v"
+          fi
+          if [ -z "$tag" ]; then
+            echo "::notice::No published ${major:-?}.x release yet; nothing to protect. Skipping the API comparison."
+          else
+            echo "Baseline: $tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.baseline.outputs.tag != ''
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/codegen-setup
+        if: steps.baseline.outputs.tag != ''
+
+      # Regenerate from the spec bundled now (package.json default ref), so
+      # upstream drift that no PR reviewed is caught as well as this PR's own
+      # changes. The release gate checks the same thing before publishing.
+      - name: Bundle spec from upstream and regenerate
+        if: steps.baseline.outputs.tag != ''
+        env:
+          # Same spec selection as publish.yml, so PR and release gates agree.
+          SPEC_REF: ${{ vars.SPEC_REF_OVERRIDE }}
+        run: |
+          npm install --no-audit --no-fund
+          npm run bundle:spec
+          dub run -q --single scripts/generate.d
+          git diff --stat -- external-spec/bundled source/camunda/generated docs examples
+
+      - name: Check API compatibility
+        if: steps.baseline.outputs.tag != ''
+        env:
+          TAG: ${{ steps.baseline.outputs.tag }}
+        run: |
+          set -uo pipefail
+          dub build -q --single scripts/api-compat.d || exit 2
+          git worktree add -q --detach "$RUNNER_TEMP/api-compat-baseline" "$TAG" || exit 2
           pipeline_status=(0 0)
-          "$RUNNER_TEMP/api-compat" --baseline-dir .api-compat-base | tee "$RUNNER_TEMP/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
+          scripts/.dub/bin/api-compat --baseline-dir "$RUNNER_TEMP/api-compat-baseline" --baseline-tag "$TAG" | tee "$RUNNER_TEMP/api-compat.txt" || pipeline_status=("${PIPESTATUS[@]}")
           [ "${pipeline_status[1]}" -eq 0 ] || exit 2
           rc="${pipeline_status[0]}"
           {
-            echo '## API compatibility'
+            echo "## API compatibility (vs ${TAG}, after regenerating)"
             echo '```'
             cat "$RUNNER_TEMP/api-compat.txt" || exit 2
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || exit 2
-          if [ "$rc" -eq 1 ] && [ "$APPROVED" = "true" ]; then
-            echo "::warning::Breaking API changes approved with the api-break-approved label."
-            echo "Approved with the \`api-break-approved\` label." >> "$GITHUB_STEP_SUMMARY" || exit 2
-            exit 0
-          fi
           if [ "$rc" -eq 1 ]; then
-            echo "::error::If this break is intended (e.g. a bug fix that must change the API), apply the api-break-approved label. Otherwise make the change backward compatible."
+            echo "::error::Breaking API changes compared with ${TAG}. Make the change backward compatible, or, if the break is intended, copy the \"<baseline tag> BREAK ...\" lines (e.g. \"${TAG} BREAK ...\") into api-compat-suppressions.txt and ask a maintainer for the breaking-change-approved label."
           fi
           exit "$rc"

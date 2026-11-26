@@ -459,15 +459,22 @@ The API is compared for the host target and for Windows
 Additions, and added attributes or default arguments (including template
 parameter defaults), are not breaks.
 
-- **Pull requests to `stable/**`** are compared with their base branch
-  (`.github/workflows/api-compat.yml`). A `stable/N` with no `N.x` release
-  yet passes.
+- **Pull requests to `main` and `stable/**`**
+  (`.github/workflows/api-compat.yml`) re-bundle the spec from upstream,
+  regenerate, and compare the result with the newest published `vN.x.y`
+  release of the major, so upstream spec drift is caught as well as the PR's
+  own changes. A major with no `N.x` release yet (`main` during alphas, a
+  freshly cut `stable/N`) passes with a notice.
 - **Releases** from `stable/**` compare the commit about to be tagged,
   including regenerated code, with the last `N.x.y` release
   (`.github/workflows/publish.yml`).
-- **Intended breaks:** apply the `api-break-approved` label to the PR. The
-  check still lists the breaks but passes, and the label also approves the
-  release. For a break no PR made (upstream spec drift), run the Publish
+- **Intended breaks:** copy the `<baseline tag> BREAK ...` lines into
+  `api-compat-suppressions.txt` (without the ` [<target>]` suffix the entry
+  covers every target; the tag limits the approval to that baseline release,
+  and a changed signature names its new overloads, so a later different
+  change needs a new entry). Both the PR check and the release gate skip listed
+  breaks and print them as `APPROVED`. A PR that changes the file needs the
+  `breaking-change-approved` label. As a last resort, run the Publish
   workflow manually with `api_break_approved`.
 
 Run it locally against any git ref (exit 1 means breaking changes):

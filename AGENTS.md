@@ -116,13 +116,20 @@ make api-compat BASE=<ref>  # public-API breaks vs a git ref
 
 ### API compatibility
 
-PRs to `stable/**` must not break the public API
-(`.github/workflows/api-compat.yml`), and releases from `stable/**` are
-compared with the last `N.x.y` release (`publish.yml`). README "API
-compatibility" lists what counts as a break. An intended break needs the
-`api-break-approved` label on the PR. Do not apply it yourself: ask the
-maintainer. Run `make api-compat BASE=origin/stable/<N>` before pushing to a
-stable branch.
+The `API compatibility` job (`.github/workflows/api-compat.yml`) runs on PRs
+to `main` and `stable/**`. It re-bundles the spec, regenerates, and compares
+the public API with the newest published `vN.x.y` tag of the major
+(`scripts/api-compat.d`, `ldc2 -X` based). With no `N.x` release yet (`main`
+during alphas) it passes with a notice. Releases from `stable/**` run the same
+comparison before publishing (`publish.yml`, `scripts/api-compat-release.sh`).
+README "API compatibility" lists what counts as a break.
+
+An intended break is recorded by copying its `<baseline tag> BREAK ...` lines into
+`api-compat-suppressions.txt`; a PR that changes that file needs the
+`breaking-change-approved` label. Do not apply the label yourself: ask the
+maintainer. Run `make api-compat BASE=v<N>.<x>.<y>` (the last release of the
+major) before pushing to a stable branch. The job is meant to be a required
+check in the stable-branch ruleset.
 
 ### Windows code
 

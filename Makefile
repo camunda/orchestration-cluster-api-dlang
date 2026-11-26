@@ -97,7 +97,7 @@ api-compat:
 	@set -e; tmp=$$(mktemp -d); \
 	trap 'git worktree remove --force "$$tmp/base" >/dev/null 2>&1; rm -rf "$$tmp"' EXIT; \
 	git worktree add -q --detach "$$tmp/base" "$(BASE)"; \
-	$(API_COMPAT_BIN) --baseline-dir "$$tmp/base"
+	$(API_COMPAT_BIN) --baseline-dir "$$tmp/base" --baseline-tag "$(BASE)"
 
 docs-md:
 	$(SCRIPT) scripts/generate-docusaurus-md.d -- --validate-links
