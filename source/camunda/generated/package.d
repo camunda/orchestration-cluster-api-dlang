@@ -9,7 +9,7 @@ public import camunda.generated.models;
 public import camunda.generated.operations;
 
 /// SHA-256 of the bundled OpenAPI spec this tree was generated from.
-enum generatedSpecHash = "sha256:7f3ff33015b436a678605da2a348cd151f5ad8289605c1355f4d65fba37a5607";
+enum generatedSpecHash = "sha256:a6633f08edb59cae9ee42085e0dd5d933876850f6a4a87f3bdfa66f7dbaf4f1c";
 
 /// Number of REST operations in the generated facade.
 enum generatedOperationCount = 253;
