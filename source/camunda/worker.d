@@ -424,6 +424,8 @@ final class JobWorker
     void run(Ctx)(JobAction function(Job, Ctx) @safe handler, Ctx context)
         if (isSendable!Ctx)
     {
+        import camunda.contract : BackpressureState, RpcKind, WorkerSlotState,
+            isBackpressureStatus, retryDelayMs, usesBackpressureGate;
         import camunda.retry : backoffDelayMs, isRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
@@ -441,7 +443,17 @@ final class JobWorker
         auto transport = client.transport;
         const retry = transport.config.retry;
         const maxAttempts = max(1, retry.maxAttempts);
-        const cap = max(1, config.maxJobsActive);
+        // Slot accounting and the activation AIMD limit follow the
+        // SPARK-proved contract (camunda.contract): held jobs never exceed
+        // the capacity, a release never underflows, and the batch asked for
+        // is min(free slots, AIMD limit).
+        auto slots = WorkerSlotState.make(max(1, config.maxJobsActive));
+        const cap = slots.capacity;
+        auto aimd = BackpressureState.make(1, cap, 16);
+        // Only activation is gated; job commands drain the broker.
+        static assert(usesBackpressureGate(RpcKind.activate));
+        static assert(!usesBackpressureGate(RpcKind.complete) && !usesBackpressureGate(RpcKind.fail)
+            && !usesBackpressureGate(RpcKind.throwError));
         // Activate again once 30% of the capacity is free, as the Java
         // client does: no tiny one-job activations under load.
         const threshold = max(1, (cap * 3 + 9) / 10);
@@ -477,11 +489,10 @@ final class JobWorker
         const idleTimeout = config.effectiveIdleTimeoutMs;
         const shutdownTimeout = config.effectiveShutdownTimeoutMs;
         long stopDeadlineMs = long.max; // set when stopping starts
-        int held;  // activated and not yet completed, failed, errored or left
         int busy;  // handed to a handler that has not returned yet
         bool activating;
         long nextActivationMs; // no activation before this (backoff, poll interval)
-        long backoff;
+        int failedActivations; // in a row, for the backoff
         Exception fatal;
         Pending[long] inFlight; // sent commands, by tag
         Pending[long] retrying; // commands waiting to be sent again
@@ -495,7 +506,7 @@ final class JobWorker
         }
         void settled(JobAction.Kind kind)
         {
-            held--;
+            slots.releaseSlots(1);
             final switch (kind)
             {
             case JobAction.Kind.complete: ctl.count!"completed"; break;
@@ -513,21 +524,23 @@ final class JobWorker
             {
                 inFlight.remove(tag);
                 ctl.count!"actionFailures";
-                held--;
+                slots.releaseSlots(1);
             }
         }
-        void activationFailed()
+        void activationFailed(Exception e = null)
         {
             ctl.count!"activationFailures";
-            backoff = backoff ? min(backoffMaxMs, backoff * 8 / 5) : backoffMinMs;
-            nextActivationMs = clock.nowMs + backoff;
+            if (auto api = cast(ApiException) e)
+                if (isBackpressureStatus(api.status)) aimd.onBackpressure();
+            if (failedActivations < 100) failedActivations++;
+            nextActivationMs = clock.nowMs + retryDelayMs(failedActivations, backoffMinMs, backoffMaxMs);
         }
         void activate()
         {
             try
             {
                 const timeout = max(30_000, config.requestTimeoutMs + 10_000);
-                transport.submitJson("POST", "/jobs/activation", activationBody(cap - held), sink,
+                transport.submitJson("POST", "/jobs/activation", activationBody(slots.requestedBatchSize(aimd.currentLimit)), sink,
                     activationTag, true, timeout);
                 activating = true;
             }
@@ -547,11 +560,12 @@ final class JobWorker
             catch (Exception e)
             {
                 transport.recordOutcome(e); // activations are not retried
-                activationFailed();
+                activationFailed(e);
                 return;
             }
             transport.recordOutcome(null);
-            backoff = 0;
+            failedActivations = 0;
+            aimd.onHealthy();
             ctl.count!"activated"(jobs.length);
             if (config.withLease)
                 foreach (j; jobs)
@@ -566,9 +580,17 @@ final class JobWorker
                         return;
                     }
                 }
+            // Over-activation (more jobs than free slots) saturates: the
+            // excess is left, and the engine hands it out again after its
+            // timeout.
+            const taken = slots.reserveSlots(jobs.length);
+            if (taken < jobs.length)
+            {
+                ctl.count!"left"(jobs.length - taken);
+                jobs = jobs[0 .. taken];
+            }
             foreach (j; jobs)
             {
-                held++;
                 busy++;
                 // The parsed response is dropped below; each job subtree
                 // goes to exactly one handler thread.
@@ -600,7 +622,7 @@ final class JobWorker
                 if (ev.command.kind == JobAction.Kind.leave || !ev.command.path.length)
                 {
                     if (ev.command.kind == JobAction.Kind.leave) settled(JobAction.Kind.leave);
-                    else held--; // the command could not even be built (counted by the handler)
+                    else slots.releaseSlots(1); // the command could not even be built (counted by the handler)
                     return;
                 }
                 send(nextTag++, Pending(ev.command));
@@ -634,7 +656,7 @@ final class JobWorker
                     {
                         transport.recordOutcome(e);
                         ctl.count!"actionFailures";
-                        held--;
+                        slots.releaseSlots(1);
                     }
                 }
                 return;
@@ -675,12 +697,12 @@ final class JobWorker
                 lastFullMs = now;
             }
             const stopping = ctl.stopping || fatal !is null;
-            if (stopping && !activating && held == 0) break;
+            if (stopping && !activating && slots.inFlight == 0) break;
             if (stopping && stopDeadlineMs == long.max) stopDeadlineMs = now + shutdownTimeout;
             if (stopping && now >= stopDeadlineMs)
             {
                 // Bounded drain: report what is still held, do not hang.
-                if (held > 0) ctl.count!"unaccounted"(held);
+                if (slots.inFlight > 0) ctl.count!"unaccounted"(slots.inFlight);
                 // An activation long poll may outlast the timeout; the jobs
                 // it returns are not seen here, so record the request.
                 if (activating) ctl.count!"abandonedActivations";
@@ -692,7 +714,7 @@ final class JobWorker
             }
             // Activate when enough capacity is free, unless queued jobs wait
             // for slots that retiring threads still hold.
-            const wanted = !stopping && !activating && cap - held >= threshold
+            const wanted = !stopping && !activating && slots.freeSlots >= threshold
                 && !(busy > live && retiring > 0);
             if (wanted && now >= nextActivationMs) activate();
 

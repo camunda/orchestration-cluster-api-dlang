@@ -12,6 +12,9 @@
     "gdc": "no",
     "ldc": ">=1.43.0"
   },
+  "stringImportPaths": [
+    "tests/contract-traces"
+  ],
   "dflags": [
     "-allinst",
     "-preview=dip1000",

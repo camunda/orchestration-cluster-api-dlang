@@ -1,0 +1,678 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/camunda/orchestration-cluster-api-ada/spec/schema.json",
+  "title": "Camunda_Contract golden trace file",
+  "description": "Deterministic (state, event) -> state' traces generated from the SPARK-proved Camunda_Contract package. Replay each case: build the initial state, apply each step's event in order, and assert output and state equal the recorded values exactly. Case, event, output and state shapes are machine- and event-specific: every field needed to replay is required.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "machine",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "machine": {
+      "enum": [
+        "slots",
+        "backpressure",
+        "retry"
+      ]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "machine": {
+            "const": "slots"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "initial",
+                "name",
+                "steps"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "initial": {
+                  "type": "object",
+                  "required": [
+                    "capacity"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "capacity": {
+                      "$ref": "#/$defs/positiveSlots"
+                    }
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "observe"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "required": [
+                              "freeSlots",
+                              "isDrained"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "freeSlots": {
+                                "$ref": "#/$defs/slotCount"
+                              },
+                              "isDrained": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "state": {
+                            "$ref": "#/$defs/slotsState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "permitted",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "requestedBatchSize"
+                              },
+                              "permitted": {
+                                "$ref": "#/$defs/positiveSlots"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "required": [
+                              "requestedBatchSize"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "requestedBatchSize": {
+                                "$ref": "#/$defs/slotCount"
+                              }
+                            }
+                          },
+                          "state": {
+                            "$ref": "#/$defs/slotsState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "count",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "reserve"
+                              },
+                              "count": {
+                                "$ref": "#/$defs/slotCount"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "required": [
+                              "taken"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "taken": {
+                                "$ref": "#/$defs/slotCount"
+                              }
+                            }
+                          },
+                          "state": {
+                            "$ref": "#/$defs/slotsState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "count",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "release"
+                              },
+                              "count": {
+                                "$ref": "#/$defs/slotCount"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "maxProperties": 0
+                          },
+                          "state": {
+                            "$ref": "#/$defs/slotsState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "markStopped"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "maxProperties": 0
+                          },
+                          "state": {
+                            "$ref": "#/$defs/slotsState"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "machine": {
+            "const": "backpressure"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "initial",
+                "name",
+                "steps"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "initial": {
+                  "type": "object",
+                  "required": [
+                    "maxLimit",
+                    "minLimit",
+                    "recoveryWindow"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "minLimit": {
+                      "$ref": "#/$defs/positiveSlots"
+                    },
+                    "maxLimit": {
+                      "$ref": "#/$defs/positiveSlots"
+                    },
+                    "recoveryWindow": {
+                      "$ref": "#/$defs/window"
+                    }
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "observe"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "maxProperties": 0
+                          },
+                          "state": {
+                            "$ref": "#/$defs/backpressureState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "status",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "backpressure"
+                              },
+                              "status": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "maxProperties": 0
+                          },
+                          "state": {
+                            "$ref": "#/$defs/backpressureState"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "event",
+                          "output",
+                          "state"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "event": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "const": "healthy"
+                              }
+                            }
+                          },
+                          "output": {
+                            "type": "object",
+                            "maxProperties": 0
+                          },
+                          "state": {
+                            "$ref": "#/$defs/backpressureState"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "machine": {
+            "const": "retry"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "initial",
+                    "name",
+                    "steps"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "initial": {
+                      "description": "Status classification: no constructor arguments.",
+                      "type": "object",
+                      "maxProperties": 0
+                    },
+                    "steps": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "event",
+                              "output",
+                              "state"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "event": {
+                                "type": "object",
+                                "required": [
+                                  "status",
+                                  "type"
+                                ],
+                                "additionalProperties": false,
+                                "properties": {
+                                  "type": {
+                                    "const": "classifyStatus"
+                                  },
+                                  "status": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "output": {
+                                "type": "object",
+                                "required": [
+                                  "isBackpressure",
+                                  "isRetryable"
+                                ],
+                                "additionalProperties": false,
+                                "properties": {
+                                  "isRetryable": {
+                                    "type": "boolean"
+                                  },
+                                  "isBackpressure": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
+                              "state": {
+                                "$ref": "#/$defs/retryState"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "initial",
+                    "name",
+                    "steps"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "initial": {
+                      "type": "object",
+                      "required": [
+                        "baseMs",
+                        "maxDelayMs"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "baseMs": {
+                          "$ref": "#/$defs/positiveMs"
+                        },
+                        "maxDelayMs": {
+                          "$ref": "#/$defs/positiveMs"
+                        }
+                      }
+                    },
+                    "steps": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "event",
+                              "output",
+                              "state"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "event": {
+                                "type": "object",
+                                "required": [
+                                  "attempt",
+                                  "type"
+                                ],
+                                "additionalProperties": false,
+                                "properties": {
+                                  "type": {
+                                    "const": "retryDelay"
+                                  },
+                                  "attempt": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 100
+                                  }
+                                }
+                              },
+                              "output": {
+                                "type": "object",
+                                "required": [
+                                  "delayMs"
+                                ],
+                                "additionalProperties": false,
+                                "properties": {
+                                  "delayMs": {
+                                    "$ref": "#/$defs/positiveMs"
+                                  }
+                                }
+                              },
+                              "state": {
+                                "$ref": "#/$defs/retryState"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "slotCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "positiveSlots": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "positiveMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600000
+    },
+    "window": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "slotsState": {
+      "type": "object",
+      "required": [
+        "capacity",
+        "inFlight",
+        "stopped"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capacity": {
+          "$ref": "#/$defs/positiveSlots"
+        },
+        "inFlight": {
+          "$ref": "#/$defs/slotCount"
+        },
+        "stopped": {
+          "type": "boolean"
+        }
+      }
+    },
+    "backpressureState": {
+      "type": "object",
+      "required": [
+        "currentLimit",
+        "healthyStreak",
+        "maxLimit",
+        "minLimit",
+        "recoveryWindow"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "minLimit": {
+          "$ref": "#/$defs/positiveSlots"
+        },
+        "maxLimit": {
+          "$ref": "#/$defs/positiveSlots"
+        },
+        "currentLimit": {
+          "$ref": "#/$defs/positiveSlots"
+        },
+        "healthyStreak": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recoveryWindow": {
+          "$ref": "#/$defs/window"
+        }
+      }
+    },
+    "retryState": {
+      "description": "The retry machine is stateless.",
+      "type": "object",
+      "maxProperties": 0
+    }
+  }
+}
