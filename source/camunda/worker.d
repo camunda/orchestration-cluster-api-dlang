@@ -25,7 +25,7 @@ module camunda.worker;
 
 import camunda.client : CamundaClient;
 import camunda.clock : Clock;
-import camunda.config : WorkerDefaults;
+import camunda.config : LogLevel, WorkerDefaults;
 import camunda.errors;
 import camunda.generated;
 import camunda.http : HttpResult, HttpSink;
@@ -679,7 +679,7 @@ final class JobWorker
                     else
                     {
                         transport.recordOutcome(e);
-                        if (reportCommandFailure(pending.command.path, e)) ctl.count!"outcomeUnknown";
+                        if (reportCommandFailure(pending.command.path, e, warnEnabled(transport.config.logLevel))) ctl.count!"outcomeUnknown";
                         else ctl.count!"actionFailures";
                         slots.releaseSlots(1);
                     }
@@ -968,14 +968,32 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
 /// Log a failed job command at warn level (no stack trace). Returns
 /// whether its outcome is unknown (it may have been applied). No `failJob`
 /// follows either way.
-private bool reportCommandFailure(string path, Exception e)
+private bool reportCommandFailure(string path, Exception e, bool warn)
 {
     import camunda.retry : isUnknownOutcome;
     import camunda.safeio : stdErr;
     const msg = commandFailureMessage(path, e);
-    try stdErr.writeln(msg);
-    catch (Exception) {}
+    if (warn)
+    {
+        try stdErr.writeln(msg);
+        catch (Exception) {}
+    }
     return isUnknownOutcome(e);
+}
+
+/// Whether `level` lets warnings through (`off` and `error` suppress them).
+private bool warnEnabled(LogLevel level) pure nothrow @nogc
+{
+    return level != LogLevel.off && level != LogLevel.error;
+}
+
+unittest
+{
+    assert(!warnEnabled(LogLevel.off));
+    assert(!warnEnabled(LogLevel.error));
+    assert(warnEnabled(LogLevel.warn));
+    assert(warnEnabled(LogLevel.info));
+    assert(warnEnabled(LogLevel.trace));
 }
 
 /// The warning for a failed job command.

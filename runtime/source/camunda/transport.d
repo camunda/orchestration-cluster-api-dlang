@@ -213,7 +213,7 @@ final class Transport
                 req.contentType = contentType;
                 req.rawBody = rawBody.dup;
                 return send(req);
-            });
+            }, isJobCommand(method, path) ? &isJobCommandRetryable : &isRetryable);
         }
         catch (Exception e)
         {
