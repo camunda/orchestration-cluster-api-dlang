@@ -40,7 +40,13 @@ bool isNotSentNetworkError(string msg) pure
         "host name not resolved", "could not connect", "timed out before sending to",
         "network error: tls: ", "tls failure",
     ];
+    import std.algorithm.searching : startsWith;
     const m = msg.toLower;
+    // WinHTTP failures raised after WinHttpSendRequest returned: the request
+    // may have reached the server whatever the error code says.
+    static immutable postSend = ["no response from", "no status line from", "cannot read the response from"];
+    foreach (prefix; postSend)
+        if (m.startsWith(prefix)) return false;
     foreach (marker; markers)
         if (m.canFind(marker)) return true;
     return false;
@@ -105,6 +111,16 @@ T withRetry(T)(const ref RetryConfig cfg, Clock clock, scope T delegate() @safe 
             clock.sleep(backoffDelayMs(cfg, attempt - 1));
         }
     }
+}
+
+unittest
+{
+    // Post-send WinHTTP messages are never "not sent", whatever the code name.
+    assert(!isNotSentNetworkError("no response from http://h/v2/jobs/1/completion: WinHTTP 12175 TLS failure"));
+    assert(!isNotSentNetworkError("no response from http://h/x: WinHTTP 12029 could not connect"));
+    assert(!isNotSentNetworkError("no status line from http://h/x: WinHTTP 12175 TLS failure"));
+    assert(!isNotSentNetworkError("cannot read the response from http://h/x: WinHTTP 12002 timed out"));
+    assert(isNotSentNetworkError("cannot send to http://h/x: WinHTTP 12029 could not connect"));
 }
 
 unittest

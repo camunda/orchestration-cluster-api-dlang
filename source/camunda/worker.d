@@ -1005,8 +1005,22 @@ private string commandFailureMessage(string path, Exception e)
             return "camunda worker: WARN job not found (already completed, failed or timed out): POST " ~ path;
     if (isUnknownOutcome(e))
         return "camunda worker: WARN outcome unknown; the job may have completed, otherwise it will time out "
-            ~ "and be re-activated: POST " ~ path ~ " (" ~ e.msg ~ ")";
-    return "camunda worker: WARN job command failed: POST " ~ path ~ " (" ~ e.msg ~ ")";
+            ~ "and be re-activated: POST " ~ path ~ " (" ~ failureSummary(e) ~ ")";
+    return "camunda worker: WARN job command failed: POST " ~ path ~ " (" ~ failureSummary(e) ~ ")";
+}
+
+/// Safe metadata for a failure: the exception type and, for API errors,
+/// the HTTP status. Never the message, which can echo response bodies or
+/// token-endpoint errors and carry control characters into the log.
+private string failureSummary(Exception e)
+{
+    import std.conv : to;
+    import std.string : lastIndexOf;
+    const full = typeid(e).name;
+    const dot = full.lastIndexOf('.');
+    string name = dot >= 0 ? full[dot + 1 .. $] : full;
+    if (auto api = cast(ApiException) e) return name ~ " HTTP " ~ api.status.to!string;
+    return name;
 }
 
 unittest
@@ -1015,6 +1029,9 @@ unittest
     assert(commandFailureMessage("/jobs/1/completion", new ApiException(404, "")).canFind("job not found"));
     assert(commandFailureMessage("/jobs/1/completion", new ApiException(504, "")).canFind("outcome unknown"));
     assert(commandFailureMessage("/jobs/1/completion", new ApiException(400, "")).canFind("command failed"));
+    // Raw messages (response bodies, token errors) never reach the log.
+    auto leak = commandFailureMessage("/jobs/1/completion", new ApiException(504, "secret\nFAKE LOG"));
+    assert(!leak.canFind("secret") && leak.canFind("ApiException HTTP 504"), leak);
 }
 
 /// The engine call for `action` on `job`.
