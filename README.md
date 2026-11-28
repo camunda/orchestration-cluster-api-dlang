@@ -307,6 +307,27 @@ threads that are not waiting for a response. Hand the client to threads you
 `spawn` yourself with `client.threadSafe`. The I/O thread starts with the
 first request and exits after 5 s without one.
 
+### Retries for job commands
+
+Requests are retried on transient failures (429, 502, 503, 504, network
+errors; see `CAMUNDA_SDK_HTTP_RETRY_*`). Job commands (`completeJob`,
+`failJob`, `throwJobError`) are the exception, because they are not
+idempotent: a command that was applied but whose response was lost gets
+404 when it is sent again.
+
+- A job command is retried only when the server says it was **not applied**
+  (429, 503) or the request was never sent (connection refused, DNS, TLS
+  handshake). This applies to direct calls and to the worker, and the
+  attempts are counted in one place.
+- On 504, 502, 500, a read timeout or a connection reset after sending, the
+  outcome is unknown and the command is **not** retried. The worker sends no
+  `failJob` after it: it logs a warning ("outcome unknown; the job may have
+  completed, otherwise it will time out and be re-activated"), frees the slot
+  and counts `worker.stats.outcomeUnknown`. If the command was not applied,
+  the job times out and is activated again.
+- A 404 on a job command is logged as "job not found (already completed,
+  failed or timed out)" and counted in `worker.stats.actionFailures`.
+
 ### Memory tuning
 
 Each handler thread costs about 0.25 MB of RSS, which the elastic pool only

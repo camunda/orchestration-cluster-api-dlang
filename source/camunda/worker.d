@@ -25,7 +25,7 @@ module camunda.worker;
 
 import camunda.client : CamundaClient;
 import camunda.clock : Clock;
-import camunda.config : WorkerDefaults;
+import camunda.config : LogLevel, WorkerDefaults;
 import camunda.errors;
 import camunda.generated;
 import camunda.http : HttpResult, HttpSink;
@@ -161,7 +161,12 @@ struct WorkerStats
     /// without a command and time out on the engine.
     long overActivated;
     long handlerExceptions;  /// handler threw; the job was failed with retries - 1
-    long actionFailures;     /// a complete/fail/error call itself failed
+    long actionFailures;     /// a complete/fail/error call itself failed (incl. 404 job not found)
+    /// A complete/fail/error call whose outcome is unknown (504, 502, 500,
+    /// read timeout, reset after sending): it may have been applied. It is
+    /// not retried and no `failJob` follows; if it was not applied, the job
+    /// times out and is activated again.
+    long outcomeUnknown;
     long activationFailures; /// activation requests that failed (then backed off)
     long handlerAborts;      /// a handler thread died (an `Error`) holding a job; the job is counted as left
     long unaccounted;        /// jobs still held when the shutdown timeout ran out
@@ -185,7 +190,7 @@ final class WorkerControl
     // timed-out run does not revive the first one's handlers.
     private shared long runGen_, abandonedGen_;
     private shared long activated, completed, failed, errored, left, overActivated,
-        handlerExceptions, actionFailures, activationFailures,
+        handlerExceptions, actionFailures, outcomeUnknown, activationFailures,
         handlerAborts, unaccounted, abandonedActivations;
     private shared int poolLive, poolPeak;
     private shared long poolSpawned, poolRetired;
@@ -250,6 +255,7 @@ final class WorkerControl
         s.overActivated = atomicLoad(overActivated);
         s.handlerExceptions = atomicLoad(handlerExceptions);
         s.actionFailures = atomicLoad(actionFailures);
+        s.outcomeUnknown = atomicLoad(outcomeUnknown);
         s.activationFailures = atomicLoad(activationFailures);
         s.handlerAborts = atomicLoad(handlerAborts);
         s.unaccounted = atomicLoad(unaccounted);
@@ -437,7 +443,7 @@ final class JobWorker
     {
         import camunda.contract : BackpressureState, RpcKind, WorkerSlotState,
             isBackpressureStatus, retryDelayMs, usesBackpressureGate;
-        import camunda.retry : backoffDelayMs, isRetryable;
+        import camunda.retry : backoffDelayMs, isJobCommandRetryable;
         import std.algorithm.comparison : max, min;
         ctl.restart();
         long gen = ctl.generation;
@@ -660,7 +666,10 @@ final class JobWorker
                 }
                 catch (Exception e)
                 {
-                    if (isRetryable(e) && pending.attempts < maxAttempts)
+                    // Job commands are not idempotent: retried only when
+                    // not applied (429/503, never sent). This is the only
+                    // retry loop for them: the submit path does not retry.
+                    if (isJobCommandRetryable(e) && pending.attempts < maxAttempts)
                     {
                         // Like the blocking path, only a command given up
                         // on counts as backpressure.
@@ -670,7 +679,8 @@ final class JobWorker
                     else
                     {
                         transport.recordOutcome(e);
-                        ctl.count!"actionFailures";
+                        if (reportCommandFailure(pending.command.path, e, warnEnabled(transport.config.logLevel))) ctl.count!"outcomeUnknown";
+                        else ctl.count!"actionFailures";
                         slots.releaseSlots(1);
                     }
                 }
@@ -955,6 +965,75 @@ private void handlerLoop(Ctx)(Chan!Ticket tickets, Chan!Event events,
     }
 }
 
+/// Log a failed job command at warn level (no stack trace). Returns
+/// whether its outcome is unknown (it may have been applied). No `failJob`
+/// follows either way.
+private bool reportCommandFailure(string path, Exception e, bool warn)
+{
+    import camunda.retry : isUnknownOutcome;
+    import camunda.safeio : stdErr;
+    const msg = commandFailureMessage(path, e);
+    if (warn)
+    {
+        try stdErr.writeln(msg);
+        catch (Exception) {}
+    }
+    return isUnknownOutcome(e);
+}
+
+/// Whether `level` lets warnings through (`off` and `error` suppress them).
+private bool warnEnabled(LogLevel level) pure nothrow @nogc
+{
+    return level != LogLevel.off && level != LogLevel.error;
+}
+
+unittest
+{
+    assert(!warnEnabled(LogLevel.off));
+    assert(!warnEnabled(LogLevel.error));
+    assert(warnEnabled(LogLevel.warn));
+    assert(warnEnabled(LogLevel.info));
+    assert(warnEnabled(LogLevel.trace));
+}
+
+/// The warning for a failed job command.
+private string commandFailureMessage(string path, Exception e)
+{
+    import camunda.retry : isUnknownOutcome;
+    if (auto api = cast(ApiException) e)
+        if (api.status == 404)
+            return "camunda worker: WARN job not found (already completed, failed or timed out): POST " ~ path;
+    if (isUnknownOutcome(e))
+        return "camunda worker: WARN outcome unknown; the job may have completed, otherwise it will time out "
+            ~ "and be re-activated: POST " ~ path ~ " (" ~ failureSummary(e) ~ ")";
+    return "camunda worker: WARN job command failed: POST " ~ path ~ " (" ~ failureSummary(e) ~ ")";
+}
+
+/// Safe metadata for a failure: the exception type and, for API errors,
+/// the HTTP status. Never the message, which can echo response bodies or
+/// token-endpoint errors and carry control characters into the log.
+private string failureSummary(Exception e)
+{
+    import std.conv : to;
+    import std.string : lastIndexOf;
+    const full = typeid(e).name;
+    const dot = full.lastIndexOf('.');
+    string name = dot >= 0 ? full[dot + 1 .. $] : full;
+    if (auto api = cast(ApiException) e) return name ~ " HTTP " ~ api.status.to!string;
+    return name;
+}
+
+unittest
+{
+    import std.algorithm.searching : canFind;
+    assert(commandFailureMessage("/jobs/1/completion", new ApiException(404, "")).canFind("job not found"));
+    assert(commandFailureMessage("/jobs/1/completion", new ApiException(504, "")).canFind("outcome unknown"));
+    assert(commandFailureMessage("/jobs/1/completion", new ApiException(400, "")).canFind("command failed"));
+    // Raw messages (response bodies, token errors) never reach the log.
+    auto leak = commandFailureMessage("/jobs/1/completion", new ApiException(504, "secret\nFAKE LOG"));
+    assert(!leak.canFind("secret") && leak.canFind("ApiException HTTP 504"), leak);
+}
+
 /// The engine call for `action` on `job`.
 private Command command(const ref Job job, JobAction action)
 {
@@ -1213,6 +1292,171 @@ unittest
     const s = worker.stats;
     assert(s.completed == 180 && s.failed == 20 && s.handlerExceptions == 20, format("%s", s));
     assert(s.activated == 200 && s.actionFailures == 0, format("%s", s));
+}
+
+version (unittest)
+{
+    /// A fake engine with one job (key 1). `POST /v2/jobs/1/completion`
+    /// answers the statuses in `statuses` in turn, then 200. When the
+    /// completion succeeded, or `settle` completion requests arrived, it
+    /// sends "completions failures" on `done`. Serves until `quit`.
+    private void scriptedCompletionServer(immutable(int)[] statuses, int settle, Chan!int port,
+        Chan!string done, Chan!int quit)
+    {
+        import std.algorithm.searching : canFind, startsWith;
+        import std.conv : to;
+        import std.format : format;
+        import std.socket : TcpSocket, InternetAddress, Socket, SocketSet, SocketOption, SocketOptionLevel;
+        import std.string : indexOf, strip, toLower;
+        import core.time : msecs;
+        auto listener = new TcpSocket();
+        scope (exit) listener.close();
+        listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+        listener.bind(new InternetAddress("127.0.0.1", InternetAddress.PORT_ANY));
+        listener.listen(16);
+        port.put((cast(InternetAddress) listener.localAddress).port);
+        Socket[] conns;
+        string[] pending;
+        bool handedOut, reported;
+        int completions, failures;
+        auto set = new SocketSet();
+        int q;
+        while (!quit.tryTake(q))
+        {
+            set.reset();
+            set.add(listener);
+            foreach (c; conns) set.add(c);
+            if (Socket.select(set, null, null, 50.msecs) <= 0) continue;
+            if (set.isSet(listener))
+            {
+                conns ~= listener.accept();
+                pending ~= "";
+            }
+            foreach (i, c; conns)
+            {
+                if (!set.isSet(c)) continue;
+                ubyte[8192] chunk;
+                const n = c.receive(chunk[]);
+                if (n <= 0) continue;
+                pending[i] ~= cast(const(char)[]) chunk[0 .. n];
+                for (;;)
+                {
+                    const end = pending[i].indexOf("\r\n\r\n");
+                    if (end < 0) break;
+                    const head = pending[i][0 .. end + 4];
+                    size_t bodyLen;
+                    const cl = head.toLower.indexOf("\r\ncontent-length:");
+                    if (cl >= 0)
+                    {
+                        auto rest = head[cl + 17 .. $];
+                        bodyLen = rest[0 .. rest.indexOf("\r\n")].strip.to!size_t;
+                    }
+                    if (pending[i].length < head.length + bodyLen) break;
+                    pending[i] = pending[i][head.length + bodyLen .. $];
+                    int status = 200;
+                    string reply = "{}";
+                    if (head.startsWith("POST /v2/jobs/activation "))
+                    {
+                        reply = handedOut ? `{"jobs":[]}`
+                            : `{"jobs":[{"jobKey":"1","type":"t","retries":3,"variables":{}}]}`;
+                        handedOut = true;
+                    }
+                    else if (head.canFind("/completion "))
+                    {
+                        if (completions < statuses.length) status = statuses[completions];
+                        completions++;
+                    }
+                    else if (head.canFind("/failure "))
+                        failures++;
+                    c.send(format("HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+                        status, reply.length, reply));
+                    if (!reported && head.canFind("/completion ") && (status == 200 || completions >= settle))
+                    {
+                        reported = true;
+                        done.put(format("%d %d", completions, failures));
+                    }
+                }
+            }
+        }
+        foreach (c; conns) c.close();
+        done.put(format("%d %d", completions, failures));
+    }
+
+    private JobAction completeHandler(Job job, int unused)
+    {
+        return JobAction.complete();
+    }
+
+    /// Run one job through a worker against `scriptedCompletionServer`.
+    /// Returns the server's completion and failure request counts, read a
+    /// moment after the worker settled, and the worker's stats.
+    private string scriptedCompletionRun(immutable(int)[] statuses, int settle, out WorkerStats stats)
+    {
+        import std.conv : to;
+        auto port = Chan!int.make;
+        auto done = Chan!string.make;
+        auto relay = Chan!string.make;
+        auto quit = Chan!int.make;
+        auto server = spawn(&scriptedCompletionServer, statuses, settle, port, done, quit);
+        bool joined;
+        scope (exit) if (!joined) { quit.put(1); server.join(); }
+        int p;
+        port.take(p);
+        auto client = CamundaClient.fromEnv([
+            "CAMUNDA_REST_ADDRESS": "http://127.0.0.1:" ~ p.to!string,
+            "CAMUNDA_AUTH_STRATEGY": "NONE",
+            "CAMUNDA_SDK_HTTP_RETRY_MAX_ATTEMPTS": "5",
+            "CAMUNDA_SDK_HTTP_RETRY_BASE_DELAY_MS": "1",
+            "CAMUNDA_SDK_HTTP_RETRY_MAX_DELAY_MS": "5",
+        ]);
+        auto worker = client.createJobWorker(JobWorkerConfig.create("t").maxJobs(1).threads(1));
+        worker.config.pollIntervalMs = 10;
+        auto stopper = spawn(&stopWhenDone, done, relay, worker.control);
+        worker.run(&completeHandler, 0);
+        stopper.join();
+        // Give a (wrong) retry or follow-up failJob time to arrive.
+        import camunda.safeio : sleepMs;
+        sleepMs(300);
+        stats = worker.stats;
+        string summary;
+        relay.take(summary);
+        quit.put(1);
+        server.join();
+        joined = true;
+        done.take(summary); // the final counts
+        return summary;
+    }
+}
+
+// A job command whose outcome is unknown (504) is sent exactly once, and no
+// failJob follows; the worker counts it as an unknown outcome.
+unittest
+{
+    import std.format : format;
+    WorkerStats s;
+    auto summary = scriptedCompletionRun([504], 1, s);
+    assert(summary == "1 0", summary);
+    assert(s.outcomeUnknown == 1 && s.completed == 0 && s.failed == 0, format("%s", s));
+}
+
+// A job command the server did not apply (503, 429) is retried.
+unittest
+{
+    import std.format : format;
+    WorkerStats s;
+    auto summary = scriptedCompletionRun([503, 429], 3, s);
+    assert(summary == "3 0", summary);
+    assert(s.completed == 1 && s.outcomeUnknown == 0 && s.actionFailures == 0, format("%s", s));
+}
+
+// A 404 on a job command is an action failure, not retried, no failJob.
+unittest
+{
+    import std.format : format;
+    WorkerStats s;
+    auto summary = scriptedCompletionRun([404], 1, s);
+    assert(summary == "1 0", summary);
+    assert(s.actionFailures == 1 && s.outcomeUnknown == 0, format("%s", s));
 }
 
 version (unittest)

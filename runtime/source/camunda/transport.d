@@ -213,7 +213,7 @@ final class Transport
                 req.contentType = contentType;
                 req.rawBody = rawBody.dup;
                 return send(req);
-            });
+            }, isJobCommand(method, path) ? &isJobCommandRetryable : &isRetryable);
         }
         catch (Exception e)
         {
@@ -242,6 +242,7 @@ final class Transport
         HttpResponse res;
         try
         {
+            const jobCommand = isJobCommand(method, path);
             res = withRetry!HttpResponse(_config.retry, _clock, {
                 HttpRequest req = baseRequest(method, path, query, server);
                 if (shouldSendJsonBody(method, body_))
@@ -251,7 +252,7 @@ final class Transport
                 }
                 req.longPoll = req.longPoll || isLongWait(method, path, req.body_);
                 return send(req);
-            });
+            }, jobCommand ? &isJobCommandRetryable : &isRetryable);
         }
         catch (Exception e)
         {
@@ -435,6 +436,36 @@ bool isJobActivation(string method, string path) pure nothrow @nogc
     auto p = path.findSplitBefore("?")[0];
     if (p.length && p[0] == '/') p = p[1 .. $];
     return p == "jobs/activation";
+}
+
+/// A job command (`POST /jobs/{key}/completion|failure|error`). Job
+/// commands are not idempotent, so they retry only when the command was
+/// not applied (see `isJobCommandRetryable`).
+bool isJobCommand(string method, string path) pure nothrow @nogc
+{
+    import std.algorithm.searching : findSplitBefore, endsWith, startsWith, canFind;
+    if (method != "POST") return false;
+    auto p = path.findSplitBefore("?")[0];
+    if (p.length && p[0] == '/') p = p[1 .. $];
+    if (!p.startsWith("jobs/")) return false;
+    p = p["jobs/".length .. $];
+    foreach (suffix; ["/completion", "/failure", "/error"])
+        if (p.endsWith(suffix))
+        {
+            auto key = p[0 .. $ - suffix.length];
+            return key.length > 0 && !key.canFind("/");
+        }
+    return false;
+}
+
+unittest
+{
+    assert(isJobCommand("POST", "/jobs/123/completion"));
+    assert(isJobCommand("POST", "jobs/123/failure"));
+    assert(isJobCommand("POST", "/jobs/123/error"));
+    assert(!isJobCommand("GET", "/jobs/123/completion"));
+    assert(!isJobCommand("POST", "/jobs/activation"));
+    assert(!isJobCommand("POST", "/jobs/a/b/completion"));
 }
 
 /// A request that may wait on the server for its whole timeout, so it
