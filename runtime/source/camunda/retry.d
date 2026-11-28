@@ -45,8 +45,12 @@ bool isNotSentNetworkError(string msg) pure
     // WinHTTP failures raised after WinHttpSendRequest returned: the request
     // may have reached the server whatever the error code says.
     static immutable postSend = ["no response from", "no status line from", "cannot read the response from"];
+    // NetworkException prefixes "network error: ", possibly more than once
+    // when re-wrapped; strip those before the stage check.
+    string stage = m;
+    while (stage.startsWith("network error: ")) stage = stage["network error: ".length .. $];
     foreach (prefix; postSend)
-        if (m.startsWith(prefix)) return false;
+        if (stage.startsWith(prefix)) return false;
     foreach (marker; markers)
         if (m.canFind(marker)) return true;
     return false;
@@ -121,6 +125,12 @@ unittest
     assert(!isNotSentNetworkError("no status line from http://h/x: WinHTTP 12175 TLS failure"));
     assert(!isNotSentNetworkError("cannot read the response from http://h/x: WinHTTP 12002 timed out"));
     assert(isNotSentNetworkError("cannot send to http://h/x: WinHTTP 12029 could not connect"));
+    // Wrapped once and twice by NetworkException.
+    assert(!isNotSentNetworkError("network error: no response from http://h/x: WinHTTP 12175 TLS failure"));
+    assert(!isNotSentNetworkError("network error: network error: no response from http://h/x: WinHTTP 12175 TLS failure"));
+    assert(!isJobCommandRetryable(new NetworkException("no response from http://h/x: WinHTTP 12175 TLS failure")));
+    assert(isUnknownOutcome(new NetworkException(new NetworkException("no status line from http://h/x: WinHTTP 12029 could not connect").msg)));
+    assert(isNotSentNetworkError("network error: tls: handshake failed"));
 }
 
 unittest
